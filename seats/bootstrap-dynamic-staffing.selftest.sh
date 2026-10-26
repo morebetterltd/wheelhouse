@@ -17,22 +17,28 @@ fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 phase() { printf '\n%s\n' "$*"; }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-bootstrap-dynamic-staffing.XXXXXX")" || exit 2
-trap 'selftest_remove_fixture_dir "$FIX"' EXIT
+selftest_isolate_git "$FIX" || exit 2
+cleanup(){ selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
+selftest_install_cleanup_traps cleanup
 
 copy_pool_runtime() {
   local dst="$1"
   mkdir -p "$dst/seats" "$dst/wheelhouse" "$dst/home/.pi-seats-scratch/pool/claude-a" "$dst/home/.pi-seats-scratch/pool/claude-b"
-  cp "$HERE/pool.ts" "$HERE/roster.ts" "$HERE/harness.ts" "$HERE/seat-worktree.ts" "$HERE/credential-shapes.ts" "$dst/seats/"
+  selftest_copy_seat_runtime "$dst" "$HERE"
   printf 'namespace=scratch\n' > "$dst/wheelhouse/.template-source"
 }
 
 phase "1. BOOTSTRAP asks optional dynamic staffing after stakeholder channels"
-if python3 - "$BOOTSTRAP" <<'PY'
-import sys
-text=open(sys.argv[1]).read()
-needles=[
+if node - "$BOOTSTRAP" <<'JS'
+const fs = require('fs');
+const text = fs.readFileSync(process.argv[2], 'utf8');
+const needles = [
   '10. **Stakeholder channels',
   '11. **Dynamic staffing — optional.',
+  '12. **Publishing findings to GitHub:',
+  'a `roles.reviewers` pool means no non-external `role: "reviewer"` entries remain',
+  'Keep commander, producer and researcher outside the pool.',
+  'seats/seat-env.sh <namespace> --pool <entry>',
   'Fixed roster',
   'Dynamic staffing',
   'write no `seats/pool.json`',
@@ -48,15 +54,23 @@ needles=[
   'a role whose `min` equals its `max` is fine',
   'entry | harness | provider | models | login folder | label | auth route',
   'At wake, read `bun seats/staffing.ts status` beside `bun seats/adapter.ts status` when a pool exists',
-]
-missing=[n for n in needles if n not in text]
-if missing:
-  print('missing: '+repr(missing))
-  sys.exit(1)
-if text.index('10. **Stakeholder channels') > text.index('11. **Dynamic staffing — optional.'):
-  print('question 11 is not after question 10')
-  sys.exit(1)
-PY
+];
+const missing = needles.filter(n => !text.includes(n));
+if (missing.length) {
+  console.log('missing: '+JSON.stringify(missing));
+  process.exit(1);
+}
+const interview = text.split('1. **Product repos,')[1].split('### Record what the interview decided')[0];
+const numbers = [...interview.matchAll(/^(\d+)\. \*\*/gm)].map(m => Number(m[1]));
+if (JSON.stringify(numbers) !== JSON.stringify(Array.from({length:11}, (_,i) => i+2))) {
+  console.log('interview numbering after question 1: '+JSON.stringify(numbers));
+  process.exit(1);
+}
+if (text.includes('designer') || text.includes('reviewers` replace `role: "verifier"`')) {
+  console.log('retired role in pool interview');
+  process.exit(1);
+}
+JS
 then pass "question 11 is ordered after channels and names skip/write/refusal rules"
 else fail "BOOTSTRAP dynamic-staffing question text is missing or misordered"; fi
 
@@ -77,7 +91,7 @@ fi
 phase "3. generated pool loads through pool.ts after same-role fixed rows are removed"
 OK="$FIX/ok"; copy_pool_runtime "$OK"
 cat > "$OK/seats/seats.json" <<'JSON'
-{"version":1,"seats":{"designer":{"role":"designer","harness":"pi","provider":"openai","model":"gpt-4o","account":{"dir":"~/.pi-seats-scratch/designer","authRoute":"oauth"}}}}
+{"version":1,"seats":{"producer":{"role":"producer","external":true}}}
 JSON
 cat > "$OK/seats/pool.json" <<'JSON'
 {"version":1,"entries":{"claude-a":{"harness":"claude-code","provider":"anthropic","models":["sonnet"],"account":{"dir":"~/.pi-seats-scratch/pool/claude-a","authRoute":"oauth"}},"claude-b":{"harness":"claude-code","provider":"anthropic","models":["sonnet"],"account":{"dir":"~/.pi-seats-scratch/pool/claude-b","authRoute":"oauth"}}},"roles":{"workers":{"min":1,"max":2,"entries":["claude-a","claude-b"],"model":"sonnet"}}}

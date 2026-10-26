@@ -53,6 +53,8 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 set -uo pipefail   # deliberately not -e: some cases are meant to fail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+export WHEELHOUSE_TEST_CONDITION_HELPER="$HERE/fixtures/wait-for-condition.cjs"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 ADAPTER="${1:-$HERE/adapter.ts}"
 FLOOR="$HERE/floor.ts"
 BRIEFS="$HERE/briefs.ts"
@@ -80,13 +82,22 @@ fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
+launch_diagnostics() {
+  [ -d "$HOME_FIX" ] || return 0
+  while IFS= read -r record; do
+    printf 'fixture launch record %s: ' "$record"; cat "$record"
+    local stderr_file="${record/stub-launch./stub-stderr.}"
+    printf 'fixture child stderr: '; cat "${stderr_file%.json}.log" 2>/dev/null || true
+  done < <(find "$HOME_FIX" -name 'stub-launch.*.json' -type f)
+}
 cleanup() {
+  [ "$FAILED" = 0 ] || launch_diagnostics
   selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
   [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null
   [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
   return 0
 }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 # --- stale-fixture sweep (same rules as adapter.selftest.sh) -----------------
 # SIGKILL skips the EXIT trap; pid-stamped fixture dirs let a later run tell
@@ -94,36 +105,34 @@ trap cleanup EXIT INT TERM
 # only if it still holds files open under the fixture) is what recover.ts
 # uses, because a pid number alone proves nothing after reuse.
 FIX_PREFIX="wheelhouse-concurrency-selftest"
-sweep_stale_fixtures() {
-  local base="${TMPDIR:-/tmp}" d stamp phys sf pid
-  while IFS= read -r d; do
-    [ -d "$d" ] || continue
-    stamp="${d##*/}"; stamp="${stamp#"$FIX_PREFIX".}"; stamp="${stamp%%.*}"
-    case "$stamp" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$stamp" 2>/dev/null && continue
-    phys="$(cd "$d" 2>/dev/null && pwd -P)" || phys="$d"
-    while IFS= read -r sf; do
-      [ -f "$sf" ] || continue
-      for pid in $(sed -n 's/.*"pid": \([0-9][0-9]*\).*/\1/p' "$sf"); do
-        if kill -0 "$pid" 2>/dev/null && lsof -p "$pid" 2>/dev/null | grep -qF "$phys"; then
-          kill "$pid" 2>/dev/null
-          echo "swept: killed leaked seat pid $pid (held open files under $d)"
-        fi
-      done
-    done < <(find "$d" -mindepth 3 -maxdepth 3 -path "*/seats/state.json" 2>/dev/null)
-    rm -rf "$d"
-    echo "swept: removed stale fixture $d"
-  done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -name "$FIX_PREFIX.*" 2>/dev/null)
-  return 0
-}
-sweep_stale_fixtures
+selftest_sweep_stale_fixtures "$FIX_PREFIX" || exit 2
 
-FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX")" || exit 2
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/$FIX_PREFIX.$$.XXXXXX" "$FIX_PREFIX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 mkdir -p "$HOME_FIX" "$BIN"
 RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname "$GIT_BIN"):/usr/bin:/bin"
+
+barrier_regression() {
+  WHEELHOUSE_CONCURRENCY_NATIVE_NODE="$NODE_BIN" bun "$HERE/fixtures/concurrency-barrier-regression.mjs" "$FIX/barrier-regression" \
+    "$HERE/fixtures/concurrency-barrier.cjs" "$HERE/fixtures/concurrency-stub-supervisor.cjs" \
+    "$HERE/fixtures/concurrency-barrier-observer.mjs"
+}
+if [ "${WHEELHOUSE_CONCURRENCY_BARRIER_ONLY:-}" = 1 ]; then
+  barrier_regression
+  exit $?
+fi
+
+# Run the deterministic regression BEFORE any full-adapter barrier can wait.
+# An old/broken barrier must fail the ordinary suite here and release its caller
+# (including a sweep lock holder), not hang in a later serialized canary.
+phase "0. deterministic barrier lifecycle and lost-notification regression"
+if ! barrier_regression; then
+  fail 'deterministic barrier regression failed; refusing later barrier exercises'
+  exit 1
+fi
 
 # The stub pi: same long-lived RPC shape as adapter.selftest.sh's, with two
 # additions this exercise needs:
@@ -132,11 +141,16 @@ RUN_PATH="${BIN}:$(dirname "$(command -v bun)"):$(dirname "$NODE_BIN"):$(dirname
 #   - a prompt containing "WORKDIR:<path>" makes the stub touch
 #     <path>/touched-by-<bead-id> before finishing the turn — the on-disk
 #     footprint the worktree-isolation assertions read.
-cat > "$BIN/pi" <<STUB
+cp -f "$HERE/fixtures/concurrency-stub-supervisor.cjs" "$BIN/pi"
+cat > "$BIN/pi-stub.cjs" <<STUB
 #!/usr/bin/env node
 const fs = require("fs"), path = require("path"), crypto = require("crypto");
 const agentDir = process.env.PI_CODING_AGENT_DIR;
 if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); process.exit(1); }
+if (process.env.WHEELHOUSE_CONCURRENCY_STUB_EXIT) {
+  process.stderr.write("fixture forced launch exit " + process.env.WHEELHOUSE_CONCURRENCY_STUB_EXIT + "\n");
+  process.exit(Number(process.env.WHEELHOUSE_CONCURRENCY_STUB_EXIT));
+}
 const args = process.argv.slice(2);
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(args));
@@ -146,12 +160,16 @@ const sessionId = crypto.randomUUID();
 const sessionFile = path.join(sessDir, sessionId + ".jsonl");
 fs.writeFileSync(sessionFile, JSON.stringify({ type: "session-start" }) + "\n");
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+let held = false, streaming = false;
 function handle(cmd) {
   const id = cmd.id;
   switch (cmd.type) {
     case "get_state":
       out({ id, type: "response", command: "get_state", success: true,
-            data: { isStreaming: false, sessionFile, sessionId, messageCount: 0 } });
+            data: { isStreaming: streaming, sessionFile, sessionId, messageCount: 0 } });
+      break;
+    case "barrier_probe":
+      out({ id, type: "response", command: "barrier_probe", success: true, data: { held } });
       break;
     case "prompt": {
       if (/QUOTA/.test(cmd.message)) {
@@ -160,17 +178,42 @@ function handle(cmd) {
         break;
       }
       out({ id, type: "response", command: "prompt", success: true });
-      out({ type: "agent_start" });
       const bead = (cmd.message.match(/^Bead (\S+)/) || [])[1] || "unknown";
       const wd = (cmd.message.match(/WORKDIR:(\S+)/) || [])[1];
+      const barrier = (cmd.message.match(/BARRIER:(\S+)/) || [])[1];
+      let done = false, watcher;
       const finish = () => {
+        if (done) return;
+        done = true; held = false; streaming = false;
         if (wd) fs.writeFileSync(path.join(wd, "touched-by-" + bead), bead + "\n");
         fs.appendFileSync(sessionFile, JSON.stringify({ type: "prompt", message: cmd.message }) + "\n");
         out({ type: "message_end", message: { role: "assistant",
               content: [{ type: "text", text: "echo: " + cmd.message }] } });
         out({ type: "agent_end", messages: [] });
+        if (barrier) fs.writeFileSync(path.join(barrier, bead + ".finished"), "finished\n");
       };
-      if (/SLOW/.test(cmd.message)) setTimeout(finish, 3000); else finish();
+      const start = () => {
+        streaming = true;
+        out({ type: "agent_start" });
+        if (!barrier) { finish(); return; }
+        held = true;
+        const {waitForCondition} = require(process.env.WHEELHOUSE_TEST_CONDITION_HELPER);
+        watcher = waitForCondition({site:'concurrency.stub.release',paths:[barrier],predicate:()=>{
+          if (!fs.existsSync(path.join(barrier, "release"))) return false;
+          finish(); return true;
+        }});
+        watcher.promise.catch(error => { console.error(error); process.exit(1); });
+      };
+      if (barrier && process.env.WHEELHOUSE_CONCURRENCY_SERIAL_TURNS && bead === "bead-b") {
+        // Real serialization sabotage: B cannot start until A has finished.
+        let queued = true;
+        const {waitForCondition} = require(process.env.WHEELHOUSE_TEST_CONDITION_HELPER);
+        watcher = waitForCondition({site:'concurrency.stub.unqueue',paths:[barrier],predicate:()=>{
+          if (!queued || !fs.existsSync(path.join(barrier, "bead-a.finished"))) return false;
+          queued = false; start(); return true;
+        }});
+        watcher.promise.catch(error => { console.error(error); process.exit(1); });
+      } else start();
       break;
     }
     default:
@@ -232,55 +275,70 @@ PROJ="$FIX/proj"
 build_proj "$PROJ" alpha
 RUN_PROJ="$PROJ"
 
-run() { RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?; }
+run() {
+  RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 bun "$RUN_PROJ/seats/adapter.ts" "$@" 2>&1)" || RC=$?
+  if [ "$RC" != 0 ] && [ "${1:-}" = spawn ]; then launch_diagnostics; fi
+}
 says() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 state_get() {   # $1 = seat, $2 = field  (reads $RUN_PROJ's state.json)
-  env HOME="$HOME_FIX" bun -e "const s=require('$RUN_PROJ/seats/state.json');const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"
+  env HOME="$HOME_FIX" bun -e "import fs from 'node:fs'; const s=JSON.parse(fs.readFileSync('$RUN_PROJ/seats/state.json','utf8'));const v=s.seats['$1']?.['$2'];if(v!=null)console.log(typeof v==='object'?JSON.stringify(v):v)"
 }
-wait_for() {   # $1 = file, $2 = substring, $3 = seconds
-  local i=0 max=$((${3:-10} * 10))
-  while [ $i -lt $max ]; do
-    [ -f "$1" ] && grep -q "$2" "$1" 2>/dev/null && return 0
-    sleep 0.1; i=$((i + 1))
-  done
-  return 1
+wait_for() {   # file, regex; legacy seconds argument is not a verdict
+  local seat producer
+  seat="$(basename "$1" .jsonl)"
+  producer="$(state_get "$seat" pid)"
+  [ -n "$producer" ] || { echo "missing producer for $1" >&2; return 1; }
+  bun "$HERE/fixtures/adapter-selftest-signals.ts" regex "$1" "$2" 0 "$producer"
 }
+
+phase "0. owned lifecycle events reject premature completion"
+if bun "$HERE/fixtures/adapter-selftest-signals.ts" selftest "$FIX/lifecycle"; then
+  pass 'lifecycle waits consume actual delayed text/count and owned FIFO release'
+else
+  fail 'lifecycle ownership regression'
+fi
 
 LOG_A="$PROJ/seats/logs/worker-a.jsonl"
 LOG_B="$PROJ/seats/logs/worker-b.jsonl"
 
 # --- the two-seat exercise, parameterized so the canary can reuse it ---------
-# Spawns both seats of $RUN_PROJ, dispatches SLOW bead-a/bead-b back-to-back
-# (each naming its own worktree), asserts overlap, waits both turns out, and
+# Spawns both seats of $RUN_PROJ, dispatches barrier-held bead-a/bead-b
+# (each naming its own worktree), proves overlap before release, and
 # asserts log/worktree isolation. $1 = label. Each worker seat works in its
 # own adapter-made worktree, .wheelhouse-worktrees/<seat>, on fleet/<bead>.
 run_two_seat_exercise() {
-  local label="$1"
+  local label="$1" turn_logs_ok=0
+  EXERCISE_SETUP=0; EXERCISE_SHARED_LOG=0
   local wta="$RUN_PROJ/.wheelhouse-worktrees/worker-a" wtb="$RUN_PROJ/.wheelhouse-worktrees/worker-b"
   local la="$RUN_PROJ/seats/logs/worker-a.jsonl" lb="$RUN_PROJ/seats/logs/worker-b.jsonl"
 
   run spawn worker-a
-  [ $RC -eq 0 ] && pass "${label}: worker-a spawns" || fail "${label}: worker-a spawn exited ${RC}: $OUT"
+  if [ $RC -eq 0 ]; then pass "${label}: worker-a spawns"; else fail "${label}: worker-a spawn exited ${RC}: $OUT"; return; fi
   run spawn worker-b
-  [ $RC -eq 0 ] && pass "${label}: worker-b spawns" || fail "${label}: worker-b spawn exited ${RC}: $OUT"
+  if [ $RC -eq 0 ]; then pass "${label}: worker-b spawns"; else fail "${label}: worker-b spawn exited ${RC}: $OUT"; return; fi
 
   local fa fb
   fa="$(state_get worker-a fifo)"; fb="$(state_get worker-b fifo)"
   if [ -n "$fa" ] && [ -n "$fb" ] && [ "$fa" != "$fb" ] && [ -p "$fa" ] && [ -p "$fb" ]; then
     pass "${label}: each seat has its OWN FIFO ($(basename "$fa"), $(basename "$fb"))"
-  else fail "${label}: FIFOs missing or shared (a=$fa b=$fb)"; fi
+    EXERCISE_SETUP=1
+  else fail "${label}: FIFOs missing or shared (a=$fa b=$fb)"; return; fi
 
-  # Both dispatches go out before either turn is waited on — that is the
-  # concurrency under test. SLOW keeps both turns in flight long enough to
-  # observe the overlap. The adapter roots each seat in its own seat
-  # worktree; the stub's WORKDIR marker names where to leave the proof
-  # footprint.
-  run dispatch worker-a bead-a "SLOW MARKER-ALPHA work bead-a in WORKDIR:$wta"
+  # Each accepted turn waits for OUR release file, never a guessed duration.
+  # Probe acknowledgements are ordered after prompts in each seat's FIFO.
+  local barrier="$RUN_PROJ/turn-barrier" barrier_rc=0
+  mkdir -p "$barrier"
+  rm -f "$barrier/release"
+  run dispatch worker-a bead-a "BARRIER:$barrier MARKER-ALPHA work bead-a in WORKDIR:$wta"
   [ $RC -eq 0 ] && pass "${label}: bead-a dispatched to worker-a" || fail "${label}: dispatch a exited ${RC}: $OUT"
-  run dispatch worker-b bead-b "SLOW MARKER-BRAVO work bead-b in WORKDIR:$wtb"
+  run dispatch worker-b bead-b "BARRIER:$barrier MARKER-BRAVO work bead-b in WORKDIR:$wtb"
   [ $RC -eq 0 ] && pass "${label}: bead-b dispatched to worker-b (before bead-a's turn ended)" || fail "${label}: dispatch b exited ${RC}: $OUT"
 
-  # Overlap: both pids alive, both logs mid-turn (agent_start, no agent_end).
+  "$NODE_BIN" "$HERE/fixtures/concurrency-barrier.cjs" "$RUN_PROJ" "$barrier" || barrier_rc=$?
+  if [ "$barrier_rc" = 0 ]; then pass "${label}: controller observed both held turns before release"
+  else fail "${label}: barrier did not prove concurrent turns"; fi
+
+  # Overlap remains held while these independent PID/log/status checks run.
   local pa pb
   pa="$(state_get worker-a pid)"; pb="$(state_get worker-b pid)"
   if kill -0 "$pa" 2>/dev/null && kill -0 "$pb" 2>/dev/null; then
@@ -289,22 +347,30 @@ run_two_seat_exercise() {
   if grep -q '"agent_start"' "$la" 2>/dev/null && ! grep -q '"agent_end"' "$la" 2>/dev/null \
      && grep -q '"agent_start"' "$lb" 2>/dev/null && ! grep -q '"agent_end"' "$lb" 2>/dev/null; then
     pass "${label}: both turns in flight at the same moment (agent_start seen, no agent_end yet, both logs)"
+    turn_logs_ok=1
   else fail "${label}: could not observe both turns in flight simultaneously"; fi
+  if [ "$EXERCISE_SETUP" = 1 ] && [ "$(state_get worker-a log)" = "$(state_get worker-b log)" ] && [ -s "$(state_get worker-a log)" ]; then
+    EXERCISE_SHARED_LOG=1
+    printf 'MEASUREMENT shared-log wrong world: both healthy seat records point to %s\n' "$(state_get worker-a log)"
+  fi
   run status
   if says "worker-a" && says "worker-b" && [ "$(printf '%s\n' "$OUT" | grep -c RUNNING)" -ge 2 ]; then
     pass "${label}: status shows both seats RUNNING"
   else fail "${label}: status does not show two RUNNING seats: $OUT"; fi
 
-  wait_for "$la" '"agent_end"' 15 && pass "${label}: worker-a's turn finished" || fail "${label}: no agent_end in worker-a's log"
-  wait_for "$lb" '"agent_end"' 15 && pass "${label}: worker-b's turn finished" || fail "${label}: no agent_end in worker-b's log"
+  touch "$barrier/release"
+  if [ "$turn_logs_ok" = 1 ]; then
+    wait_for "$la" '"agent_end"' 15 && pass "${label}: worker-a's turn finished" || fail "${label}: no agent_end in worker-a's log"
+    wait_for "$lb" '"agent_end"' 15 && pass "${label}: worker-b's turn finished" || fail "${label}: no agent_end in worker-b's log"
+  fi # A barrier-acknowledged wrong log was already measured, not a time budget.
 
   # Log isolation — and, through it, FIFO isolation: each dispatch was
   # written to one FIFO, so its echo landing only in that seat's log is the
   # no-cross-talk proof.
-  if grep -q 'MARKER-ALPHA' "$la" 2>/dev/null && ! grep -q 'MARKER-ALPHA' "$lb" 2>/dev/null; then
+  if grep -q 'MARKER-ALPHA' "$la" 2>/dev/null && selftest_capture_lacks "$lb" -q -- 'MARKER-ALPHA'; then
     pass "${label}: worker-a's events land ONLY in worker-a's log"
   else fail "${label}: worker-a's dispatch text leaked into worker-b's log (or missing from its own)"; fi
-  if grep -q 'MARKER-BRAVO' "$lb" 2>/dev/null && ! grep -q 'MARKER-BRAVO' "$la" 2>/dev/null; then
+  if grep -q 'MARKER-BRAVO' "$lb" 2>/dev/null && selftest_capture_lacks "$la" -q -- 'MARKER-BRAVO'; then
     pass "${label}: worker-b's events land ONLY in worker-b's log"
   else fail "${label}: worker-b's dispatch text leaked into worker-a's log (or missing from its own)"; fi
 
@@ -343,7 +409,7 @@ run_state_race() { # label delay-ms project
   wait "$PA"; RCA=$?
   wait "$PB"; RCB=$?
   if [ $RCA -eq 0 ] && [ $RCB -eq 0 ]; then pass "$label: concurrent spawns both exit 0"
-  else fail "$label: concurrent spawns failed (a=$RCA $(cat "$OUT_A") / b=$RCB $(cat "$OUT_B"))"; fi
+  else fail "$label: concurrent spawns failed (a=$RCA $(cat "$OUT_A") / b=$RCB $(cat "$OUT_B"))"; launch_diagnostics; fi
   if [ -n "$(state_get worker-a pid)" ] && [ -n "$(state_get worker-b pid)" ]; then
     pass "$label: state lock preserves both seat records in state.json"
   else fail "$label: one seat record was erased from state.json: $(cat "$RUN_PROJ/seats/state.json" 2>/dev/null)"; fi
@@ -372,7 +438,7 @@ if [ $RC -ne 0 ] && says "dispatch failed"; then
   pass "quota-shaped dispatch fails loudly"
 else fail "quota-shaped dispatch did not fail (exit $RC): $OUT"; fi
 CAP="$(state_get worker-a lastCapacityEvent)"
-if [ -n "$CAP" ] && printf '%s' "$CAP" | grep -q '429 rate limit'; then
+if [ -n "$CAP" ] && printf '%s' "$CAP" | grep >/dev/null '429 rate limit'; then
   pass "state.json records lastCapacityEvent with the failure detail: $CAP"
 else fail "no lastCapacityEvent in state.json after quota failure (got: $CAP)"; fi
 run status
@@ -380,11 +446,11 @@ if says "CAPACITY: QUOTA"; then
   pass "adapter status surfaces the capacity event"
 else fail "status does not surface the capacity event: $OUT"; fi
 FLOOR_OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS=220 LINES=50 NO_COLOR=1 bun "$PROJ/seats/floor.ts" --once 2>&1)"
-if printf '%s' "$FLOOR_OUT" | grep -q 'AMBER.*PARKED/QUOTA.*bun seats/adapter.ts probe worker-a'; then
+if printf '%s' "$FLOOR_OUT" | grep >/dev/null 'AMBER.*PARKED/QUOTA.*bun seats/adapter.ts probe worker-a'; then
   pass "floor --once renders the AMBER PARKED/QUOTA line with the re-probe command"
-else fail "floor --once has no AMBER PARKED/QUOTA line: $(printf '%s' "$FLOOR_OUT" | grep -i 'worker-a' | head -3)"; fi
+else fail "floor --once has no AMBER PARKED/QUOTA line: $(printf '%s' "$FLOOR_OUT" | grep -i 'worker-a' | sed -n '1,3p')"; fi
 FLOOR_STATUS="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" COLUMNS=220 LINES=60 NO_COLOR=1 bun "$PROJ/seats/floor.ts" --once --pin 0 2>&1)"
-if printf '%s' "$FLOOR_STATUS" | grep -q 'capacity QUOTA '; then
+if printf '%s' "$FLOOR_STATUS" | grep >/dev/null 'capacity QUOTA '; then
   pass "floor STATUS cell shows per-account capacity state"
 else fail "floor STATUS cell missing capacity line"; fi
 run dispatch worker-a bead-ok "plain work, no quota"
@@ -405,8 +471,9 @@ if cmp -s "$ADAPTER" "$CAN_A/seats/adapter.ts"; then
 else
   CANARY_FAILED_BEFORE=$FAILED
   RUN_PROJ="$CAN_A"
-  run_two_seat_exercise "canary" > /dev/null 2>&1
-  if [ $FAILED -gt $CANARY_FAILED_BEFORE ]; then
+  run_two_seat_exercise "canary" > "$FIX/shared-log-canary.out" 2>&1
+  cat "$FIX/shared-log-canary.out"
+  if [ "$EXERCISE_SETUP" = 1 ] && [ "$EXERCISE_SHARED_LOG" = 1 ] && [ $FAILED -gt $CANARY_FAILED_BEFORE ]; then
     FAILED=$CANARY_FAILED_BEFORE
     pass "canary: an adapter that merges both seats into one log is caught"
   else
@@ -417,10 +484,35 @@ else
   RUN_PROJ="$CAN_A" run stop worker-b > /dev/null 2>&1
 fi
 
+# Force B to queue behind A's completion, retaining healthy distinct seats.
+CAN_SERIAL="$FIX/can-serial"
+build_proj "$CAN_SERIAL" can-serial
+CANARY_FAILED_BEFORE=$FAILED
+RUN_PROJ="$CAN_SERIAL"
+WHEELHOUSE_CONCURRENCY_SERIAL_TURNS=1 run_two_seat_exercise "serialized canary" > "$FIX/serialized-canary.out" 2>&1
+if [ "$FAILED" -gt "$CANARY_FAILED_BEFORE" ] && grep -F 'barrier did not prove concurrent turns' "$FIX/serialized-canary.out" >/dev/null; then
+  FAILED=$CANARY_FAILED_BEFORE
+  pass 'canary: serialized turns fail the same barrier assertion'
+  printf 'BEGIN expected non-overlap failure evidence\n'; cat "$FIX/serialized-canary.out"; printf 'END expected non-overlap failure evidence\n'
+else
+  FAILED=$((CANARY_FAILED_BEFORE + 1))
+  fail 'canary: non-overlapping turns escaped the barrier assertion'
+fi
+
+# Record an actual native child exit and stderr before fixture cleanup.
+CAN_EXIT="$FIX/can-exit"
+build_proj "$CAN_EXIT" can-exit
+RUN_PROJ="$CAN_EXIT"
+WHEELHOUSE_CONCURRENCY_STUB_EXIT=23 run spawn worker-a
+EXIT_RECORD="$HOME_FIX/.pi-seats-can-exit/worker-a/stub-launch.json"
+if [ "$RC" != 0 ] && "$NODE_BIN" -e 'const fs=require("fs"),p=process.argv[1],r=JSON.parse(fs.readFileSync(p)); if(r.code!==23 || r.signal!==null || !r.exited || !fs.readFileSync(p.replace("stub-launch.json","stub-stderr.log"),"utf8").includes("fixture forced launch exit 23")) process.exit(1); console.log("captured native fixture child exit="+r.code+" signal="+r.signal)' "$EXIT_RECORD"; then
+  pass 'canary: launch exit cause and stderr retained before teardown'
+else fail 'canary: launch exit diagnostics missing or wrong'; fi
+
 # 3b: an adapter that swallows the capacity stamp.
 CAN_B="$FIX/can-b"
 build_proj "$CAN_B" can-b
-sed 's|^      state.seats\[name\].lastCapacityEvent = {$|      const unstamped = {|' \
+sed 's|^        state.seats\[name\].lastCapacityEvent = {$|        const unstamped = {|' \
   "$ADAPTER" > "$CAN_B/seats/adapter.ts"
 if cmp -s "$ADAPTER" "$CAN_B/seats/adapter.ts"; then
   fail "canary: could not cut the capacity stamp — the line no longer matches, so the canary proves nothing"
@@ -496,8 +588,8 @@ EOF
   rrun dispatch worker-b real-b "Reply with exactly the text REAL-CONC-BRAVO and nothing else. Use no tools."
   [ $RC -eq 0 ] && pass "real: bead real-b dispatched (worker-a's turn already ended at that moment: $A_DONE_AT_B_DISPATCH)" \
                 || fail "real: dispatch b exited ${RC}: $OUT"
-  wait_for "$RLOG_A" '"agent_end"' 180 && pass "real: worker-a agent_end captured" || fail "real: no agent_end for worker-a — tail: $(tail -c 300 "$RLOG_A" 2>/dev/null)"
-  wait_for "$RLOG_B" '"agent_end"' 180 && pass "real: worker-b agent_end captured" || fail "real: no agent_end for worker-b — tail: $(tail -c 300 "$RLOG_B" 2>/dev/null)"
+  RUN_PROJ="$RPROJ" wait_for "$RLOG_A" '"agent_end"' 180 && pass "real: worker-a agent_end captured" || fail "real: no agent_end for worker-a — tail: $(tail -c 300 "$RLOG_A" 2>/dev/null)"
+  RUN_PROJ="$RPROJ" wait_for "$RLOG_B" '"agent_end"' 180 && pass "real: worker-b agent_end captured" || fail "real: no agent_end for worker-b — tail: $(tail -c 300 "$RLOG_B" 2>/dev/null)"
   if grep -q 'REAL-CONC-ALPHA' "$RLOG_A" 2>/dev/null && ! grep -q 'REAL-CONC-ALPHA' "$RLOG_B" 2>/dev/null \
      && grep -q 'REAL-CONC-BRAVO' "$RLOG_B" 2>/dev/null && ! grep -q 'REAL-CONC-BRAVO' "$RLOG_A" 2>/dev/null; then
     pass "real: logs are disjoint — each seat's turn landed only in its own log"

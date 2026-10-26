@@ -58,16 +58,33 @@ ensure_supervisor() {
   mkdir -p "$HERE/run" "$HERE/logs"
   stop_legacy_watchdog desk
   stop_legacy_watchdog courier
-  pid_file="$HERE/run/supervisor.pid"
-  if [ -f "$pid_file" ]; then
-    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
-    if pid_alive "$old_pid"; then echo "supervisor already running: pid $old_pid"; return 0; fi
-    echo "supervisor dead: pid ${old_pid:-?}; restarting"; rm -f "$pid_file"
+  WHEELHOUSE_DAEMONS_ROOT="$ROOT" . "$HERE/daemons.sh"
+  start_supervisor || exit $?
+}
+
+# Pane options are the identity; a directory or a bridge position is not.
+claim_commander() {
+  local target="${1:-${TMUX_PANE:-}}" pane_id pane_session
+  if [ -z "$target" ]; then
+    echo 'STOP: --claim-commander needs a pane argument or TMUX_PANE inside the commander pane' >&2
+    return 1
   fi
-  (cd "$ROOT" && WHEELHOUSE_SUPERVISOR_ROOT="$ROOT" WHEELHOUSE_SUPERVISOR_STARTED_BY_COCKPIT=1 nohup "$HERE/supervisor.sh" >> "$HERE/logs/supervisor.out.log" 2>> "$HERE/logs/supervisor.stderr.log" & echo $! > "$pid_file")
-  new_pid="$(cat "$pid_file" 2>/dev/null || true)"; sleep 0.2
-  if pid_alive "$new_pid"; then echo "supervisor started: pid $new_pid"; return 0; fi
-  echo "STOP: supervisor failed to start; see $HERE/logs/supervisor.stderr.log" >&2; exit 1
+  pane_id="$(tmx display-message -p -t "$target" '#{pane_id}')" &&
+    pane_session="$(tmx display-message -p -t "$target" '#{session_name}')" || {
+      echo "STOP: cannot resolve commander pane $target (tmux 3.0+ with pane options is required)" >&2
+      return 1
+    }
+  if ! tmx set-option -p -t "$pane_id" @wheelhouse_commander "$ROOT"; then
+    echo 'STOP: cannot mark commander pane; tmux 3.0 or newer with pane user options is required' >&2
+    return 1
+  fi
+  mkdir -p "$HERE/run"
+  bun - "$HERE/run/commander-pane.json" "$pane_id" "$pane_session" "$ROOT" <<'JS'
+import fs from 'node:fs';
+const [file,paneId,session,root]=process.argv.slice(2), tmp=file+'.'+process.pid+'.tmp';
+fs.writeFileSync(tmp,JSON.stringify({paneId,session,root,writtenAt:new Date(Date.now()).toISOString()})+'\n');
+fs.renameSync(tmp,file);
+JS
 }
 
 usage() {
@@ -76,6 +93,7 @@ usage: seats/cockpit.sh [namespace]
        seats/cockpit.sh --herald [namespace]
        seats/cockpit.sh --desk [namespace]
        seats/cockpit.sh --courier [namespace]
+       seats/cockpit.sh --claim-commander [pane]
        seats/cockpit.sh --pane-commander
        seats/cockpit.sh --pane-floor
 EOF
@@ -101,14 +119,13 @@ case "${1:-}" in
     S="wh-${2:-$(basename "$ROOT")}" ensure_courier
     exit 0
     ;;
+  --claim-commander)
+    [ "$#" -le 2 ] || refuse_arg "$3"
+    claim_commander "${2:-${TMUX_PANE:-}}" || exit 1
+    exit 0
+    ;;
   --pane-commander)
-    mkdir -p "$HERE/run"
-    pane_id="$(tmx display-message -p -t "${TMUX_PANE:-}" '#{pane_id}' 2>/dev/null || printf '%s' "${TMUX_PANE:-}")"
-    pane_session="$(tmx display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null || true)"
-    ROOT_JSON="$(printf '%s' "$ROOT" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-    PANE_JSON="$(printf '%s' "$pane_id" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-    SESSION_JSON="$(printf '%s' "$pane_session" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-    printf '{ "paneId": "%s", "session": "%s", "root": "%s", "writtenAt": "%s" }\n' "$PANE_JSON" "$SESSION_JSON" "$ROOT_JSON" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$HERE/run/commander-pane.json"
+    claim_commander "${TMUX_PANE:-}" || exit 1
     cat <<EOF
 
   ┌─ COMMANDER PANE ──────────────────────────────────────────────┐
@@ -117,6 +134,7 @@ case "${1:-}" in
   │ Herald alerts target this pane through commander-pane.json;   │
   │ drain with: bun seats/herald.ts --drain                       │
   │ Needs desk: ${DESK_URL:-not started}                          │
+  │ Digest: ${DESK_URL:+${DESK_URL%/needs}/digest}                │
   │                                                               │
   │     cd $ROOT
   │     claude                                                    │
@@ -163,7 +181,14 @@ if [ "${WHEELHOUSE_COCKPIT_DAEMONS:-1}" != "0" ]; then
   ensure_herald
   ensure_supervisor
 fi
-DESK_URL="$(cat "$HERE/run/desk.port" 2>/dev/null || true)"
+DESK_URL="$(bun -e '
+import fs from "node:fs";const file=process.argv[1];let raw;
+try { raw=fs.readFileSync(file,"utf8").trim(); }
+catch(e) { if(e.code==="ENOENT") process.exit(0); console.error(e.stack||e.message||String(e)); process.exit(1); }
+try { const u=new URL(raw); if(!raw.startsWith("http://")||u.protocol!=="http:"||u.pathname!=="/needs"||u.username||u.password||u.search||u.hash) throw Error("not a desk URL"); }
+catch { console.error("Invalid desk.port: expected a complete http://host[:port]/needs URL ("+file+")"); process.exit(1); }
+console.log(raw);
+' "$HERE/run/desk.port")" || exit "$?"
 export DESK_URL
 
 attach() {
@@ -205,7 +230,7 @@ install_resize_hook() {
   if [ -n "${WHEELHOUSE_TMUX_SOCKET:-}" ]; then
     prefix="tmux -L $WHEELHOUSE_TMUX_SOCKET"
   fi
-  tmx set-hook -t "$S" client-attached "run-shell 'sleep 0.1; $prefix resize-pane -t ${S}:bridge.0 -x ${COMMANDER_PANE_PERCENT}%'"
+  tmx set-hook -t "$S" client-attached "run-shell '$prefix resize-pane -t ${S}:bridge.0 -x ${COMMANDER_PANE_PERCENT}%'"
 }
 
 spawn_floor_pane() {
@@ -226,6 +251,7 @@ spawn_floor_pane() {
 
 if tmx has-session -t "=$S" 2>/dev/null; then
   if tmx list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx 'bridge'; then
+    claim_commander "${S}:bridge.0" || exit 1
     PANES="$(tmx list-panes -t "${S}:bridge" 2>/dev/null | wc -l | tr -d ' ')"
     if [ "$PANES" = "1" ]; then
       echo "bridge floor pane missing in ${S}:bridge; respawning it"
@@ -245,7 +271,8 @@ if tmx has-session -t "=$S" 2>/dev/null; then
 fi
 
 # Window 0:bridge — left pane is the commander seat.
-tmx new-session -d -s "$S" -n bridge -c "$ROOT" "$QSELF --pane-commander"
+tmx new-session -d -s "$S" -n bridge -c "$ROOT" "$QSELF --pane-commander" || exit 1
+claim_commander "${S}:bridge.0" || exit 1
 
 spawn_floor_pane || exit 1
 if [ "${WHEELHOUSE_COCKPIT_DAEMONS:-1}" != "0" ]; then

@@ -25,8 +25,9 @@ fail() { printf '  FAIL  %s\n' "$*" | scrub; FAILED=$((FAILED + 1)); }
 skip() { printf '  SKIP  %s\n' "$*" | scrub; SKIPPED=$((SKIPPED + 1)); }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-specimen-leak.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 cleanup() { selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 PATTERN='Ebb|ebb|Tideline|tideline|cordova|headless emulator|app-review|com\.example\.app|learn what a good one looks like|take it when the reviewer starts waiting'
 if [ "${WHEELHOUSE_SPECIMEN_LEAK_FORCE_MISS:-}" = 1 ]; then
@@ -88,7 +89,7 @@ run_planted_leg() {
   rc=0; out="$(run_grep)" || rc=$?
   set -e
   cd "$old" || exit 2
-  if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -Eq 'Ebb|Tideline'; then
+  if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -E >/dev/null 'Ebb|Tideline'; then
     pass "prescribed grep bites a planted whole-file generated specimen copy"
   else
     printf '%s\n' "$out" | scrub
@@ -104,7 +105,7 @@ run_negative_control() {
   set +e
   rc=0; out="$(WHEELHOUSE_SPECIMEN_LEAK_FORCE_MISS=1 bash "$0" 2>&1)" || rc=$?
   set -e
-  if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'FAIL  prescribed grep missed planted specimen copy'; then
+  if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep >/dev/null 'FAIL  prescribed grep missed planted specimen copy'; then
     pass "forced-miss planted specimen exits non-zero and prints FAIL"
   else
     printf '%s\n' "$out" | scrub

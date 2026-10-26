@@ -4,14 +4,15 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-comms-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
+. "$HERE/fixtures/readiness.sh"
 PASS=0; FAIL=0; SERVER_PID=""
 cleanup(){ [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
-port(){ bun -e 'const s=require("node:net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
+port(){ bun -e 'import net from "node:net"; const s=net.createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats/transports" "$ROOT/seats/run"
 selftest_copy_seat_runtime "$ROOT" "$HERE"
 cat > "$ROOT/seats/seats.json" <<'JSON'
@@ -27,6 +28,12 @@ cat > "$ROOT/seats/channels.json" <<'JSON'
   }
 }
 JSON
+# Literal docs-derived Slack payloads: no live workspace or recorded-incident claim.
+if bun "$HERE/fixtures/slack-readback.ts" "$HERE" "$FIX/slack-readback" "$ROOT/seats/transports/slack.ts"; then
+  pass 'Slack channel/ts and entity-equivalent content verify; missing/changed messages and removals reject'
+else
+  fail 'Slack docs-derived read-back cases failed'
+fi
 cat > "$FIX/server.ts" <<'TS'
 import * as fs from "node:fs";
 const dir=process.env.STUB_DIR!; let msg=0;
@@ -34,9 +41,10 @@ function append(row:any){ fs.appendFileSync(`${dir}/requests.jsonl`, JSON.string
 function rows(name:string){ try{return fs.readFileSync(`${dir}/${name}`,"utf8").split(/\n/).filter(Boolean).map(JSON.parse);}catch{return [];} }
 function remember(kind:string, row:any){ fs.appendFileSync(`${dir}/${kind}.jsonl`, JSON.stringify(row)+"\n"); }
 function hidden(){ return fs.existsSync(`${dir}/fail-readback`); }
-Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
+const server=Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
  const u=new URL(req.url); const body=req.method==="POST" ? await req.json().catch(()=>({})) : undefined;
- append({method:req.method, url:u.pathname+u.search, body});
+ const loggedUrl=u.pathname.replace(/^\/bot[^/]+\//, "/bot[redacted]/")+u.search;
+ append({method:req.method, url:loggedUrl, body});
  if(u.pathname.includes("/sendMessage")){ msg++; const r={message_id:msg,chat:{id:body.chat_id},text:body.text}; remember("telegram", r); return Response.json({ok:true,result:r}); }
  if(u.pathname.endsWith("/chat.postMessage")){ msg++; const ts=`1790000000.${String(msg).padStart(6,"0")}`; remember("slack", {ts,channel:body.channel,user:"BOT",text:body.text}); return Response.json({ok:true,ts,message:{ts,text:body.text}}); }
  if(u.pathname.endsWith("/conversations.history")){ const fail=`${dir}/fail-read-once`; if (fs.existsSync(fail)) { fs.unlinkSync(fail); return Response.json({ok:false,error:"fixture read failed"},{status:500}); } let messages=rows("slack.jsonl"); if(hidden()) messages=messages.map((m:any)=>({...m,text:"dropped"})); return Response.json({ok:true,messages}); }
@@ -44,10 +52,13 @@ Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch
  if(u.pathname.match(/\/messages\/[^/]+$/) && req.method==="GET"){ const id=u.pathname.split("/").pop(); const row=rows("teams.jsonl").find((m:any)=>m.id===id); return row?Response.json(hidden()?{...row,body:{content:"dropped"}}:row):Response.json({error:{message:"missing"}},{status:404}); }
  return Response.json({error:"no route", path:u.pathname},{status:404});
 }});
+fs.writeFileSync(`${dir}/server.ready`,String(server.port)+"\n");
 TS
 P="$(port)"; STUB_DIR="$FIX" STUB_PORT="$P" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
-sleep 0.2
-base_env(){ env -u BEADS_ACTOR WHEELHOUSE_COMMS_ROOT="$ROOT" WHEELHOUSE_TELEGRAM_TOKEN=tg-token WHEELHOUSE_TELEGRAM_CHAT_ID=111 WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_SLACK_TOKEN="$(printf 'xox%s-%s' b fixture)" WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TEAMS_TOKEN=teams-token WHEELHOUSE_TEAMS_API_BASE="http://127.0.0.1:$P" "$@"; }
+fixture_wait "transport stub bound its private listener" "$SERVER_PID" test -s "$FIX/server.ready" || exit 1
+# This fixture tests relay/read, not alert/staffing policy. Zero means always due,
+# not disabled; keep these unrelated clocks explicitly not due for this fixture.
+base_env(){ env -u BEADS_ACTOR WHEELHOUSE_ALERT_INTERVAL_MS=9007199254740991 WHEELHOUSE_STAFFING_INTERVAL_MS=9007199254740991 WHEELHOUSE_COMMS_ROOT="$ROOT" WHEELHOUSE_TELEGRAM_TOKEN=tg-token WHEELHOUSE_TELEGRAM_CHAT_ID=111 WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_SLACK_TOKEN="$(printf 'xox%s-%s' b fixture)" WHEELHOUSE_SLACK_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TEAMS_TOKEN=teams-token WHEELHOUSE_TEAMS_API_BASE="http://127.0.0.1:$P" "$@"; }
 count_req(){ [ -f "$FIX/requests.jsonl" ] && wc -l < "$FIX/requests.jsonl" | tr -d ' ' || printf '0'; }
 count_rows(){ if [ -f "$ROOT/seats/comms.jsonl" ]; then awk -v t="\"type\":\"$1\"" 'index($0,t){n++} END{print n+0}' "$ROOT/seats/comms.jsonl"; else printf '0'; fi; }
 reset_logs(){ rm -f "$FIX/requests.jsonl" "$FIX/slack.jsonl" "$FIX/telegram.jsonl" "$FIX/teams.jsonl" "$FIX/fail-readback" "$FIX/fail-read-once" "$ROOT/seats/comms.jsonl" "$ROOT/seats/inbox.jsonl" "$ROOT/seats/herald.state.json" "$ROOT/seats/run/comms."*.cursor "$ROOT/seats/logs/courier.out.log" 2>/dev/null || true; }
@@ -62,7 +73,7 @@ if [ $rc -eq 2 ] && grep -q 'STOP: channel C08EXAMPLE is not declared in seats/c
 
 reset_logs
 base_env BEADS_ACTOR=worker-1 bun "$ROOT/seats/comms.ts" request partners "need a word with Tyler" > "$FIX/request.out" 2>&1; rc=$?; RELAY_ID="$(cat "$FIX/request.out" | tr -d '\r\n')"
-if [ $rc -eq 0 ] && echo "$RELAY_ID" | grep -Eq '^relay-[0-9a-z]{4}$' && [ "$(count_rows request)" -eq 1 ] && [ "$(count_req)" -eq 0 ]; then pass 'seat relay request records one request row and makes zero network calls'; else fail "request leg rc=$rc id=$RELAY_ID ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null) req=$(count_req) out=$(cat "$FIX/request.out")"; fi
+if [ $rc -eq 0 ] && echo "$RELAY_ID" | grep -E >/dev/null '^relay-[0-9a-z]{4}$' && [ "$(count_rows request)" -eq 1 ] && [ "$(count_req)" -eq 0 ]; then pass 'seat relay request records one request row and makes zero network calls'; else fail "request leg rc=$rc id=$RELAY_ID ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null) req=$(count_req) out=$(cat "$FIX/request.out")"; fi
 base_env bun "$ROOT/seats/herald.ts" --once > "$FIX/herald-request1.out" 2>&1; rc=$?
 base_env bun "$ROOT/seats/herald.ts" --once > "$FIX/herald-request2.out" 2>&1; rc2=$?
 HERALD_MATCHES="$(node -e 'const fs=require("fs"); const rows=fs.existsSync(process.argv[1])?fs.readFileSync(process.argv[1],"utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse):[]; console.log(rows.filter(r=>r.class==="relay-request"&&r.seat==="worker-1"&&r.state==="input-required"&&r.detail.includes("relay "+process.argv[2])).length)' "$ROOT/seats/inbox.jsonl" "$RELAY_ID")"
@@ -99,7 +110,7 @@ if [ $rc -eq 1 ] && grep -q 'STOP: send unverified: slack read-back did not retu
 
 reset_logs
 base_env bun "$ROOT/seats/comms.ts" send principal hi > "$FIX/principal.out" 2>&1; rc=$?
-if [ $rc -eq 0 ] && grep -q '^sent principal 111:' "$FIX/principal.out" && [ "$(grep -c 'sendMessage' "$FIX/requests.jsonl")" -eq 1 ] && [ "$(count_rows sent)" -eq 1 ] && grep -q '"readBack":"echo"' "$ROOT/seats/comms.jsonl"; then pass 'telegram principal send records echo read-back'; else fail "telegram leg rc=$rc out=$(cat "$FIX/principal.out") req=$(cat "$FIX/requests.jsonl" 2>/dev/null) ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null)"; fi
+if [ $rc -eq 0 ] && grep -q '^sent principal 111:' "$FIX/principal.out" && [ "$(grep -c 'sendMessage' "$FIX/requests.jsonl")" -eq 1 ] && [ "$(count_rows sent)" -eq 1 ] && grep -q '"readBack":"echo"' "$ROOT/seats/comms.jsonl" && ! grep -Fq 'tg-token' "$FIX/requests.jsonl"; then pass 'telegram principal send records echo read-back without logging bot credential'; else fail "telegram send/logging leg rc=$rc (captured output withheld)"; fi
 
 reset_logs
 base_env bun "$ROOT/seats/comms.ts" send dev hi > "$FIX/dev.out" 2>&1; rc=$?
@@ -123,7 +134,7 @@ printf '%s\n' '{"ts":"1790000003.000000","channel":"C08EXAMPLE","user":"U4","tex
 : > "$FIX/requests.jsonl"
 base_env bun "$ROOT/seats/comms.ts" read partners > "$FIX/read2.out" 2>&1; rc2=$?
 INBOUND_MATCHES="$(node -e 'const fs=require("fs"); const rows=fs.existsSync(process.argv[1])?fs.readFileSync(process.argv[1],"utf8").trim().split(/\n/).filter(Boolean).map(JSON.parse):[]; console.log(rows.filter(r=>r.class==="inbound"&&r.state==="terminal"&&r.seat==="channel:partners"&&String(r.detail).startsWith("UNTRUSTED inbound text")&&r.detail.includes("new inbound info")).length)' "$ROOT/seats/inbox.jsonl")"
-if [ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q 'read partners: 0 new' "$FIX/read1.out" && grep -q 'read partners: 1 new' "$FIX/read2.out" && [ "$INBOUND_MATCHES" -eq 1 ] && [ "$(count_rows sent)" -eq 0 ] && [ "$(count_rows request)" -eq 0 ] && [ ! -e "$ROOT/seats/needs.jsonl" ] && [ "$(grep -c 'conversations.history' "$FIX/requests.jsonl")" -eq 1 ]; then pass 'inbound Slack read is terminal UNTRUSTED information only with no comms/needs side effect'; else fail "inbound read leg rc=$rc/$rc2 out1=$(cat "$FIX/read1.out") out2=$(cat "$FIX/read2.out") req=$(cat "$FIX/requests.jsonl" 2>/dev/null) inbox=$(cat "$ROOT/seats/inbox.jsonl" 2>/dev/null) ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null)"; fi
+if [ $rc -eq 0 ] && [ $rc2 -eq 0 ] && grep -q 'read partners: 0 new' "$FIX/read1.out" && grep -q 'read partners: 1 new' "$FIX/read2.out" && [ "$INBOUND_MATCHES" -eq 1 ] && [ "$(count_rows sent)" -eq 0 ] && [ "$(count_rows request)" -eq 0 ] && [ ! -e "$ROOT/seats/needs.jsonl" ] && [ "$(grep -c 'conversations.history' "$FIX/requests.jsonl")" -eq 1 ]; then pass 'inbound Slack read is terminal UNTRUSTED information only with no comms/needs side effect'; else fail "inbound read leg rc=$rc/$rc2 matches=$INBOUND_MATCHES sent=$(count_rows sent) requests=$(count_rows request) needs_exists=$([ -e "$ROOT/seats/needs.jsonl" ] && echo yes || echo no) out1=$(cat "$FIX/read1.out") out2=$(cat "$FIX/read2.out") req=$(cat "$FIX/requests.jsonl" 2>/dev/null) inbox=$(cat "$ROOT/seats/inbox.jsonl" 2>/dev/null) ledger=$(cat "$ROOT/seats/comms.jsonl" 2>/dev/null)"; fi
 
 reset_logs
 base_env BEADS_ACTOR=commander bun "$ROOT/seats/comms.ts" send partners "fleet echo" >/dev/null 2>&1
@@ -140,16 +151,16 @@ base_env bun "$ROOT/seats/comms.ts" read principal > "$FIX/read-telegram.out" 2>
 if [ $rc -eq 2 ] && grep -q 'STOP: channel principal is not readable' "$FIX/read-telegram.out" && [ "$(count_req)" -eq 0 ]; then pass 'telegram channel with read false is refused before network'; else fail "telegram read false leg rc=$rc out=$(cat "$FIX/read-telegram.out") req=$(count_req)"; fi
 
 reset_logs
-python3 - <<'PY' "$ROOT/seats/channels.json"
-import json,sys
-p=sys.argv[1]; j=json.load(open(p)); j['channels']['principal']['read']=True; open(p,'w').write(json.dumps(j)+"\n")
-PY
+bun - "$ROOT/seats/channels.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+j.channels.principal.read=true; fs.writeFileSync(p,JSON.stringify(j)+'\n');
+JS
 base_env bun "$ROOT/seats/comms.ts" read principal > "$FIX/read-telegram-courier.out" 2>&1; rc=$?
 if [ $rc -eq 0 ] && grep -q 'read principal: telegram channels are read by the courier tick' "$FIX/read-telegram-courier.out" && [ "$(count_req)" -eq 0 ]; then pass 'standalone telegram read prints courier-tick line and makes zero API calls'; else fail "telegram courier line leg rc=$rc out=$(cat "$FIX/read-telegram-courier.out") req=$(count_req)"; fi
-python3 - <<'PY' "$ROOT/seats/channels.json"
-import json,sys
-p=sys.argv[1]; j=json.load(open(p)); j['channels']['principal']['read']=False; open(p,'w').write(json.dumps(j)+"\n")
-PY
+bun - "$ROOT/seats/channels.json" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],j=JSON.parse(fs.readFileSync(p,'utf8'));
+j.channels.principal.read=false; fs.writeFileSync(p,JSON.stringify(j)+'\n');
+JS
 
 reset_logs
 printf '%s\n' '{"ts":"1790000010.000000","channel":"C08EXAMPLE","user":"U5","text":"backlog"}' > "$FIX/slack.jsonl"

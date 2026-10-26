@@ -5,25 +5,36 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-transports-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
+export HOME="$FIX/home" XDG_CONFIG_HOME="$FIX/home/.config"
+mkdir -p "$HOME" || exit 2
 PASS=0; FAIL=0; SERVER_PID=""
 cleanup(){ [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
-pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
+selftest_install_cleanup_traps cleanup
+pass(){ PASS=$((PASS+1)); echo "ok $((PASS+FAIL)) - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
-port(){ bun -e 'const s=require("node:net").createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});' ; }
+# A failure followed by a success must not reuse its TAP number. Exercise the
+# real functions without affecting the suite counters, and reject the old rule.
+expected_numbers=$'not ok 1 - fixture-failure\nok 2 - fixture-success'
+numbers="$( ( PASS=0; FAIL=0; fail fixture-failure; pass fixture-success ) 2>&1 )"
+[ "$numbers" = "$expected_numbers" ] || { echo "TAP numbering regression: $numbers" >&2; exit 1; }
+legacy_numbers="$( ( PASS=0; FAIL=0; pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }; fail fixture-failure; pass fixture-success ) 2>&1 )"
+[ "$legacy_numbers" != "$expected_numbers" ] || { echo 'TAP numbering control failed to detect old rule' >&2; exit 1; }
+echo '# TAP numbering: failure1/success2; old success-only numbering rejected'
 ROOT="$FIX/proj"; mkdir -p "$ROOT/seats/transports" "$ROOT/seats/run"
 selftest_copy_seat_runtime "$ROOT" "$HERE"
 cat > "$FIX/server.ts" <<'TS'
 import * as fs from "node:fs";
 const dir=process.env.STUB_DIR!; let msg=0;
-function append(row:any){ fs.appendFileSync(`${dir}/requests.jsonl`, JSON.stringify(row)+"\n"); }
+function append(row:any){ const line=JSON.stringify(row)+"\n"; fs.appendFileSync(`${dir}/requests.jsonl`, line); fs.appendFileSync(`${dir}/all-requests.jsonl`, line); }
 function rows(name:string){ try{return fs.readFileSync(`${dir}/${name}`,"utf8").split(/\n/).filter(Boolean).map(JSON.parse);}catch{return [];} }
 function remember(kind:string, row:any){ fs.appendFileSync(`${dir}/${kind}.jsonl`, JSON.stringify(row)+"\n"); }
 function hidden(){ return fs.existsSync(`${dir}/fail-readback`); }
-Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
+const server = Bun.serve({hostname:"127.0.0.1", port:0, async fetch(req){
  const u=new URL(req.url); const body=req.method==="POST" ? await req.json().catch(()=>({})) : undefined;
  const auth=req.headers.get("authorization")||"";
- append({method:req.method, url:u.pathname+u.search, body});
+ const loggedUrl=u.pathname.replace(/^\/bot[^/]+\//, "/bot[redacted]/")+u.search;
+ append({method:req.method, url:loggedUrl, body});
  if(u.pathname.includes("/sendMessage")){ msg++; const r={message_id:msg,chat:{id:body.chat_id},text:body.text}; remember("telegram", r); return Response.json({ok:true,result:r}); }
  if(u.pathname.endsWith("/chat.postMessage")){ msg++; const ts=`1790000000.${String(msg).padStart(6,"0")}`; if(!hidden()) remember("slack", {ts,channel:body.channel,user:"BOT",text:body.text,thread_ts:body.thread_ts}); return Response.json({ok:true,ts,message:{ts,text:body.text}}); }
  if(u.pathname.endsWith("/conversations.history")){ let messages=rows("slack.jsonl").filter((m:any)=>!body.oldest || Number(m.ts)>Number(body.oldest)); if(hidden()) messages=messages.map((m:any)=>({...m,text:"dropped"})); return Response.json({ok:true,messages}); }
@@ -42,15 +53,34 @@ Bun.serve({hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch
  if(u.pathname.endsWith("/messages") && req.method==="GET"){ return Response.json({value:rows("teams.jsonl")}); }
  return Response.json({error:"no route", path:u.pathname},{status:404});
 }});
+const ready = `${dir}/server.ready.json`;
+fs.writeFileSync(ready + '.new', JSON.stringify({pid:process.pid,root:fs.realpathSync(dir),port:server.port})+'\n');
+fs.renameSync(ready + '.new', ready);
 TS
-P="$(port)"; STUB_DIR="$FIX" STUB_PORT="$P" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
-sleep 0.2
+STUB_DIR="$FIX" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
+P="$(bun "$HERE/fixtures/transport-fixture-observation.ts" ready "$FIX" "$SERVER_PID" "$FIX/server.ready.json")" || { fail 'fake endpoint exited before publishing its bound port'; exit 1; }
 cat > "$FIX/check.ts" <<'TS'
 import * as fs from "node:fs";
 import { transportFor } from "./proj/seats/transports/index";
 import { demuxUpdates } from "./proj/seats/transports/telegram";
+async function main() {
 const root=process.env.ROOT!, stub=process.env.STUB_DIR!, kind=process.argv[2], dest=process.argv[3];
 const t=transportFor(root, kind as any);
+if(kind==="teams") {
+  // Observe real call failures before readBack's boolean API intentionally
+  // catches them. Record no arguments, headers, command text or token values.
+  const actual=t as any, call=actual.call.bind(actual);
+  actual.call=async (...args:any[])=>{
+    const started=performance.now();
+    try { return await call(...args); }
+    catch(error:any) {
+      console.error(JSON.stringify({event:"transport-check-error",code:error?.code??null,message:error?.message??String(error)}));
+      throw error;
+    } finally {
+      fs.appendFileSync(`${stub}/token-call-timings.jsonl`,JSON.stringify({method:args[0],elapsedMs:performance.now()-started})+"\n");
+    }
+  };
+}
 const r=await t.post(dest,"hello", process.argv[4]?{threadRef:process.argv[4]}:undefined);
 if(!r.ref) throw new Error("post returned no ref");
 if(!await t.readBack(dest,r.ref,"hello")) throw new Error("direct readBack returned false after stored post");
@@ -69,6 +99,11 @@ if(kind==="telegram") {
   if(got.cursor!=="2030-01-01T00:01:00Z" || !got.messages.some(m=>m.text==="planted inbound" && m.from==="U-IN")) throw new Error(`teams read assertion failed ${JSON.stringify(got)}`);
   console.log(JSON.stringify({post:r, read:got}));
 }
+}
+main().catch(error => {
+  console.error(JSON.stringify({event:"transport-check-error",code:error?.code??null,message:error?.message??String(error)}));
+  process.exitCode=1;
+});
 TS
 cat > "$FIX/readback-false.ts" <<'TS'
 import * as fs from "node:fs";
@@ -123,31 +158,33 @@ env -u WHEELHOUSE_TEAMS_TOKEN -u WHEELHOUSE_TEAMS_TOKEN_CMD ROOT="$ROOT" WHEELHO
 #!/usr/bin/env bash
 echo call >> "$FIX/token-calls"
 printf teams-cmd-token
+echo complete >> "$FIX/token-completed"
 SH
 chmod +x "$FIX/teams-token-cmd.sh"
 rm -f "$ROOT/seats/run/teams.token" "$FIX/teams.jsonl" "$FIX/fail-readback"; : > "$FIX/requests.jsonl"
-base_env WHEELHOUSE_TEAMS_TOKEN_CMD="$FIX/teams-token-cmd.sh" bun "$FIX/check.ts" teams chats/cmd >/dev/null 2>&1 && [ "$(wc -l < "$FIX/token-calls")" -ge 3 ] && pass 'teams TOKEN_CMD supplies a token per call' || fail "teams TOKEN_CMD per-call failed: calls=$(cat "$FIX/token-calls" 2>/dev/null)"
+if base_env WHEELHOUSE_TEAMS_TOKEN_CMD="$(selftest_shell_quote "$FIX/teams-token-cmd.sh")" bun "$HERE/fixtures/transports-token-command.ts" "$FIX" "$FIX/check.ts"; then
+  pass 'teams TOKEN_CMD supplies a token per call; native results and diagnostic classes retained'
+else
+  fail 'teams TOKEN_CMD completion/count diagnostics failed (retained streams above)'
+fi
 base_env WHEELHOUSE_TEAMS_TOKEN_CMD="exit 9" bun "$FIX/check.ts" teams chats/cmd > "$FIX/cmdfail.out" 2>&1; [ $? -ne 0 ] && grep -q 'teams token command failed' "$FIX/cmdfail.out" && pass 'teams failing TOKEN_CMD is a named error' || fail "teams TOKEN_CMD failure wrong: $(cat "$FIX/cmdfail.out")"
 # threaded reply read-back URL
 rm -f "$FIX/teams.jsonl" "$FIX/fail-readback"; : > "$FIX/requests.jsonl"
 base_env WHEELHOUSE_TEAMS_TOKEN=teams-token bun "$FIX/check.ts" teams chats/thread parent-msg >/dev/null 2>&1
 if grep -q '"url":"/chats/thread/messages/parent-msg/replies/m' "$FIX/requests.jsonl"; then pass 'teams threaded reply readBack fetches /messages/<parent>/replies/<id>'; else fail "teams threaded reply readBack URL wrong: $(cat "$FIX/requests.jsonl")"; fi
-# token leak check over full request log: URLs and bodies only; auth headers are deliberately not logged, and Telegram bot path is allowed.
+# Full-run log, not the last per-leg reset: no header values or bot tokens.
 SLACK_FIXTURE_TOKEN="$(printf 'xox%s-%s' b fixture)"
-TOKENS="tg-token $SLACK_FIXTURE_TOKEN teams-token teams-cmd-token"
-leak=""
-while IFS= read -r row; do
-  for tok in $TOKENS; do
-    [ -z "$tok" ] && continue
-    case "$row" in
-      *"$tok"*)
-        if printf '%s\n' "$row" | grep -F "/bot$tok/" >/dev/null 2>&1 && [ "$tok" = "tg-token" ]; then :; else leak="$leak$row
-"; fi
-        ;;
-    esac
-  done
-done < "$FIX/requests.jsonl"
-[ -z "$leak" ] && pass 'full-run request log keeps fixture tokens out of URLs and bodies except Telegram bot path' || fail "fixture token leaked into request log: $leak"
+TOKENS="tg-token $SLACK_FIXTURE_TOKEN teams-token teams-cmd-token telegram-file-token slack-file-token teams-file-token"
+leak=0
+[ -s "$FIX/all-requests.jsonl" ] || { fail 'full-run request log was not created'; leak=1; }
+if [ -f "$FIX/all-requests.jsonl" ]; then
+  while IFS= read -r row; do
+    for tok in $TOKENS; do
+      case "$row" in *"$tok"*) leak=1;; esac
+    done
+  done < "$FIX/all-requests.jsonl"
+fi
+[ "$leak" -eq 0 ] && pass 'full-run request log keeps all credential values out, including Telegram bot paths' || fail 'fixture credential leaked into request log (value withheld)'
 # canary: force teams readBack true and prove the drop leg would pass when it should fail.
 perl -0pe 's/return htmlText\(String\(json\?\.body\?\.content \?\? ""\)\) === text;/return true;/' "$ROOT/seats/transports/teams.ts" > "$ROOT/seats/transports/teams-bad.ts"
 rm -f "$FIX/teams.jsonl" "$FIX/fail-readback"; : > "$FIX/requests.jsonl"

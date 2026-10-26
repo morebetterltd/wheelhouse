@@ -22,10 +22,15 @@
 #
 # Env overrides (defaults are the values verified in REVIEW_BENCH.md):
 #   ANDROID_HOME  JAVA_HOME  AVD_NAME  EMU_SERIAL  APP_PKG  APP_ACTIVITY
-#   BOOT_TIMEOUT (seconds)  LIVENESS_WAIT (seconds)
+#   BOOT_TIMEOUT (seconds, boot/PID appearance policy bound)
+#   LIVENESS_WAIT (seconds, crash-on-launch window AFTER PID observation)
 #   BLANK_MAX_SHARE (0..1)   RENDER_TIMEOUT (seconds)
 
 set -euo pipefail
+
+# When installed at wheelhouse/crew/bench.sh; do this before any heavy work.
+WHEELHOUSE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+. "$WHEELHOUSE_ROOT/seats/heavy-test.sh"
 
 ANDROID_HOME="${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}"
 JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}"
@@ -42,6 +47,9 @@ ADB="$ANDROID_HOME/platform-tools/adb"
 EMU="$ANDROID_HOME/emulator/emulator"
 
 EMU_PID=""
+WAIT_PID=""
+EMU_ANCHOR=""
+EMU_ANCHOR_ID=""
 
 log()  { printf '[bench] %s\n' "$*"; }
 # The verdict is the one thing OUT/ did not retain: every input (logcat, error
@@ -61,32 +69,59 @@ fail() {
   exit 1
 }
 
-# Always kill the guest. A leaked headless emulator eats ~2GB of RAM silently,
-# so this runs on success, on failure, and on Ctrl-C alike.
+# A serial/AVD name is not process ownership. Launch into a private process
+# group, prove the console listener belongs to it, and retain a live member's
+# native birth/group identity. Never send `adb emu kill` to a borrowed serial
+# or pkill by an AVD name shared with another bench.
+process_identity() {
+  local rc=0
+  LC_ALL=C ps -p "$1" -o pgid=,lstart= > "$OUT/process.stdout" 2> "$OUT/process.stderr" || rc=$?
+  if [ "$rc" = 1 ] && [ ! -s "$OUT/process.stdout" ] && [ ! -s "$OUT/process.stderr" ]; then return 1; fi
+  if [ "$rc" != 0 ] || [ ! -s "$OUT/process.stdout" ] || [ -s "$OUT/process.stderr" ]; then
+    printf '[bench] cannot observe process %s; see process.stdout/process.stderr\n' "$1" >&2
+    return 2
+  fi
+  cat "$OUT/process.stdout"
+}
+anchor_owned() {
+  local current
+  [ -n "$EMU_ANCHOR" ] || return 1
+  current="$(process_identity "$EMU_ANCHOR")" || return "$?"
+  [ "$current" = "$EMU_ANCHOR_ID" ] || return 2
+}
 # shellcheck disable=SC2329  # invoked by trap
 cleanup() {
-  local rc=$?
+  local rc=$? until ownership=0
+  trap - EXIT INT TERM
+  if [ -n "$WAIT_PID" ]; then
+    kill -TERM "$WAIT_PID" 2>/dev/null || true
+    wait "$WAIT_PID" 2>/dev/null || true
+  fi
   if [ -n "$EMU_PID" ]; then
-    log "shutting down emulator (pid $EMU_PID)"
-    "$ADB" -s "$EMU_SERIAL" emu kill >/dev/null 2>&1 || true
-    for _ in $(seq 1 20); do
-      kill -0 "$EMU_PID" 2>/dev/null || break
-      sleep 1
-    done
-    if kill -0 "$EMU_PID" 2>/dev/null; then
-      log "emu kill did not take; pkill -f emulator.*$AVD_NAME"
-      pkill -f "emulator.*$AVD_NAME" 2>/dev/null || true
-      sleep 2
+    log "shutting down owned emulator group $EMU_PID"
+    anchor_owned || ownership=$?
+    if [ "$ownership" = 0 ]; then
+      kill -TERM -- "-$EMU_PID" 2>/dev/null || true
+      until=$((SECONDS + 20))
+      while anchor_owned && [ "$SECONDS" -lt "$until" ]; do sleep 0.1; done
+      if anchor_owned; then kill -KILL -- "-$EMU_PID" 2>/dev/null || true; fi
+    elif [ "$ownership" != 1 ]; then
+      printf '[bench] FAIL: emulator ownership became unknown; refusing a signal\n' | tee -a "$OUT/verdict.txt" >&2
+      rc=1
     fi
-    if kill -0 "$EMU_PID" 2>/dev/null; then
-      printf '[bench] WARNING: emulator pid %s survived cleanup\n' "$EMU_PID" >&2
-    else
-      log "emulator down"
+    wait "$EMU_PID" 2>/dev/null || true
+    ownership=0
+    anchor_owned || ownership=$?
+    if [ "$ownership" != 1 ]; then
+      printf '[bench] FAIL: owned emulator survived cleanup or its identity became unknown\n' | tee -a "$OUT/verdict.txt" >&2
+      rc=1
     fi
   fi
   exit "$rc"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # --- args ---------------------------------------------------------------
 [ $# -eq 2 ] || { printf 'usage: %s <apk-path> <output-dir>\n' "$0" >&2; exit 2; }
@@ -120,9 +155,29 @@ log "payload: $CORDOVA_PLUGINS ${PLUGINS_BYTES}B"
 
 # Refuse to share the bench with someone else's guest: we address a fixed
 # serial and we kill it on the way out.
-if "$ADB" devices 2>/dev/null | grep -q "^${EMU_SERIAL}[[:space:]]"; then
+"$ADB" devices > "$OUT/devices.stdout" 2> "$OUT/devices.stderr" \
+  || fail "adb device inventory failed; absence is unknown (see devices.stdout/devices.stderr)"
+if grep -q "^${EMU_SERIAL}[[:space:]]" "$OUT/devices.stdout"; then
   fail "$EMU_SERIAL is already running; not touching another agent's emulator"
 fi
+EMU_PORT="${EMU_SERIAL#emulator-}"
+case "$EMU_PORT" in ''|*[!0-9]*) fail "expected EMU_SERIAL=emulator-<even console port>";; esac
+case "$EMU_SERIAL" in emulator-*) ;; *) fail "only an owned emulator serial is supported";; esac
+[ "$EMU_PORT" -ge 1024 ] && [ "$EMU_PORT" -le 65534 ] && [ "$((EMU_PORT % 2))" = 0 ] \
+  || fail "emulator console port must be even, between 1024 and 65534"
+command -v lsof >/dev/null 2>&1 || fail "lsof is required to verify console ownership"
+console_snapshot() {
+  CONSOLE_RC=0
+  lsof -nP -iTCP:"$EMU_PORT" -sTCP:LISTEN -Fpg > "$OUT/console.stdout" 2> "$OUT/console.stderr" || CONSOLE_RC=$?
+  [ ! -s "$OUT/console.stderr" ] || fail "console ownership unknown; see console.stderr"
+  case "$CONSOLE_RC" in
+    0) [ -s "$OUT/console.stdout" ] || fail "empty successful console inventory";;
+    1) [ ! -s "$OUT/console.stdout" ] || fail "incomplete console inventory";;
+    *) fail "console inventory failed (rc=$CONSOLE_RC)";;
+  esac
+}
+console_snapshot
+[ "$CONSOLE_RC" = 1 ] || fail "console port $EMU_PORT is occupied; not claiming its device"
 
 SCREENCAP="$OUT/evidence-launch.png"
 LOGCAT="$OUT/evidence-logcat.txt"
@@ -137,30 +192,61 @@ log "out=$OUT"
 # Headless, software rendering (hw.gpu.mode=swiftshader_indirect in the AVD
 # config is what makes screencap work with no window server), clean every run.
 log "booting $AVD_NAME headless"
-nohup "$EMU" -avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot \
+set -m
+nohup "$EMU" -avd "$AVD_NAME" -port "$EMU_PORT" -no-window -no-audio -no-boot-anim -no-snapshot \
   > "$EMULOG" 2>&1 &
 EMU_PID=$!
+set +m
+EMU_ANCHOR="$EMU_PID"
+EMU_ANCHOR_ID="$(process_identity "$EMU_ANCHOR")" || fail "emulator exited before ownership observation"
+[ "$(printf '%s\n' "$EMU_ANCHOR_ID" | awk '{print $1}')" = "$EMU_PID" ] || fail "emulator did not enter its private process group"
+boot_started=$SECONDS
+boot_until=$((SECONDS + BOOT_TIMEOUT))
+LAST_BOOT="console not yet observed"
+while :; do
+  console_snapshot
+  if [ "$CONSOLE_RC" = 0 ]; then
+    # lsof -Fpg emits one pPID / gPGID pair per native listener process.
+    awk -v group="$EMU_PID" '/^p[0-9]+$/ {p++; next} /^g[0-9]+$/ {g++; if (substr($0,2) != group) bad=1; next} /^f[0-9]+$/ {next} {bad=1} END {exit !(p>0 && p==g && !bad)}' "$OUT/console.stdout" \
+      || fail "console listener is not in owned emulator group; refusing device commands"
+    EMU_ANCHOR="$(awk '/^p/ {if (!p) p=substr($0,2)} END {print p}' "$OUT/console.stdout")"
+    EMU_ANCHOR_ID="$(process_identity "$EMU_ANCHOR")" || fail "console listener exited during ownership observation"
+    [ "$(printf '%s\n' "$EMU_ANCHOR_ID" | awk '{print $1}')" = "$EMU_PID" ] \
+      || fail "console listener changed group during ownership observation"
+    break
+  fi
+  anchor_owned || fail "emulator died during boot; last seen: $LAST_BOOT; see $EMULOG"
+  [ "$SECONDS" -lt "$boot_until" ] || fail "boot policy expired after ${BOOT_TIMEOUT}s; last seen: $LAST_BOOT"
+  sleep 0.1
+ done
 
-"$ADB" -s "$EMU_SERIAL" wait-for-device &
+"$ADB" -s "$EMU_SERIAL" wait-for-device > "$OUT/wait.stdout" 2> "$OUT/wait.stderr" &
 WAIT_PID=$!
-waited=0
 while kill -0 "$WAIT_PID" 2>/dev/null; do
-  kill -0 "$EMU_PID" 2>/dev/null || { wait "$WAIT_PID" 2>/dev/null || true; fail "emulator died during boot; see $EMULOG"; }
-  [ "$waited" -lt "$BOOT_TIMEOUT" ] || { kill "$WAIT_PID" 2>/dev/null || true; fail "device never appeared within ${BOOT_TIMEOUT}s"; }
-  sleep 2
-  waited=$((waited + 2))
-done
+  anchor_owned || fail "emulator died during wait-for-device; see $EMULOG"
+  [ "$SECONDS" -lt "$boot_until" ] || fail "boot policy expired after ${BOOT_TIMEOUT}s; last seen: wait-for-device pending"
+  sleep 0.1
+ done
+wait_rc=0
+wait "$WAIT_PID" || wait_rc=$?
+WAIT_PID=""
+printf '%s\n' "$wait_rc" > "$OUT/wait.rc"
+[ "$wait_rc" = 0 ] || fail "wait-for-device failed (rc=$wait_rc); see wait.stdout/wait.stderr"
 
-# wait-for-device returns while the framework is still coming up. Poll the
-# property or every command in that window fails confusingly.
+# An observed transport is not a booted framework. Return immediately on the
+# boot marker; the explicit device policy bounds a guest that never boots.
 log "waiting for sys.boot_completed"
-while [ "$("$ADB" -s "$EMU_SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != "1" ]; do
-  kill -0 "$EMU_PID" 2>/dev/null || fail "emulator died before boot completed; see $EMULOG"
-  [ "$waited" -lt "$BOOT_TIMEOUT" ] || fail "sys.boot_completed never reached 1 within ${BOOT_TIMEOUT}s"
-  sleep 3
-  waited=$((waited + 3))
-done
-log "booted in ~${waited}s"
+while :; do
+  anchor_owned || fail "emulator died before boot completed; last seen: $LAST_BOOT"
+  boot_rc=0
+  LAST_BOOT="$("$ADB" -s "$EMU_SERIAL" shell getprop sys.boot_completed 2> "$OUT/boot.stderr" | tr -d '\r')" || boot_rc=$?
+  printf '%s\n' "$LAST_BOOT" > "$OUT/boot.stdout"
+  [ "$boot_rc" = 0 ] || fail "getprop failed (rc=$boot_rc); last seen: $LAST_BOOT; see boot.stderr"
+  [ "$LAST_BOOT" = 1 ] && break
+  [ "$SECONDS" -lt "$boot_until" ] || fail "boot policy expired after ${BOOT_TIMEOUT}s; last sys.boot_completed='$LAST_BOOT'"
+  sleep 0.1
+ done
+log "boot observed after $((SECONDS - boot_started))s"
 
 # --- install ------------------------------------------------------------
 # Print adb's own error verbatim rather than asserting a cause: a build that
@@ -193,12 +279,26 @@ log "cleared app data (first-run state)"
 log "launching $APP_PKG/$APP_ACTIVITY"
 "$ADB" -s "$EMU_SERIAL" shell am start -n "$APP_PKG/$APP_ACTIVITY" || fail "am start failed"
 
-# A launch that crashes still prints "Starting: Intent{...}". pidof after the
-# wait is the actual liveness check.
-log "waiting ${LIVENESS_WAIT}s for liveness"
+# First observe a PID. A quiet-host sleep is neither readiness nor absence.
+# The same explicit device-start policy bounds PID appearance; the later frame
+# marker (not this PID or elapsed stability window) determines render readiness.
+launch_until=$((SECONDS + BOOT_TIMEOUT))
+PID=""
+while [ -z "$PID" ]; do
+  anchor_owned || fail "emulator exited while waiting for app PID"
+  pid_rc=0
+  PID="$("$ADB" -s "$EMU_SERIAL" shell pidof "$APP_PKG" 2> "$OUT/pid.stderr" | tr -d '\r' | awk '{print $1}')" || pid_rc=$?
+  [ "$pid_rc" = 0 ] || { [ "$pid_rc" = 1 ] && [ ! -s "$OUT/pid.stderr" ]; } \
+    || fail "pidof failed (rc=$pid_rc); see pid.stderr"
+  [ -n "$PID" ] && break
+  [ "$SECONDS" -lt "$launch_until" ] || fail "PID appearance policy expired after ${BOOT_TIMEOUT}s; last PID empty (rc=$pid_rc)"
+  sleep 0.1
+done
+log "observed pid $PID; crash-on-launch window ${LIVENESS_WAIT}s (not readiness proof)"
 sleep "$LIVENESS_WAIT"
-PID="$("$ADB" -s "$EMU_SERIAL" shell pidof "$APP_PKG" 2>/dev/null | tr -d '\r' | awk '{print $1}')"
-[ -n "$PID" ] || fail "$APP_PKG is not running ${LIVENESS_WAIT}s after launch (crashed on start)"
+STABLE_PID="$("$ADB" -s "$EMU_SERIAL" shell pidof "$APP_PKG" 2> "$OUT/pid.stderr" | tr -d '\r' | awk '{print $1}')" \
+  || fail "$APP_PKG exited during crash-on-launch window; see pid.stderr"
+[ "$STABLE_PID" = "$PID" ] || fail "$APP_PKG PID changed during crash-on-launch window ($PID -> $STABLE_PID)"
 log "alive, pid $PID"
 "$ADB" -s "$EMU_SERIAL" shell dumpsys activity activities 2>/dev/null | tr -d '\r' \
   | grep -m1 topResumedActivity || true
@@ -243,19 +343,19 @@ BLANK_MAX_SHARE="${BLANK_MAX_SHARE:-0.90}"
 RENDER_TIMEOUT="${RENDER_TIMEOUT:-90}"
 SHARE_TOOL="$(dirname "$0")/screencap_share.py"
 if [ -f "$SHARE_TOOL" ] && command -v python3 >/dev/null 2>&1; then
-  waited_render=0
+  render_started=$SECONDS
+  render_until=$((SECONDS + RENDER_TIMEOUT))
   SHARE="$(python3 "$SHARE_TOOL" "$SCREENCAP" | awk '{print $1}')" || fail "could not measure $SCREENCAP"
   while awk -v s="$SHARE" -v m="$BLANK_MAX_SHARE" 'BEGIN {exit !(s >= m)}'; do
-    if [ "$waited_render" -ge "$RENDER_TIMEOUT" ]; then
+    if [ "$SECONDS" -ge "$render_until" ]; then
       fail "the frame never stopped being near-solid within ${RENDER_TIMEOUT}s: one colour still covers ${SHARE} of it (threshold ${BLANK_MAX_SHARE}). The process is alive and the assets loaded -- open $SCREENCAP to see what is on screen. A splash that never gives way looks like this, and so does an app that paints nothing. If this screen is legitimately near-solid, raise BLANK_MAX_SHARE for this run and say so in the verdict."
     fi
-    log "frame still near-solid (${SHARE}) after ${waited_render}s; re-capturing"
+    log "frame still near-solid (${SHARE}) after $((SECONDS - render_started))s; re-capturing"
     sleep 5
-    waited_render=$((waited_render + 5))
     "$ADB" -s "$EMU_SERIAL" exec-out screencap -p > "$SCREENCAP" || fail "screencap failed"
     SHARE="$(python3 "$SHARE_TOOL" "$SCREENCAP" | awk '{print $1}')" || fail "could not measure $SCREENCAP"
   done
-  log "dominant colour covers ${SHARE} (threshold ${BLANK_MAX_SHARE}, after ${waited_render}s) -- below threshold, which is not a verdict that the app rendered; open $SCREENCAP"
+  log "dominant colour covers ${SHARE} (threshold ${BLANK_MAX_SHARE}, after $((SECONDS - render_started))s) -- below threshold, which is not a verdict that the app rendered; open $SCREENCAP"
 else
   log "WARNING: $SHARE_TOOL or python3 missing — blank-screen check SKIPPED"
 fi

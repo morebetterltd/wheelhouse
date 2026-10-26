@@ -25,6 +25,7 @@
  *
  *   RUNNING  the recorded pid is alive AND holds this seat's FIFO open
  *            (`lsof -p <pid>` names it).
+ *   UNVERIFIED identity inspection failed; no resume/spawn advice or FIFO removal.
  *   DEAD     the process is gone — or the pid is alive but does not hold
  *            the FIFO (reused/foreign) — and the recorded session file
  *            still exists. Resumable: for a seat with a lastBead, the exact
@@ -35,19 +36,21 @@
  *            resume; spawn fresh when the seat is needed again.
  *
  * The only writes this tool performs are FIFO removals under seats/run/ for
- * seats that are not RUNNING (a FIFO with no reader blocks nothing but lies
+ * seats proven not RUNNING (never UNVERIFIED; a FIFO with no reader blocks nothing but lies
  * to the next `ls`); each removal is printed. The adapter's launch path
  * recreates a missing FIFO, so removal never breaks a later resume.
  *
- * Requires `lsof` (present on macOS and virtually every Linux); a machine
- * without it gets a STOP, not a guess.
+ * FIFO proof requires `lsof` (present on macOS and virtually every Linux).
+ * Unavailable identity inspection is UNVERIFIED, not a guess. Session-holder
+ * inspection without lsof STOPs rather than recommending a second writer.
  *
  * Usage: bun seats/recover.ts
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
+import { seatIdentity } from "./seat-activity";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -76,7 +79,7 @@ interface State {
   seats: Record<string, SeatRecord>;
 }
 
-type Cls = "RUNNING" | "DEAD" | "STALE";
+type Cls = "RUNNING" | "DEAD" | "STALE" | "UNVERIFIED";
 
 interface Row {
   name: string;
@@ -95,79 +98,41 @@ function readState(): State {
   return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
 }
 
-function pidAlive(pid: number | null): boolean {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e: any) {
-    return e.code === "EPERM"; // exists, not ours to signal — still alive
-  }
-}
-
-/** The n-lines (open file names) of `lsof -p <pid>`; [] for a dead pid. */
-function openPaths(pid: number): string[] {
-  let out: string;
-  try {
-    out = execFileSync("lsof", ["-Fn", "-p", String(pid)], {
-      encoding: "utf8",
-      maxBuffer: 16 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch (e: any) {
-    if (e.code === "ENOENT") die("lsof is not on PATH — recover cannot establish process identity without it");
-    return []; // lsof exits non-zero: pid gone, or nothing visible to us
-  }
-  return out
-    .split("\n")
-    .filter((l) => l.startsWith("n"))
-    .map((l) => l.slice(1));
-}
-
-/**
- * Does this pid hold this path open? Compared against both the recorded
- * path and its canonicalized form — lsof reports physical paths, and a
- * project reached through a symlink records the logical one.
- */
-function pidHoldsPath(pid: number, p: string): boolean {
-  const wanted = new Set([p]);
-  try {
-    wanted.add(fs.realpathSync(p));
-  } catch {
-    /* path gone from disk; raw compare still applies */
-  }
-  return openPaths(pid).some((n) => wanted.has(n));
-}
-
 /**
  * Pids (other than our own) holding a REGULAR file open, via `lsof <file>`.
  * By-path lsof is dependable for regular files (session files are), and
  * NOT for FIFOs — which is why seat identity above goes per-pid instead.
  */
-function pidsHoldingFile(file: string): number[] {
-  let out: string;
-  try {
-    out = execFileSync("lsof", ["-Fp", "--", file], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch (e: any) {
-    if (e.code === "ENOENT") die("lsof is not on PATH — recover cannot establish process identity without it");
-    return []; // exit 1: nobody holds it (or the file is gone)
+function pidsHoldingFile(file: string): { holders: number[] | null; reason: string } {
+  const r = spawnSync("lsof", ["-Fp", "--", file], { encoding: "utf8" });
+  if (r.error?.code === "ENOENT") die("lsof is not on PATH — recover cannot establish process identity without it");
+  if (!r.error && !r.signal && r.status === 1 && r.stdout === "" && r.stderr === "") return { holders: [], reason: "" };
+  const unknown = (reason: string) => ({ holders: null, reason: `${reason}; native status=${r.status ?? "unknown"} signal=${r.signal ?? "none"}; stdoutBytes=${Buffer.byteLength(r.stdout)} stdoutTail=${JSON.stringify(r.stdout.slice(-512))}; ${r.error?.message ?? r.stderr}`.trim() });
+  if (r.error || r.signal || r.status !== 0) return unknown("lsof session-file observation failed");
+  if (!r.stdout.endsWith("\n")) return unknown("lsof returned no complete holder observation");
+  const holders = new Set<number>(); let currentPid: number | null = null;
+  // Captured native `lsof -Fp -- <file>` emits pPID AND numeric fFD records
+  // (for example p40785\\nf3\\n), not a stream consisting only of PID lines.
+  for (const line of r.stdout.split("\n").filter(Boolean)) {
+    if (/^p[1-9][0-9]*$/.test(line) && Number.isSafeInteger(Number(line.slice(1))) && Number(line.slice(1)) <= 2147483647) {
+      currentPid = Number(line.slice(1)); holders.add(currentPid); continue;
+    }
+    if (/^f[0-9]+$/.test(line) && currentPid !== null) continue;
+    return unknown("lsof returned an unsupported holder record");
   }
-  return out
-    .split("\n")
-    .filter((l) => l.startsWith("p"))
-    .map((l) => Number(l.slice(1)))
-    .filter((pid) => Number.isFinite(pid) && pid !== process.pid);
+  if (!holders.size) return unknown("lsof returned no complete holder observation");
+  return { holders: [...holders].filter(pid => pid !== process.pid), reason: "" };
 }
 
 function classify(rec: SeatRecord): { cls: Cls; detail: string } {
-  const alive = rec.pid != null && pidAlive(rec.pid);
-  const ours = alive && !!rec.fifo && pidHoldsPath(rec.pid!, rec.fifo);
+  // Preserve recovery's stronger FIFO-only identity where a FIFO is recorded.
+  // A failed fd inspection is unknown, NOT a negative fd inspection.
+  const identity = seatIdentity(rec.pid, rec.fifo, rec.fifo ? undefined : rec.startedAt);
+  if (identity.kind === "unverified") return { cls: "UNVERIFIED", detail: `${identity.reason}; left untouched; do not resume, spawn or reclaim` };
+  const alive = identity.kind !== "gone";
   const sessionIntact = !!rec.sessionFile && fs.existsSync(rec.sessionFile);
 
-  if (ours) return { cls: "RUNNING", detail: `pid ${rec.pid} holds the seat FIFO` };
+  if (identity.kind === "owned") return { cls: "RUNNING", detail: `pid ${rec.pid} has verified seat identity` };
 
   let gone: string;
   if (alive) gone = `pid ${rec.pid} alive but not holding this seat's FIFO — reused or foreign, treated as gone`;
@@ -189,12 +154,13 @@ function classify(rec: SeatRecord): { cls: Cls; detail: string } {
 function sessionAttachment(name: string, rec: SeatRecord, rows: Row[]): string | null {
   if (!rec.sessionFile) return null;
   for (const r of rows) {
-    if (r.name !== name && r.cls === "RUNNING" && r.rec.sessionFile === rec.sessionFile) {
+    if (r.name !== name && (r.cls === "RUNNING" || r.cls === "UNVERIFIED") && r.rec.sessionFile === rec.sessionFile) {
       return `seat ${r.name} (pid ${r.rec.pid})`;
     }
   }
-  const holders = pidsHoldingFile(rec.sessionFile);
-  if (holders.length > 0) return `pid ${holders[0]} (holds the session file open)`;
+  const observation = pidsHoldingFile(rec.sessionFile);
+  if (observation.holders === null) return `UNVERIFIED session attachment: ${observation.reason}; resume not authorized`;
+  if (observation.holders.length > 0) return `pid ${observation.holders[0]} (holds the session file open)`;
   return null;
 }
 
@@ -222,7 +188,7 @@ function main(): void {
       if (cls === "DEAD") {
         const attachedBy = sessionAttachment(name, rec, rows); // attach-check
         if (attachedBy) {
-          console.log(`  REFUSED double-resume: session already attached by ${attachedBy}`);
+          console.log(attachedBy.startsWith("UNVERIFIED") ? `  REFUSED resume: ${attachedBy}` : `  REFUSED double-resume: session already attached by ${attachedBy}`);
         } else if (rec.lastBead) {
           console.log(`  resume: bun ${ADAPTER} resume ${name}   # bead ${rec.lastBead}`);
         } else {
@@ -255,7 +221,7 @@ function main(): void {
       if (!st.isFIFO()) continue;
       const seat = f.slice(0, -".stdin".length);
       const row = rows.find((r) => r.name === seat);
-      if (row && row.cls === "RUNNING") continue;
+      if (row && (row.cls === "RUNNING" || row.cls === "UNVERIFIED")) continue;
       fs.unlinkSync(fifoPath); // fifo-clean
       console.log(`removed orphaned FIFO: ${fifoPath}${row ? "" : " (no state entry)"}`);
     }

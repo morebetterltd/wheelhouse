@@ -13,8 +13,8 @@ INDEX="$HERE/transports/index.ts"
 TRANSPORT="$HERE/transports/transport.ts"
 CHANNELS="$HERE/channels.ts"
 command -v bun >/dev/null 2>&1 || { echo "selftest: bun required" >&2; exit 2; }
-command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 required" >&2; exit 2; }
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-courier-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0; SERVER_PID=""; COURIER_PID=""; WATCHDOG_PID=""
 wait_child_exit(){
   local pid="$1" label="$2" grace_ms="${3:-1500}" waited=0 step=100 stat=""
@@ -53,7 +53,7 @@ fixture_courier_pids(){
   [ -n "${FIX:-}" ] || return 0
   for pid in $(pgrep -f 'seats/courier\.ts' 2>/dev/null || true); do
     [ -n "$pid" ] || continue
-    if lsof -p "$pid" 2>/dev/null | grep -qF "$FIX"; then
+    if lsof -p "$pid" 2>/dev/null | grep -F >/dev/null "$FIX"; then
       printf '%s\n' "$pid"
     fi
   done
@@ -75,14 +75,11 @@ stop_courier(){
   COURIER_PID=""
 }
 cleanup(){ stop_courier; [ -n "$WATCHDOG_PID" ] && stop_child "$WATCHDOG_PID" "watchdog" 500; [ -n "$SERVER_PID" ] && stop_child "$SERVER_PID" "fake endpoint" 1500; sweep_fixture_couriers; selftest_cleanup_fixture_processes "${FIX:-}" ""; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
-port(){ python3 - <<'PY'
-import socket
-s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()
-PY
-}
+observe(){ bun "$HERE/fixtures/transport-fixture-observation.ts" "$@"; }
+once(){ WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 observe once "$FIX" "$1" "$2"; }
 make_proj(){
   local p="$1"; mkdir -p "$p/seats/transports" "$p/seats/run" "$p/seats/logs" "$p/wheelhouse"
   selftest_copy_seat_runtime "$p" "$HERE"
@@ -101,7 +98,7 @@ function json(path:string, fallback:any){ try { return JSON.parse(fs.readFileSyn
 function append(path:string, row:any){ fs.appendFileSync(`${dir}/${path}`, JSON.stringify(row)+"\n"); }
 function delayMs(): number { try { return Number(fs.readFileSync(`${dir}/poll-delay-ms`, "utf8").trim()) || 0; } catch { return 0; } }
 function sleep(ms:number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
-Bun.serve({ hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetch(req){
+const server = Bun.serve({ hostname:"127.0.0.1", port:0, async fetch(req){
   const u=new URL(req.url); const body=req.method==="POST" ? await req.json().catch(()=>({})) : {};
   if(u.pathname.endsWith('/sendMessage')) {
     msg++; append('requests.jsonl', {method:'sendMessage', body});
@@ -144,6 +141,9 @@ Bun.serve({ hostname:"127.0.0.1", port:Number(process.env.STUB_PORT), async fetc
   }
   return Response.json({ok:false,description:'no route'}, {status:404});
 }});
+const ready = `${dir}/server.ready.json`;
+fs.writeFileSync(ready + '.new', JSON.stringify({pid:process.pid,root:fs.realpathSync(dir),port:server.port})+'\n');
+fs.renameSync(ready + '.new', ready);
 EOF
 }
 start_courier_daemon(){
@@ -151,92 +151,107 @@ start_courier_daemon(){
   (cd "$root" && exec env WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS="${WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS:-1000}" WHEELHOUSE_COURIER_INTERVAL_MS="$interval" bun seats/courier.ts >/dev/null 2> "$err") &
   COURIER_PID=$!
 }
-requests(){ python3 - <<'PY' "$FIX/requests.jsonl"
-import json,sys,os
-p=sys.argv[1]
-if not os.path.exists(p): sys.exit(0)
-for l in open(p):
- print(l.strip())
-PY
+requests(){ bun - "$FIX/requests.jsonl" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2]; if(!fs.existsSync(p)) process.exit(0);
+for(const line of fs.readFileSync(p,'utf8').replace(/\r\n?/g,'\n').match(/[^\n]*\n|[^\n]+$/g)??[]) console.log(line.trim());
+JS
 }
-count_ledger(){ PAT="$1" python3 - <<'PY' "$PROJ/seats/needs.jsonl"
-import json, os, sys
-pat=os.environ['PAT']; n=0
-for l in open(sys.argv[1]):
- if pat in l: n+=1
-print(n)
-PY
+count_ledger(){ PAT="$1" bun - "$PROJ/seats/needs.jsonl" <<'JS'
+const lines=(await import('node:fs')).default.readFileSync(process.argv[2],'utf8').replace(/\r\n?/g,'\n').match(/[^\n]*\n|[^\n]+$/g)??[];
+console.log(lines.filter(line=>line.includes(process.env.PAT)).length);
+JS
 }
+# Exercise diagnostic-only readers too: successful network legs otherwise never
+# call requests(), so a leftover dependency there could hide behind a green run.
+requests > "$FIX/helper-missing.out"; rc=$?
+[ "$rc" = 0 ] && [ ! -s "$FIX/helper-missing.out" ] && pass 'requests helper accepts an absent diagnostic log' || fail 'requests helper missing-file case failed'
+printf ' \tfirst\r\n\r\n second \n' > "$FIX/requests.jsonl"
+requests > "$FIX/helper-requests.out"; rc=$?
+printf 'first\n\nsecond\n' > "$FIX/helper-requests.expected"
+[ "$rc" = 0 ] && cmp -s "$FIX/helper-requests.expected" "$FIX/helper-requests.out" && pass 'requests helper preserves trimmed lines including empty records' || fail 'requests helper line bytes changed'
+rm -f "$FIX/requests.jsonl"
+PROJ="$FIX/helper-proj"; mkdir -p "$PROJ/seats"
+printf 'match match one\nno hit\nmatch two\n' > "$PROJ/seats/needs.jsonl"
+helper_count="$(count_ledger match)"; rc=$?
+[ "$rc" = 0 ] && [ "$helper_count" = 2 ] && pass 'ledger helper counts matching lines rather than occurrences' || fail 'ledger helper count failed'
 PROJ="$FIX/proj"; make_proj "$PROJ"; write_server
-P="$(port)"; STUB_DIR="$FIX" STUB_PORT="$P" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
-for _ in $(seq 1 50); do curl -fsS "http://127.0.0.1:$P/" >/dev/null 2>&1 || true; kill -0 "$SERVER_PID" 2>/dev/null && break; sleep 0.1; done
+STUB_DIR="$FIX" bun "$FIX/server.ts" > "$FIX/server.out" 2> "$FIX/server.err" & SERVER_PID=$!
+P="$(observe ready "$FIX" "$SERVER_PID" "$FIX/server.ready.json")" || { fail "fake endpoint exited before publishing its bound port"; exit 1; }
 cat > "$PROJ/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-one","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Approve tag","body":"Ship it?","options":[{"label":"A","text":"Yes"},{"label":"B","text":"No"}],"machine":{}}
 EOF
-(cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) > "$FIX/once1.out" 2> "$FIX/once1.err"
+once "$PROJ" once1
 if [ $? -eq 0 ] && grep -q '"method":"sendMessage"' "$FIX/requests.jsonl" && grep -q 'Approve tag' "$FIX/requests.jsonl" && grep -q '"type":"sent"' "$PROJ/seats/needs.jsonl"; then pass "planted opened need sends one Telegram message and records sent"; else fail "opened send failed out=$(cat "$FIX/once1.out" "$FIX/once1.err" 2>/dev/null) req=$(requests) ledger=$(cat "$PROJ/seats/needs.jsonl")"; fi
 cat > "$FIX/updates.json" <<'EOF'
 [{"update_id":10,"message":{"message_id":50,"date":1790000000,"chat":{"id":111},"from":{"id":111},"text":"A","reply_to_message":{"message_id":1}}}]
 EOF
-(cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) > "$FIX/once2.out" 2> "$FIX/once2.err"
+once "$PROJ" once2 || fail 'reply one-shot courier failed (native streams retained above)'
 if grep -q '"type":"answered"' "$PROJ/seats/needs.jsonl" && grep -q '"via":"telegram"' "$PROJ/seats/needs.jsonl" && grep -q '"choice":"A"' "$PROJ/seats/needs.jsonl"; then pass "allowed Telegram reply records an answered event with via telegram and choice"; else fail "reply did not answer ledger=$(cat "$PROJ/seats/needs.jsonl") out=$(cat "$FIX/once2.out" "$FIX/once2.err" 2>/dev/null)"; fi
 cat > "$FIX/updates.json" <<'EOF'
 [{"update_id":12,"message":{"message_id":52,"date":1790000001,"chat":{"id":111},"from":{"id":111},"text":"follow-up","reply_to_message":{"message_id":1}}}]
 EOF
-(cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
+once "$PROJ" followup || fail 'follow-up one-shot courier failed (native streams retained above)'
 if grep -q '"type":"message"' "$PROJ/seats/needs.jsonl" && grep -q '"from":"human"' "$PROJ/seats/needs.jsonl" && grep -q 'follow-up' "$PROJ/seats/needs.jsonl"; then pass "Telegram reply to answered-but-open need records a threaded human message"; else fail "answered follow-up did not become message ledger=$(cat "$PROJ/seats/needs.jsonl")"; fi
 printf '%s
 ' '{"type":"closed","id":"need-one","at":"2026-09-21T00:02:00.000Z","reason":"complete"}' >> "$PROJ/seats/needs.jsonl"
-(cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
-if tail -20 "$FIX/requests.jsonl" | grep -q 'Resolved: complete'; then pass "closed notice is sent as the thread-ending Telegram message"; else fail "closed notice missing req=$(tail -20 "$FIX/requests.jsonl")"; fi
+once "$PROJ" closed || fail 'closed-notice one-shot courier failed (native streams retained above)'
+if tail -20 "$FIX/requests.jsonl" | grep >/dev/null 'Resolved: complete'; then pass "closed notice is sent as the thread-ending Telegram message"; else fail "closed notice missing req=$(tail -20 "$FIX/requests.jsonl")"; fi
 before_ans="$(count_ledger '"type":"answered"')"
 cat > "$FIX/updates.json" <<'EOF'
 [{"update_id":11,"message":{"message_id":51,"date":1790000001,"chat":{"id":999},"from":{"id":999},"text":"B","reply_to_message":{"message_id":1}}}]
 EOF
-(cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
+once "$PROJ" unauthorized || fail 'unallowlisted-sender one-shot courier failed (native streams retained above)'
 after_ans="$(count_ledger '"type":"answered"')"
 if [ "$before_ans" = "$after_ans" ] && grep -q 'ignored telegram sender 999' "$PROJ/seats/logs/courier.out.log"; then pass "unallowlisted sender is ignored and logged"; else fail "unallowlisted sender changed ledger/log ledger=$(cat "$PROJ/seats/needs.jsonl") log=$(cat "$PROJ/seats/logs/courier.out.log" 2>/dev/null)"; fi
 printf '%s
 ' '{"type":"message","id":"need-one","at":"2026-09-21T00:03:00.000Z","from":"commander","via":"cli","text":"Extra context"}' >> "$PROJ/seats/needs.jsonl"
-(cd "$PROJ" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
-if tail -20 "$FIX/requests.jsonl" | grep -q 'Extra context' && tail -20 "$FIX/requests.jsonl" | grep -q '"reply_to_message_id":1'; then pass "commander say pushes a threaded Telegram sendMessage"; else fail "commander say was not threaded req=$(tail -20 "$FIX/requests.jsonl")"; fi
+once "$PROJ" commander-say || fail 'commander-message one-shot courier failed (native streams retained above)'
+if tail -20 "$FIX/requests.jsonl" | grep >/dev/null 'Extra context' && tail -20 "$FIX/requests.jsonl" | grep >/dev/null '"reply_to_message_id":1'; then pass "commander say pushes a threaded Telegram sendMessage"; else fail "commander say was not threaded req=$(tail -20 "$FIX/requests.jsonl")"; fi
 RETRY="$FIX/retry"; make_proj "$RETRY"
 cat > "$RETRY/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-retry","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Retry me","body":"First send fails","options":[],"machine":{}}
 EOF
 : > "$FIX/requests.jsonl"; : > "$RETRY/seats/logs/courier.out.log"; touch "$FIX/fail-send-once"
 start_courier_daemon "$RETRY" 200 "$FIX/retry.err"
-sleep 0.8
+observe send-failed "$FIX" "$COURIER_PID" "$RETRY" "$FIX/requests.jsonl" || fail 'retry observation ended before its named send failure'
 if kill -0 "$COURIER_PID" 2>/dev/null && grep -q 'send failed need=need-retry: Bad Request: chat not found' "$RETRY/seats/logs/courier.out.log"; then pass "transport send failure is logged with need id and courier keeps running"; else fail "courier did not survive/log first send failure pid=$COURIER_PID log=$(cat "$RETRY/seats/logs/courier.out.log" 2>/dev/null) err=$(cat "$FIX/retry.err" 2>/dev/null)"; fi
-for _ in $(seq 1 30); do grep -q '"type":"sent"' "$RETRY/seats/needs.jsonl" && break; sleep 0.2; done
+observe retry-complete "$FIX" "$COURIER_PID" "$RETRY" "$FIX/requests.jsonl" || fail 'retry did not complete observed recovery cycles'
+stop_courier
 sent_count="$(grep -c '"type":"sent"' "$RETRY/seats/needs.jsonl" || true)"
 if [ "$sent_count" -eq 1 ]; then pass "failed outbound event is retried and records exactly one sent event after success"; else fail "retry sent count=$sent_count ledger=$(cat "$RETRY/seats/needs.jsonl") requests=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
-stop_courier
 POLLFAIL="$FIX/pollfail"; make_proj "$POLLFAIL"
 cat > "$POLLFAIL/seats/needs.jsonl" <<'EOF'
 {"type":"opened","id":"need-poll","at":"2026-09-21T00:00:00.000Z","kind":"question","title":"Poll failure","body":"Keep daemon alive","options":[],"machine":{}}
 EOF
 : > "$FIX/requests.jsonl"; : > "$POLLFAIL/seats/logs/courier.out.log"; touch "$FIX/fail-poll-once"
 start_courier_daemon "$POLLFAIL" 200 "$FIX/pollfail.err"
-sleep 0.8
+observe poll-recovered "$FIX" "$COURIER_PID" "$POLLFAIL" "$FIX/requests.jsonl" || fail 'poll failure did not reach an observed recovery cycle'
 if kill -0 "$COURIER_PID" 2>/dev/null && grep -q 'poll failed: Bad Request: poll failed' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure is logged and courier daemon keeps running"; else fail "poll failure killed courier or missed log pid=$COURIER_PID log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) err=$(cat "$FIX/pollfail.err" 2>/dev/null)"; fi
 polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
 if [ "$polls" -ge 2 ] && grep -q 'courier scanned' "$POLLFAIL/seats/logs/courier.out.log"; then pass "poll transport failure recovers on a later cycle"; else fail "poll failure did not retry/recover polls=$polls log=$(cat "$POLLFAIL/seats/logs/courier.out.log" 2>/dev/null) req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
 stop_courier
 OVERLAP="$FIX/overlap"; make_proj "$OVERLAP"
-: > "$FIX/requests.jsonl"; rm -f "$FIX/max-poll-active"; printf '350\n' > "$FIX/poll-delay-ms"
-start_courier_daemon "$OVERLAP" 100 "$FIX/overlap.err"
-sleep 1.0
-stop_courier
-rm -f "$FIX/poll-delay-ms"
-max_active="$(cat "$FIX/max-poll-active" 2>/dev/null || echo 0)"
-overlap_polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
-if [ "$max_active" = 1 ] && [ "$overlap_polls" -ge 2 ]; then pass "courier interval skips ticks while a long poll is in flight"
-else fail "courier overlapped long polls or did not poll enough max_active=$max_active polls=$overlap_polls req=$(cat "$FIX/requests.jsonl" 2>/dev/null) err=$(cat "$FIX/overlap.err" 2>/dev/null)"; fi
+# Count actual endpoint admissions: initial poll plus two periodic polls. A
+# short startup clock cannot establish that the interval had an opportunity.
+bun "$HERE/fixtures/courier-poll-observation.ts" "$OVERLAP" "$FIX/overlap-observation" serial 350 > "$FIX/overlap-check.out" 2> "$FIX/overlap-check.err"; rc=$?
+if [ "$rc" = 0 ] && grep -F 'POLL_OBSERVED polls=' "$FIX/overlap-check.out" >/dev/null; then pass "courier interval skips ticks while a long poll is in flight: $(cat "$FIX/overlap-check.out")"
+else fail "courier poll observation rc=$rc out=$(cat "$FIX/overlap-check.out") err=$(cat "$FIX/overlap-check.err")"; fi
+# Below the unchanged1000ms abort: the old one-second window rejects this
+# healthy serial first poll before the first periodic tick can run.
+bun "$HERE/fixtures/courier-poll-observation.ts" "$OVERLAP" "$FIX/overlap-slow-observation" serial 900 > "$FIX/overlap-slow.out" 2> "$FIX/overlap-slow.err"; rc=$?
+if [ "$rc" = 0 ] && grep -F 'first_delay_ms=900 joined=true' "$FIX/overlap-slow.out" >/dev/null; then pass "slow first poll is judged on observed serial polls, not startup throughput: $(cat "$FIX/overlap-slow.out")"
+else fail "slow first-poll observation rc=$rc out=$(cat "$FIX/overlap-slow.out") err=$(cat "$FIX/overlap-slow.err")"; fi
+OVERLAP_BAD="$FIX/overlap-bad"; make_proj "$OVERLAP_BAD"
+bun "$HERE/fixtures/courier-poll-observation.ts" "$OVERLAP_BAD" "$FIX/overlap-bad-observation" parallel 350 > "$FIX/overlap-bad.out" 2> "$FIX/overlap-bad.err"; rc=$?
+if [ "$rc" = 1 ] && grep -F 'OVERLAP_REJECTED polls=' "$FIX/overlap-bad.err" >/dev/null && grep -F 'joined=true' "$FIX/overlap-bad.err" >/dev/null; then
+  printf 'OVERLAP_CONTROL %s\n' "$(cat "$FIX/overlap-bad.out")"
+  printf 'EXPECTED_REJECTION %s\n' "$(cat "$FIX/overlap-bad.err")"
+  pass 'planted concurrent courier polls are rejected after real endpoint overlap; original child joined'
+else fail "planted overlap not rejected rc=$rc out=$(cat "$FIX/overlap-bad.out") err=$(cat "$FIX/overlap-bad.err")"; fi
 HANG="$FIX/hang"; make_proj "$HANG"
 : > "$FIX/requests.jsonl"; : > "$HANG/seats/logs/courier.out.log"; touch "$FIX/hang-poll"
 WHEELHOUSE_TELEGRAM_FETCH_ABORT_MS=200 start_courier_daemon "$HANG" 100 "$FIX/hang.err"
-sleep 0.9
+observe hung-retried "$FIX" "$COURIER_PID" "$HANG" "$FIX/requests.jsonl" || fail 'hung poll did not reach named policy expiry and a subsequent admitted poll'
 stop_courier
 rm -f "$FIX/hang-poll"
 hang_polls="$(grep -c '"method":"getUpdates"' "$FIX/requests.jsonl" || true)"
@@ -250,9 +265,9 @@ cat > "$FIX/updates.json" <<'EOF'
 [{"update_id":30,"message":{"message_id":70,"date":1790000003,"chat":{"id":222},"from":{"id":222,"username":"keenan"},"text":"hello"}}]
 EOF
 : > "$FIX/requests.jsonl"
-(cd "$PAIR" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
+once "$PAIR" pair-inbound || fail 'pairing inbound one-shot courier failed (native streams retained above)'
 if grep -q '@keenan 222' "$PAIR/seats/run/telegram.allow" && grep -q 'paired @keenan -> 222' "$PAIR/seats/logs/courier.out.log" && grep -q 'waiting for @keenan to message the bot' "$PAIR/seats/logs/courier.out.log"; then pass "@username allow entry waits, pairs on first inbound message, and records numeric id"; else fail "pairing failed allow=$(cat "$PAIR/seats/run/telegram.allow") log=$(cat "$PAIR/seats/logs/courier.out.log" 2>/dev/null)"; fi
-(cd "$PAIR" && WHEELHOUSE_TELEGRAM_API_BASE="http://127.0.0.1:$P" WHEELHOUSE_TELEGRAM_POLL_TIMEOUT=0 bun seats/courier.ts --once) >/dev/null 2>&1
+once "$PAIR" pair-outbound || fail 'paired outbound one-shot courier failed (native streams retained above)'
 if grep -q '"type":"sent"' "$PAIR/seats/needs.jsonl"; then pass "queued outbound need sends after username pairing"; else fail "paired outbound did not send ledger=$(cat "$PAIR/seats/needs.jsonl") req=$(cat "$FIX/requests.jsonl" 2>/dev/null)"; fi
 WATCH="$FIX/watch"; make_proj "$WATCH"
 cat > "$WATCH/seats/needs.jsonl" <<'EOF'
@@ -262,6 +277,11 @@ start_courier_daemon "$WATCH" 100 "$FIX/watch.err"
 printf '%s\n' "$COURIER_PID" > "$WATCH/seats/run/courier.pid"
 # Courier restart supervision moved to seats/supervisor.selftest.sh; this selftest covers courier behavior only.
 stop_courier
+if bun "$HERE/fixtures/transport-observation-controls.ts" "$HERE" "$FIX"; then
+  pass 'fixture observation barriers require entered actors and committed events; meaningful removals fail'
+else
+  fail 'fixture observation barrier controls failed'
+fi
 survivors="$(fixture_courier_pids)"
 if [ -z "${COURIER_PID:-}" ] && [ -z "$survivors" ]; then pass "courier daemon started by this test is stopped before exit"; else fail "courier child survived cleanup check survivors=${survivors:-none}"; fi
 if [ "$FAIL" -eq 0 ]; then echo "courier.selftest: PASS ($PASS checks)"; exit 0; fi

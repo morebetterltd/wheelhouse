@@ -2,15 +2,24 @@
 set -u
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
+. "$(dirname "$SELFTEST_LIB")/selftest-herald.sh"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 REAL_PI="$(command -v pi 2>/dev/null || true)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-staffing-live.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 skip(){ PASS=$((PASS+1)); echo "ok $PASS - SKIP $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
-cleanup(){ [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true; [ "${WHEELHOUSE_KEEP_FIXTURE:-0}" = 1 ] || selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_bind_herald_owner "$FIX" || exit 2
+cleanup(){
+  selftest_stop_herald_child "${HERALD_PID:-}"
+  selftest_stop_herald_child "${CAN_PID:-}"
+  selftest_cleanup_fixture_processes "$FIX"
+  [ "${WHEELHOUSE_KEEP_FIXTURE:-0}" = 1 ] || selftest_remove_fixture_dir "$FIX"
+}
+selftest_install_cleanup_traps cleanup
 PROJ="$FIX/project"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$PROJ/contracts" "$PROJ/wheelhouse" "$BIN" "$HOME_FIX/.pi-seats-live"
 for e in e1 e2 e3 rv1; do mkdir -p "$HOME_FIX/.pi-seats-live/$e"; done
 selftest_copy_seat_runtime "$PROJ" "$HERE"
@@ -25,6 +34,17 @@ JSON
 cat > "$BIN/bd" <<'SH'
 #!/usr/bin/env bash
 if [ "$1 $2" = "ready --json" ]; then printf '[{"id":"ready-1","title":"Synthetic ready 1","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"ready-2","title":"Synthetic ready 2","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"ready-3","title":"Synthetic ready 3","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0},{"id":"ready-4","title":"Synthetic ready 4","status":"open","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]\n'; exit 0; fi
+if [ "$1" = show ]; then
+  case " $* " in
+    *" --json "*) node - "$2" "$WHEELHOUSE_CONTRACT_FIXTURE" <<'BDJSON'
+const fs = require('node:fs');
+process.stdout.write(JSON.stringify([{id:process.argv[2],title:'Staffing fixture',status:'open',description:fs.readFileSync(process.argv[3],'utf8')}])+'\n');
+BDJSON
+      ;;
+    *) cat "$WHEELHOUSE_CONTRACT_FIXTURE" ;;
+  esac
+  exit 0
+fi
 if [ "$1" = list ]; then printf '[{"id":"task-a","title":"Synthetic task A","status":"open","assignee":"worker-e1","issue_type":"task","created_at":"2026-01-01T00:00:00Z","dependency_count":0,"dependent_count":0}]\n'; exit 0; fi
 exit 0
 SH
@@ -55,36 +75,31 @@ process.stdin.resume();
 JS
 chmod +x "$BIN/pi"
 export HOME="$HOME_FIX" PATH="$BIN:$PATH" OPENAI_API_KEY=fixture-key LIVE_ENV_LOG="$FIX/env.jsonl" WHEELHOUSE_CLEANUP=0 WHEELHOUSE_HERALD_ROOT="$PROJ" WHEELHOUSE_HERALD_INTERVAL_MS=100 WHEELHOUSE_STAFFING_INTERVAL_MS=200
-(cd "$PROJ" && bun seats/herald.ts) > "$FIX/herald.out" 2> "$FIX/herald.err" & HERALD_PID=$!
-for _ in $(seq 1 60); do
-  [ -f "$PROJ/seats/staffing.json" ] && COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.keys(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).length)}catch{console.log(0)}' "$PROJ/seats/staffing.json") || COUNT=0
-  [ -f "$PROJ/seats/state.json" ] && SCOUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.values(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).filter(r=>r.pid).length)}catch{console.log(0)}' "$PROJ/seats/state.json") || SCOUNT=0
-  [ "$COUNT" = 3 ] && [ "$SCOUNT" = 3 ] && break
-  sleep 0.1
-done
+(cd "$PROJ" && exec bun seats/herald.ts) > "$FIX/herald.out" 2> "$FIX/herald.err" & HERALD_PID=$!
+if ! bun "$HERE/fixtures/staffing-live-ready.ts" growth "$HERALD_PID" "$PROJ"; then
+  fail "herald exited before growth; staffing=$(cat "$PROJ/seats/logs/staffing.log" 2>/dev/null) herald=$(cat "$FIX/herald.err" 2>/dev/null)"
+  exit 1 # No cascade measuring a state file whose creation never completed.
+fi
 LIVE_COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.keys(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).length)}catch{console.log(0)}' "$PROJ/seats/staffing.json")
 STATE_COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.values(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).filter(r=>r.pid).length)}catch{console.log(0)}' "$PROJ/seats/state.json")
 if [ "$LIVE_COUNT" = 3 ] && [ "$STATE_COUNT" = 3 ] && grep -q 'decision=add-worker' "$PROJ/seats/logs/staffing.log"; then pass "herald staffing clock grows three live workers without commander action"; else fail "staffing clock did not grow workers live=$LIVE_COUNT state=$STATE_COUNT log=$(cat "$PROJ/seats/logs/staffing.log" 2>/dev/null) herald=$(cat "$FIX/herald.err" 2>/dev/null)"; fi
-if python3 - "$FIX/env.jsonl" "$PROJ/seats/state.json" "$PROJ/seats/staffing.json" "$PROJ/seats/pool.json" <<'PY'
-import json, os, subprocess, sys
-rows=[json.loads(l) for l in open(sys.argv[1])]
-by_pid={int(r['pid']):r for r in rows}
-state=json.load(open(sys.argv[2]))['seats']
-staff=json.load(open(sys.argv[3]))['seats']
-pool=json.load(open(sys.argv[4]))['entries']
-checked=[]
-for seat in sorted(k for k in staff if k.startswith('worker-')):
-    entry=staff[seat]['entry']; pid=int(state[seat]['pid']); expected=os.path.realpath(os.path.expanduser(pool[entry]['account']['dir']))
-    row=by_pid.get(pid)
-    assert row, f'missing env row for pid {pid} seat {seat}'
-    actual=os.path.realpath(os.path.expanduser(row['PI_CODING_AGENT_DIR']))
-    assert actual == expected, f'{seat} pid {pid} account {actual} != {expected}'
-    lsof=subprocess.run(['lsof','-Fn','-p',str(pid)], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    assert lsof.returncode == 0 and f'n{state[seat]["fifo"]}' in lsof.stdout, f'{seat} pid {pid} does not hold fifo {state[seat]["fifo"]}'
-    checked.append(f'{seat} pid={pid} entry={entry} dir={actual}')
-assert len(checked)==3, checked
-print('\n'.join(checked))
-PY
+if LIFECYCLE_COMMAND_HELPER="$HERE/completed-command.ts" bun - "$FIX/env.jsonl" "$PROJ/seats/state.json" "$PROJ/seats/staffing.json" "$PROJ/seats/pool.json" <<'JS'
+const fs=(await import('node:fs')).default,path=(await import('node:path')).default,assert=(await import('node:assert/strict')).default,{completedCommand}=await import(process.env.LIFECYCLE_COMMAND_HELPER);
+const [rowsFile,stateFile,staffFile,poolFile]=process.argv.slice(2),read=p=>JSON.parse(fs.readFileSync(p,'utf8'));
+const rows=fs.readFileSync(rowsFile,'utf8').split('\n').filter(Boolean).map(JSON.parse);
+const byPid=new Map(rows.map(r=>[Number(r.pid),r])),state=read(stateFile).seats,staff=read(staffFile).seats,pool=read(poolFile).entries;
+const directory=p=>fs.realpathSync(p.startsWith('~/')?path.join(process.env.HOME,p.slice(2)):p),checked=[];
+for(const seat of Object.keys(staff).filter(s=>s.startsWith('worker-')).sort()) {
+ const entry=staff[seat].entry,pid=Number(state[seat].pid),expected=directory(pool[entry].account.dir),row=byPid.get(pid);
+ assert.ok(row,'missing env row for pid '+pid+' seat '+seat);
+ const actual=directory(row.PI_CODING_AGENT_DIR); assert.equal(actual,expected,seat+' pid '+pid+' account');
+ const opened=completedCommand('lsof',['-Fn','-p',String(pid)]);
+ console.error('CAPTURE staffing-live native FIFO observation '+JSON.stringify({pid,expected:state[seat].fifo,native:opened}));
+ assert.ok(opened.status===0&&opened.stdout.includes('n'+state[seat].fifo),seat+' pid '+pid+' does not hold fifo '+state[seat].fifo+'; '+opened.stderr);
+ checked.push(seat+' pid='+pid+' entry='+entry+' dir='+actual);
+}
+assert.equal(checked.length,3); console.log(checked.join('\n'));
+JS
 then pass "live harness processes use their pool entry dirs"; else fail "process/entry table failed: env=$(cat "$FIX/env.jsonl" 2>/dev/null) state=$(cat "$PROJ/seats/state.json" 2>/dev/null)"; fi
 if [ "${WHEELHOUSE_SKIP_REAL_PI:-}" = 1 ]; then
   skip "real-pi leg: WHEELHOUSE_SKIP_REAL_PI=1"
@@ -96,11 +111,11 @@ else
   ok_real=1
   for entry in real-e1 real-e2; do
     agent="$REAL_HOME/.pi-seats-live/$entry"; fifo="$REAL_RUN/$entry.stdin"; mkfifo "$fifo"
-    env HOME="$REAL_HOME" PI_CODING_AGENT_DIR="$agent" ANTHROPIC_API_KEY="sk-selftest-dummy" WHEELHOUSE_TMUX_SOCKET="staffing-live-real-$$" WHEELHOUSE_HERALD_ROOT="$REAL_ROOT" "$REAL_PI" --mode rpc --provider anthropic 0<> "$fifo" >> "$REAL_RUN/$entry.log" 2>> "$REAL_RUN/$entry.err" &
+    env HOME="$REAL_HOME" PI_CODING_AGENT_DIR="$agent" ANTHROPIC_API_KEY="sk-selftest-dummy" WHEELHOUSE_TMUX_SOCKET="staffing-live-real-$$" WHEELHOUSE_HERALD_ROOT="$REAL_ROOT" "$REAL_PI" --mode rpc --provider anthropic --model claude-sonnet-4-5 0<> "$fifo" >> "$REAL_RUN/$entry.log" 2>> "$REAL_RUN/$entry.err" &
     pid=$!; REAL_PIDS="$REAL_PIDS $pid"
     seen=""
-    for _ in $(seq 1 40); do seen="$(ps -p "$pid" -o command= 2>/dev/null | sed 's/ *$//')"; [ "$seen" = pi ] && break; kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
-    if ! kill -0 "$pid" 2>/dev/null || [ "$seen" != pi ] || ! lsof -Fn -p "$pid" 2>/dev/null | grep -qF "n$fifo"; then ok_real=0; echo "real-pi probe failed for $entry pid=$pid ps=$seen err=$(tail -c 200 "$REAL_RUN/$entry.err" 2>/dev/null)" >&2; fi
+    if bun "$HERE/fixtures/staffing-live-ready.ts" pi "$pid" "$REAL_ROOT"; then seen=pi; fi
+    if ! kill -0 "$pid" 2>/dev/null || [ "$seen" != pi ] || ! lsof -Fn -p "$pid" 2>/dev/null | grep -F >/dev/null "n$fifo"; then ok_real=0; echo "real-pi probe failed for $entry pid=$pid ps=$seen err=$(tail -c 200 "$REAL_RUN/$entry.err" 2>/dev/null)" >&2; fi
   done
   for pid in $REAL_PIDS; do kill -9 "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
   [ "$ok_real" = 1 ] && pass "real pi starts in scratch login-free RPC state and each process holds its entry FIFO" || fail "real-pi scratch process/account probe failed"
@@ -124,7 +139,7 @@ CLAIM1_RC=$?
 (cd "$PROJ" && bun seats/adapter.ts dispatch worker-e3 shared-task "double claim") > "$FIX/claim2.out" 2>&1; CLAIM_RC=$?
 [ $CLAIM1_RC -eq 0 ] && [ $CLAIM_RC -ne 0 ] && grep -q 'already assigned\|already has\|already checked out\|refusing' "$FIX/claim2.out" && pass "same task dispatched to second staffed seat is refused" || fail "double dispatch precondition/refusal wrong rc1=$CLAIM1_RC rc2=$CLAIM_RC first=$(cat "$FIX/claim1.out") second=$(cat "$FIX/claim2.out")"
 KILLPID=$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats["worker-e1"].pid)' "$PROJ/seats/state.json")
-kill -9 "$KILLPID" 2>/dev/null || true; kill "$HERALD_PID" 2>/dev/null || true
+kill -9 "$KILLPID" 2>/dev/null || true; selftest_stop_herald_child "$HERALD_PID"; HERALD_PID=""
 node -e 'const fs=require("fs"); const f=process.argv[1]; const j=JSON.parse(fs.readFileSync(f,"utf8")); j.seats["worker-unspawned"]={role:"worker",entry:"e3",addedAt:new Date().toISOString()}; fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")' "$PROJ/seats/staffing.json"
 (cd "$PROJ" && bun seats/recover.ts) > "$FIX/recover.out" 2>&1 || true
 if grep -q 'worker-e1.*DEAD.*staffed: e1' "$FIX/recover.out" && grep -q 'resume: bun .*adapter.ts resume worker-e1' "$FIX/recover.out" && grep -q 'worker-e2.*RUNNING' "$FIX/recover.out" && grep -q 'worker-unspawned.*STAFFED-UNSPAWNED.*spawn: bun .*adapter.ts spawn worker-unspawned' "$FIX/recover.out"; then pass "recover reports staffed dead, running, and unspawned seats"; else fail "recover staffed output wrong: $(cat "$FIX/recover.out")"; fi
@@ -134,15 +149,15 @@ if grep -q '^staffing: next check in ' "$FIX/status.out"; then pass "herald --st
 # growth precondition does NOT happen. If this passes with growth, the suite no
 # longer proves herald is what launches staffing.
 CAN="$FIX/canary-herald"; cp -R "$PROJ" "$CAN"; rm -f "$CAN/seats/staffing.json" "$CAN/seats/state.json"; rm -rf "$CAN/.wheelhouse-worktrees"; mkdir -p "$CAN/.wheelhouse-worktrees"
-python3 - "$CAN/seats/herald.ts" <<'PY'
-from pathlib import Path
-p=Path(__import__('sys').argv[1]); s=p.read_text()
-s=s.replace('const launched = launchDetached("staffing", ["bun", "seats/staffing.ts", "check"], 0, STAFFING_OUT_LOG);', 'const launched = false; // canary disables real staffing launch')
-p.write_text(s)
-PY
-(cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" OPENAI_API_KEY=fixture-key LIVE_ENV_LOG="$FIX/canary-env.jsonl" WHEELHOUSE_CLEANUP=0 WHEELHOUSE_HERALD_ROOT="$CAN" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_STAFFING_INTERVAL_MS=50 bun seats/herald.ts) > "$FIX/canary-herald.out" 2> "$FIX/canary-herald.err" & CAN_PID=$!
-for _ in $(seq 1 20); do [ -f "$CAN/seats/state.json" ] && break; sleep 0.1; done
-kill "$CAN_PID" 2>/dev/null || true
+bun - "$CAN/seats/herald.ts" <<'JS'
+const fs=(await import('node:fs')).default,p=process.argv[2],s=fs.readFileSync(p,'utf8');
+const needle='const launched = launchDetached("staffing", ["bun", "seats/staffing.ts", "check"], 0, STAFFING_OUT_LOG);';
+if(s.split(needle).length!==2) throw new Error('staffing launch canary source changed');
+fs.writeFileSync(p,s.replace(needle,'fs.writeFileSync(path.join(ROOT, "seats/run/staffing-canary-attempt"), "attempt observed\\n"); const launched = false; // canary disables real staffing launch'));
+JS
+(cd "$CAN" && HOME="$HOME_FIX" PATH="$BIN:$PATH" OPENAI_API_KEY=fixture-key LIVE_ENV_LOG="$FIX/canary-env.jsonl" WHEELHOUSE_CLEANUP=0 WHEELHOUSE_HERALD_ROOT="$CAN" WHEELHOUSE_HERALD_INTERVAL_MS=50 WHEELHOUSE_STAFFING_INTERVAL_MS=50 exec bun seats/herald.ts) > "$FIX/canary-herald.out" 2> "$FIX/canary-herald.err" & CAN_PID=$!
+bun "$HERE/fixtures/staffing-live-ready.ts" attempt "$CAN_PID" "$CAN" || { fail "canary never attempted staffing"; exit 1; }
+selftest_stop_herald_child "$CAN_PID"; CAN_PID=""
 CAN_STATE_COUNT=$(node -e 'const fs=require("fs"); try{console.log(Object.values(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).seats||{}).filter(r=>r.pid).length)}catch{console.log(0)}' "$CAN/seats/state.json")
 [ "$CAN_STATE_COUNT" = 0 ] && pass "canary: disabling herald staffing launch makes the no-commander growth leg fail" || fail "canary broken herald still grew workers state=$CAN_STATE_COUNT"
 if [ "$FAIL" -eq 0 ]; then echo "staffing-live.selftest: PASS ($PASS checks)"; exit 0; fi

@@ -5,6 +5,15 @@
     "runtime": "claude-code"
   },
   "seats": {
+    "producer": {
+      "role": "producer",
+      "harness": "claude-code",
+      "provider": "anthropic",
+      "model": "claude-sonnet-5",
+      "account": { "dir": "~/.pi-seats-myproject/producer", "authRoute": "oauth" },
+      "allowedTools": "Read,Grep,Glob,Bash(bd:*),Bash(bun seats/intake.ts:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*)",
+      "disallowedTools": "Edit,Write,NotebookEdit"
+    },
     "worker-1": {
       "role": "worker",
       "harness": "claude-code",
@@ -23,25 +32,32 @@
         "authRoute": "oauth"
       }
     },
-    "reviewer": {
+    "reviewer-1": {
       "role": "reviewer",
       "harness": "codex",
       "provider": "openai-codex",
       "model": "gpt-5.6-sol",
-      "account": { "dir": "~/.pi-seats-myproject/reviewer", "authRoute": "oauth" }
+      "account": { "dir": "~/.pi-seats-myproject/reviewer-1", "authRoute": "oauth" }
     },
-    "reviewer-shadow": {
+    "reviewer-2": {
       "role": "reviewer",
       "shadow": true,
       "harness": "claude-code",
       "provider": "anthropic",
       "model": "sonnet",
       "account": {
-        "dir": "~/.pi-seats-myproject/reviewer-shadow",
+        "dir": "~/.pi-seats-myproject/reviewer-2",
         "authRoute": "oauth"
       },
       "allowedTools": "Bash(git status:*),Bash(bun test:*)",
       "disallowedTools": "Bash(rm -rf:*)"
+    },
+    "verifier": {
+      "role": "verifier",
+      "harness": "pi",
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.3-flash",
+      "account": { "dir": "~/.pi-seats-myproject/verifier", "authRoute": "api_key" }
     },
     "researcher": {
       "role": "researcher",

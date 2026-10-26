@@ -3,14 +3,14 @@
  * walk.ts — consumer-surface walk dispatcher for ISA claims.
  *
  * One invocation = one verifier walk of one claim against one named surface.
- * It uses the roster's verifier identity, but unlike verify.ts it does NOT
+ * It uses only the roster's verifier role (never verify.ts's reviewer role), and does NOT
  * compare that account to an author: a walker judges a consumer surface, not a
  * diff. The zero-context boundary is the prompt: claim text, surface spec, and
  * the VERIFIER.md walker brief only. No bead, ISA, contract bundle, logs, or
  * author reasoning enter the turn.
  *
  * Usage: bun seats/walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>]
- *          [--out <dir>] [--verifier <seat>]
+ *          [--repo <product-repo>] [--out <dir>] [--verifier <seat>]
  *
  * Exit: 0 WALKED-DONE | 2 WALKED-NOT-DONE | 3 COULD-NOT-WALK |
  *       4 malformed/missing verdict | 5 credential/preflight refusal | 1 other.
@@ -19,14 +19,16 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+import { completedExecFileSync as execFileSync, completedSpawnSync as spawnSync } from "./native-command";
 import { resolveRoleBrief } from "./briefs";
-import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, readonlyBdPath, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
+import { appendVerifierGateInbox, die, expandTilde, makeScratchCwd, readonlyBdPath, readReviewRecord, requireDifferentAccountDirs, requireDistinctAccount, resolveRepoRoot, setVerifierGateBead, sweepStaleScratchWorktrees, validateSegment } from "./verify";
 import { hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { effectiveRoster } from "./roster";
 import { hasPool } from "./pool";
 import { liveLineCandidates } from "./final-assistant-message";
+import { readManual, type VerificationManual } from "./manual";
+import { checkBeadContract, contractRemedy, parseContract, type Contract } from "./contract";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -34,6 +36,7 @@ const ROSTER_FILE = path.join(SEATS_DIR, "seats.json");
 const SCRUB = path.join(SEATS_DIR, "evidence-scrub.sh");
 const DEFAULT_WALKS_DIR = path.join(SEATS_DIR, "verdicts", "walks");
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_WALK_TIMEOUT_MS || 1800000);
+const WINDOW_LIST_POLICY_MS = Number(process.env.WHEELHOUSE_WALK_WINDOW_LIST_TIMEOUT_MS || 120000);
 const IMAGE_MAX_WIDTH = Number(process.env.WHEELHOUSE_WALK_IMAGE_MAX_WIDTH || 1000);
 const IMAGE_MAX_CONTEXT = Number(process.env.WHEELHOUSE_WALK_IMAGE_MAX_CONTEXT || 3);
 const IMAGE_QUALITY = Number(process.env.WHEELHOUSE_WALK_IMAGE_JPEG_QUALITY || 75);
@@ -51,7 +54,9 @@ interface SeatEntry {
 
 type WalkVerdict = "WALKED-DONE" | "WALKED-NOT-DONE" | "COULD-NOT-WALK";
 
+let workRefusalBead: string | undefined;
 function refuse(msg: string): never {
+  if (workRefusalBead) appendVerifierGateInbox(workRefusalBead, "distress", `verifier work refused — ${workRefusalBead}`, `REFUSED: ${msg}`, "verifier-work-preflight", "seats/walk.ts");
   process.stderr.write(`REFUSED: ${msg}\n`);
   process.exit(5);
 }
@@ -146,7 +151,7 @@ function parseSurface(raw: string | undefined, baseline: string | undefined): { 
   if (idx <= 0 || idx === raw.length - 1) die(`--surface must be <kind>:<spec>, got ${JSON.stringify(raw)}`);
   const kind = raw.slice(0, idx);
   const spec = raw.slice(idx + 1);
-  if (!["install", "upgrade", "product"].includes(kind)) die(`unsupported surface kind "${kind}" — expected install, upgrade, or product`);
+  if (!["install", "upgrade", "product", "manual"].includes(kind)) die(`unsupported surface kind "${kind}" — expected install, upgrade, product, or manual`);
   if (kind === "upgrade" && !baseline) die("upgrade:<runbook> requires --baseline <sha>");
   if (kind !== "upgrade" && baseline) die("--baseline is only valid with upgrade:<runbook>");
   return { kind, spec };
@@ -199,8 +204,8 @@ function readWindowList(): any[] | string {
   }
   const cmd = process.env.WHEELHOUSE_WALK_WINDOW_LIST_COMMAND;
   if (cmd) {
-    const res = spawnSync("bash", ["-lc", cmd], { encoding: "utf8", timeout: Number(process.env.WHEELHOUSE_WALK_WINDOW_LIST_TIMEOUT_MS || 5000), maxBuffer: 1024 * 1024 });
-    if (res.error) return `window-list command failed (${cmd}): ${res.error.message}`;
+    const res = spawnSync("bash", ["-lc", cmd], { encoding: "utf8", policyTimeoutMs: WINDOW_LIST_POLICY_MS });
+    if (res.error) return `window-list command failed (${cmd}): ${res.error.message}; last stdout tail=${String(res.stdout ?? "").slice(-1000)}; last stderr tail=${String(res.stderr ?? "").slice(-1000)}`;
     if (res.status !== 0) return `window-list command failed (${cmd}): exit ${res.status}${res.stderr ? `: ${String(res.stderr).trim()}` : ""}`;
     const out = String(res.stdout ?? "").trim();
     if (!out) return `window-list command failed (${cmd}): empty output`;
@@ -227,7 +232,33 @@ function checkGuiGuard(surface: { kind: string; spec: string }): GuiGuardResult 
   return { mode: "window-list", target, ok: true };
 }
 
-function buildSurfaceInstructions(kind: string, spec: string, baseline: string | undefined, workspaceRel: string): string[] {
+function optionalManual(repo: string): VerificationManual | undefined {
+  const skills = path.join(repo, ".agents", "skills");
+  try {
+    if (!fs.readdirSync(skills).some(name => name.startsWith("verify-") && fs.existsSync(path.join(skills, name, "SKILL.md")))) return undefined;
+  } catch (e: any) { if (e.code === "ENOENT") return undefined; throw e; }
+  return readManual(repo);
+}
+
+function buildSurfaceInstructions(kind: string, spec: string, baseline: string | undefined, workspaceRel: string, manual: VerificationManual | undefined, outDir: string): string[] {
+  if (kind === "manual") {
+    const feature = manual!.features.find(feature => feature.slug === spec);
+    if (!feature) refuse(`unknown manual feature slug "${spec}" in ${manual!.file}`);
+    return [
+      `Surface kind: manual`,
+      `Verification manual: ${manual!.file}`,
+      `Feature entry: ${feature.file}`,
+      `Launch, doctor, drive and clean up exactly as the manual says; drive this feature from its entry; the end state the entry names is what proves it. If the entry does not lead where it says, the verdict is WALKED-NOT-DONE quoting the step.`,
+      `First perform the entry's How to get to it step, then its How to drive it steps; a failed reach step is not permission to try later or alternate routes.`,
+      `When How to get to it names an explicit URL or command, execute that named reach step; do not replace it with navigation or another route. A working alternative does not excuse an incorrect entry.`,
+      `Follow the manual's Evidence section too. Do not repair the entry, consult implementation source, or discover a substitute route when the entry disagrees with the product.`,
+      `Caller-provided RUN_DIR: ${path.join(outDir, "runtime")}`,
+      `Caller-provided EVIDENCE_DIR: ${path.join(outDir, "evidence")}`,
+      `Use only an isolated test instance with scratch state and a non-production port/socket; leave installed applications and production services untouched. Retain evidence after cleanup.`,
+      `Full feature entry follows:`,
+      fs.readFileSync(feature.file, "utf8"),
+    ];
+  }
   if (kind === "install") {
     return [
       `Surface kind: install`,
@@ -248,6 +279,7 @@ function buildSurfaceInstructions(kind: string, spec: string, baseline: string |
   return [
     `Surface kind: product`,
     `Product surface: ${spec}`,
+    ...(manual ? [`Verification manual (may be used): ${manual.file}`] : []),
     `Consumer setup: open the URL or run the command exactly as a consumer/operator would, without reading implementation internals unless the surface itself instructs you to. For product:gui:<target> surfaces, the dispatcher preflights the target window with a window-list guard before the walk begins; if it is not frontmost and unobscured the walk records COULD-NOT-WALK instead of sending host GUI input into the wrong window.`,
   ];
 }
@@ -379,7 +411,18 @@ printf '{"maxWidth":${IMAGE_MAX_WIDTH},"maxContextImages":${IMAGE_MAX_CONTEXT},"
   return helper;
 }
 
+function spawnWalker(oneShot: ReturnType<typeof oneShotCommandForHarness>, scratchCwd: string, env: NodeJS.ProcessEnv) {
+  return spawnSync(oneShot.bin, oneShot.args, {
+    cwd: scratchCwd,
+    env,
+    encoding: "utf8",
+    policyTimeoutMs: TIMEOUT_MS,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
 function main(): void {
+  if (process.argv.slice(2).includes("--work")) { workMain(process.argv.slice(2)); return; }
   let phase = "parse arguments";
   const argv = process.argv.slice(2);
   const positional: string[] = [];
@@ -387,6 +430,7 @@ function main(): void {
   let baseline: string | undefined;
   let outArg: string | undefined;
   let verifierArg: string | undefined;
+  let repoArg: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -394,11 +438,15 @@ function main(): void {
     else if (a === "--baseline") baseline = argv[++i];
     else if (a === "--out") outArg = argv[++i];
     else if (a === "--verifier") verifierArg = validateSegment("seat name", argv[++i] ?? "");
+    else if (a === "--repo") {
+      repoArg = argv[++i];
+      if (!repoArg || repoArg.startsWith("--")) die("--repo requires a product repository path");
+    }
     else positional.push(a);
   }
   const claimRef = positional[0];
   if (!claimRef || positional.length !== 1) {
-    die("usage: walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>] [--out <dir>] [--verifier <seat>]");
+    die("usage: walk.ts <claim-ref> --surface <kind>:<spec> [--baseline <sha>] [--repo <product-repo>] [--out <dir>] [--verifier <seat>]");
   }
   setVerifierGateBead(claimRef, "seats/walk.ts");
   phase = "read claim and surface";
@@ -424,8 +472,27 @@ function main(): void {
     process.exit(3);
   }
 
+  phase = "prepare pinned product workspace";
+  let repo: string, gitRoot: string, tip: string;
+  try {
+    repo = fs.realpathSync(path.resolve(repoArg ?? ROOT));
+    gitRoot = fs.realpathSync(execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: repo, encoding: "utf8" }).trim());
+    tip = execFileSync("git", ["rev-parse", "HEAD^{commit}"], { cwd: gitRoot, encoding: "utf8" }).trim();
+  } catch (e: any) { refuse(`cannot pin product repository: ${e.message}`); }
+  const productSubdirectory = path.relative(gitRoot, repo);
+  if (productSubdirectory === ".." || productSubdirectory.startsWith(`..${path.sep}`) || path.isAbsolute(productSubdirectory)) refuse("product repository is outside its Git root");
+  sweepStaleScratchWorktrees(gitRoot);
+  const scratchRoot = makeScratchCwd(gitRoot, "review", tip);
+  const scratchCwd = path.join(scratchRoot, productSubdirectory);
+  if (!fs.existsSync(scratchCwd) || !fs.statSync(scratchCwd).isDirectory()) refuse(`product directory is absent at pinned tip ${tip}`);
+  let manual: VerificationManual | undefined;
+  try {
+    manual = surface.kind === "manual" ? readManual(scratchCwd) : surface.kind === "product" ? optionalManual(scratchCwd) : undefined;
+  } catch (e: any) { refuse(e.message); }
+  const surfaceInstructions = buildSurfaceInstructions(surface.kind, surface.spec, baseline,
+    surface.kind === "install" ? "consumer-product" : surface.kind === "upgrade" ? "consumer-upgrade" : ".", manual, outDir);
+
   phase = "prepare verifier seat";
-  sweepStaleScratchWorktrees(ROOT);
   const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
   let verifierHarness: ReturnType<typeof harnessNameForSeat>;
   try {
@@ -442,7 +509,6 @@ function main(): void {
   }
 
   phase = "prepare scratch workspace";
-  const scratchCwd = makeScratchCwd(ROOT, "review");
   const helperBin = path.join(scratchCwd, ".wheelhouse-walk-bin");
   const captureHelper = writeCaptureHelper(helperBin, outDir);
   let workspaceRel = ".";
@@ -450,7 +516,7 @@ function main(): void {
     workspaceRel = "consumer-product";
     const consumer = path.join(scratchCwd, workspaceRel);
     fs.mkdirSync(consumer, { recursive: true });
-    try { execFileSync("git", ["init", "-q"], { cwd: consumer, stdio: "ignore" }); } catch {}
+    try { execFileSync("git", ["init", "-q", "-b", "main"], { cwd: consumer, stdio: "ignore" }); } catch {}
   } else if (surface.kind === "upgrade") {
     workspaceRel = "consumer-upgrade";
     fs.mkdirSync(path.join(scratchCwd, workspaceRel), { recursive: true });
@@ -460,7 +526,9 @@ function main(): void {
     `Claim under verifier walk:`,
     claim,
     ``,
-    ...buildSurfaceInstructions(surface.kind, surface.spec, baseline, workspaceRel),
+    ...surfaceInstructions,
+    `Product repository pinned tip: ${tip}`,
+    `Your cwd is the pinned scratch product directory. Manual/entry paths above refer to that snapshot, not the fleet checkout.`,
     ``,
     `Walk only the surface named above. Do not read fleet internals, bead history, ISA files, seat logs, author transcripts, or implementation notes unless the named surface itself sends you there.`,
     `Install root for machine-local wheelhouse/ paths: ${ROOT} (also exported as WHEELHOUSE_ROOT). If the named surface sends you to a wheelhouse/ path that is not present in your scratch cwd, resolve it under WHEELHOUSE_ROOT.`,
@@ -476,15 +544,9 @@ function main(): void {
   fs.mkdirSync(path.dirname(markerFile), { recursive: true });
   fs.writeFileSync(markerFile, JSON.stringify({ pid: process.pid, bead: claimRef, startedAt: new Date().toISOString() }, null, 2) + "\n");
   const oneShotPath = readonlyBdPath(ROOT, `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, scratchCwd);
-  const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: oneShotPath, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper });
-  const res = spawnSync(oneShot.bin, oneShot.args, {
-    cwd: scratchCwd,
-    env,
-    encoding: "utf8",
-    timeout: TIMEOUT_MS,
-    maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const env = oneShotEnvForHarness(verifierHarness, verifierDir, { ...process.env, PATH: oneShotPath, WHEELHOUSE_ROOT: ROOT, WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper,
+    ...(surface.kind === "manual" ? { RUN_DIR: path.join(outDir, "runtime"), EVIDENCE_DIR: path.join(outDir, "evidence") } : {}) });
+  const res = spawnWalker(oneShot, scratchCwd, env);
 
   try { fs.unlinkSync(markerFile); } catch {}
   const stdout = res.stdout ?? "";
@@ -515,12 +577,166 @@ function main(): void {
   }
 
   const parsed = parseWalkVerdict(stdout, verifierHarness);
-  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, transcript: transcriptRel, guiGuard, imageBudget: { maxWidth: IMAGE_MAX_WIDTH, maxContextImages: IMAGE_MAX_CONTEXT, fullSizeDir: rootRelative(imageBudgetInfo.fullDir), contextDir: rootRelative(imageBudgetInfo.contextDir) } }, null, 2));
+  fs.writeFileSync(metaFile, JSON.stringify({ verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, surface: surfaceRaw, baseline, repo: rootRelative(repo), tip, productSubdirectory,
+    ...(manual ? { manual: path.relative(scratchCwd, manual.file), feature: surface.kind === "manual" ? surface.spec : undefined } : {}),
+    transcript: transcriptRel, guiGuard, imageBudget: { maxWidth: IMAGE_MAX_WIDTH, maxContextImages: IMAGE_MAX_CONTEXT, fullSizeDir: rootRelative(imageBudgetInfo.fullDir), contextDir: rootRelative(imageBudgetInfo.contextDir) } }, null, 2));
 
   appendWalkVerdictInbox(claimRef, parsed.line, parsed.detail, outDir, transcriptRel, metaRel);
   console.log(parsed.line);
   console.log(`transcript: ${transcriptRel}`);
   console.log(`metadata: ${metaRel}`);
+  process.exit(parsed.verdict === "WALKED-DONE" ? 0 : parsed.verdict === "WALKED-NOT-DONE" ? 2 : 3);
+}
+
+type OutcomeResult = "PASS" | "FAIL" | "UNREACHED";
+interface OutcomeRow { id: string; result: OutcomeResult; detail: string }
+
+function parseWorkRows(stdout: string, harness: HarnessName, contract: Contract): OutcomeRow[] {
+  // Unlike claim verdicts, identical repeated outcome rows are duplicates.
+  const candidates = liveLineCandidates(stdout, harness, "OUTCOME", false);
+  const found = new Map<string, OutcomeRow>();
+  const order: string[] = [];
+  for (const candidate of candidates) {
+    const m = candidate.normalized.match(/^OUTCOME:\s*(O\d+)\s+(PASS|FAIL|UNREACHED)(?:\s*[—-]{1,2}\s*(\S.*))?$/);
+    if (!m) die(`malformed OUTCOME row: ${candidate.normalized}`, 4);
+    const [, id, result, evidence] = m;
+    if (!contract.outcomes.some(outcome => outcome.id === id)) die(`extra OUTCOME row ${id}`, 4);
+    if (found.has(id)) die(`duplicate OUTCOME row ${id}`, 4);
+    if (!evidence?.trim()) die(`OUTCOME ${id} requires evidence detail`, 4);
+    found.set(id, { id, result: result as OutcomeResult, detail: evidence.trim() });
+    order.push(id);
+  }
+  for (const outcome of contract.outcomes) if (!found.has(outcome.id)) die(`missing OUTCOME row ${outcome.id}`, 4);
+  const rows = contract.outcomes.map(outcome => found.get(outcome.id)!);
+  if (order.some((id, i) => id !== rows[i].id)) die("OUTCOME rows must be in contract id order", 4);
+  return rows;
+}
+
+function consistentWorkVerdict(rows: OutcomeRow[], verdict: ReturnType<typeof parseWalkVerdict>): void {
+  const failed = rows.find(row => row.result === "FAIL");
+  const unreached = rows.find(row => row.result === "UNREACHED");
+  const first = failed ?? unreached;
+  const expected = failed ? "WALKED-NOT-DONE" : unreached ? "COULD-NOT-WALK" : "WALKED-DONE";
+  if (verdict.verdict !== expected || (first && !new RegExp(`^${first.id}:\\s*\\S`).test(verdict.detail))) {
+    die(`inconsistent VERDICT: expected ${expected}${first ? ` — ${first.id}: <step or blocker>` : ""}`, 4);
+  }
+}
+
+function workPrompt(contract: Contract, tip: string, manual: VerificationManual | undefined, outDir: string): string {
+  const budget = imageBudget(outDir);
+  const entries = manual ? contract.outcomes.flatMap(outcome => {
+    // A feature slug must be named as its own token, not a substring of another feature.
+    return manual.features.filter(feature => new RegExp(`(?:^|[^a-z0-9-])${feature.slug}(?:$|[^a-z0-9-])`).test(outcome.surface))
+      .map(feature => `Feature entry for ${outcome.id}: ${feature.file}\n${fs.readFileSync(feature.file, "utf8")}`);
+  }) : [];
+  return [
+    `Work under verification. Tip: ${tip}. Your cwd is a checkout of that tip.`,
+    `Intent:`, contract.intent, ``, `Outcomes:`,
+    ...contract.outcomes.flatMap(outcome => [
+      `- ${outcome.id} ${outcome.claim}`,
+      `  consumer: ${outcome.group} — ${outcome.who}`,
+      `  surface: ${outcome.surface}`,
+      `  check: ${outcome.checkKind} — ${outcome.checkHow}`,
+    ]),
+    ``,
+    `For each outcome, go where its consumer meets it (its surface) and make the check that consumer would make: walk means drive the real page, app or CLI session as that person; read means read the artifact top to bottom and run its commands; run means run it and read the literal output. Prove each outcome true or false with your own evidence. You have not been given, and must not go looking for, the author's report, the task's history, or any fleet file; the surfaces and your cwd are the whole world.`,
+    ...(manual ? [`Verification manual (may be used): ${manual.file}`, ...entries,
+      `Follow the manual's launch, doctor, drive, evidence and cleanup. Drive named features from their entries; execute an explicit reach URL/command before driving. A failed reach step is WALKED-NOT-DONE, not permission to find another route or consult implementation source.`] : []),
+    `Caller-provided RUN_DIR: ${path.join(outDir, "runtime")}`,
+    `Caller-provided EVIDENCE_DIR: ${path.join(outDir, "evidence")}`,
+    `Use only isolated test instances, scratch state and non-production ports/sockets. Never stop, replace or modify installed applications or production service definitions. Retain evidence after cleanup.`,
+    `Install root for machine-local wheelhouse/ paths: ${ROOT} (also exported as WHEELHOUSE_ROOT). Only resolve a path there when a named outcome surface sends you there.`,
+    `Image budget for screen captures: full-size evidence under ${rootRelative(budget.fullDir)}; in-context JPEGs <=${IMAGE_MAX_WIDTH}px wide, first ${IMAGE_MAX_CONTEXT} only. Use wheelhouse-walk-capture <label> -- <capture-command...>.`,
+    `Retain a full transcript. End with exactly one unfenced OUTCOME row per outcome in id order, each with evidence detail:`,
+    `OUTCOME: O<n> PASS — <what you drove, read or ran and observed>`,
+    `OUTCOME: O<n> FAIL — <quoted failing step>`,
+    `OUTCOME: O<n> UNREACHED — <blocker>`,
+    `Then exactly one unfenced VERDICT line: WALKED-DONE if all PASS; WALKED-NOT-DONE — O<n>: <step> for the first FAIL; otherwise COULD-NOT-WALK — O<n>: <why> for the first UNREACHED. Prefix the closing line with VERDICT:.`,
+  ].join("\n");
+}
+
+function workMain(args: string[]): void {
+  const values = new Map<string, string>();
+  const usage = "usage: walk.ts --work <bead> --branch <ref> --author <seat> [--repo <path>] [--out <dir>] [--verifier <seat>] (no claim-ref, --surface or --baseline)";
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    if (!["--work", "--branch", "--author", "--repo", "--out", "--verifier"].includes(flag) || values.has(flag)) die(usage);
+    const value = args[++i];
+    if (!value || value.startsWith("--")) die(usage);
+    values.set(flag, value);
+  }
+  if (!["--work", "--branch", "--author"].every(flag => values.has(flag))) die(usage);
+  const bead = validateSegment("bead id", values.get("--work")!);
+  const branch = values.get("--branch")!;
+  const author = validateSegment("seat name", values.get("--author")!);
+  const verifierArg = values.has("--verifier") ? validateSegment("seat name", values.get("--verifier")!) : undefined;
+  workRefusalBead = bead;
+  setVerifierGateBead(bead, "seats/walk.ts");
+  const checked = checkBeadContract(ROOT, bead);
+  if (checked.errors.length) refuse(contractRemedy(bead, checked.errors));
+  const contract = parseContract(checked.text!);
+  const review = readReviewRecord(ROOT, bead);
+  const reviewNext = `review first: bun seats/verify.ts ${bead} ${branch} ${author}`;
+  if (!review) refuse(`${bead}: ${reviewNext}`);
+  if (review.verdict !== "APPROVE") refuse(`${bead}: review verdict is ${review.verdict}; ${reviewNext}`);
+  const repoArg = values.get("--repo");
+  const repoRoot = resolveRepoRoot(repoArg);
+  const product = repoArg ? fs.realpathSync(path.resolve(ROOT, expandTilde(repoArg))) : repoRoot;
+  const productSubdirectory = path.relative(repoRoot, product);
+  if (productSubdirectory === ".." || productSubdirectory.startsWith(`..${path.sep}`) || path.isAbsolute(productSubdirectory)) die("product directory is outside repository");
+  let tip: string;
+  try { tip = execFileSync("git", ["rev-parse", "--verify", `${branch}^{commit}`], { cwd: repoRoot, encoding: "utf8" }).trim(); }
+  catch { die(`cannot resolve branch ${JSON.stringify(branch)} to a commit`); }
+  if (review.tip !== tip!) refuse(`${bead}: reviewed tip ${review.tip} is not the branch tip ${tip!}; re-review at ${tip!}; ${reviewNext}`);
+  const { name: verifierSeat, entry } = requireVerifierSeat(verifierArg);
+  if (!entry.account?.dir) refuse(`verifier seat "${verifierSeat}" has no account.dir`);
+  requireDistinctAccount(author, verifierSeat, entry.account.dir, refuse, "verifier");
+  requireDifferentAccountDirs(review.reviewerSeat, review.reviewerDir, verifierSeat, entry.account.dir, refuse, "verifier", "gating reviewer");
+  let harness: HarnessName;
+  try { harness = harnessNameForSeat(verifierSeat, entry); } catch (e: any) { refuse(e.message); }
+  const verifierDir = requireCredential(entry, verifierSeat, harness);
+  const brief = resolveRoleBrief(ROOT, "verifier");
+  sweepStaleScratchWorktrees(repoRoot);
+  const scratchRoot = makeScratchCwd(repoRoot, "verify", tip);
+  const cwd = path.join(scratchRoot, productSubdirectory);
+  if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) refuse(`product directory absent at ${tip}`);
+  let manual: VerificationManual | undefined;
+  try { manual = optionalManual(cwd); } catch (e: any) { refuse(e.message); }
+  const outDir = resolveOutDir(values.get("--out") ?? path.join(DEFAULT_WALKS_DIR, bead, path.basename(defaultOutDir())));
+  const transcriptFile = path.join(outDir, "transcript.txt"), metaFile = path.join(outDir, "walk.json");
+  if (fs.existsSync(metaFile)) refuse("work output already contains walk.json; use a fresh --out directory");
+  const transcriptRel = rootRelative(transcriptFile), metaRel = rootRelative(metaFile);
+  const helperBin = path.join(cwd, ".wheelhouse-walk-bin");
+  const captureHelper = writeCaptureHelper(helperBin, outDir);
+  const prompt = workPrompt(contract, tip!, manual, outDir);
+  const oneShot = oneShotCommandForHarness(harness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
+  const oneShotPath = readonlyBdPath(ROOT, `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, cwd);
+  const env = oneShotEnvForHarness(harness, verifierDir, { ...process.env, PATH: oneShotPath, WHEELHOUSE_ROOT: ROOT,
+    WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper, RUN_DIR: path.join(outDir, "runtime"), EVIDENCE_DIR: path.join(outDir, "evidence") });
+  const markerFile = path.join(ROOT, "seats", "run", `walk.${verifierSeat}.json`);
+  fs.mkdirSync(path.dirname(markerFile), { recursive: true });
+  fs.writeFileSync(markerFile, JSON.stringify({ pid: process.pid, bead, startedAt: new Date().toISOString() }) + "\n");
+  const res = spawnWalker(oneShot, cwd, env);
+  try { fs.unlinkSync(markerFile); } catch {}
+  const stdout = res.stdout ?? "", stderr = res.stderr ?? "";
+  scrubToFile([`$ ${oneShot.display}`, `$ cwd ${cwd}`, `--- stdout ---`, stdout, `--- stderr ---`, stderr].join("\n"), transcriptFile);
+  let rows: OutcomeRow[], parsed: ReturnType<typeof parseWalkVerdict>;
+  if (res.error && (res.error as any).code === "ETIMEDOUT") {
+    const reason = `dispatcher timed out after ${TIMEOUT_MS}ms during run verifier walk`;
+    rows = contract.outcomes.map(outcome => ({ id: outcome.id, result: "UNREACHED", detail: reason }));
+    parsed = { verdict: "COULD-NOT-WALK", detail: `${rows[0].id}: ${reason}`, line: `VERDICT: COULD-NOT-WALK — ${rows[0].id}: ${reason}` };
+  } else {
+    if (res.error || res.status !== 0) refuse(`verifier process failed: ${res.error?.message ?? `exit ${res.status} signal ${res.signal}`}; transcript: ${transcriptRel}`);
+    rows = parseWorkRows(stdout, harness, contract);
+    parsed = parseWalkVerdict(stdout, harness);
+    consistentWorkVerdict(rows, parsed);
+  }
+  const rowLines = rows.map(row => `OUTCOME: ${row.id} ${row.result} — ${row.detail}`);
+  fs.writeFileSync(metaFile, JSON.stringify({ mode: "work", bead, branch, tip: tip!, repo: rootRelative(repoRoot), productSubdirectory,
+    outcomes: rows, verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, transcript: transcriptRel }, null, 2));
+  appendVerifierGateInbox(bead, "settle", `verifier work verdict — ${bead}`,
+    [parsed.line, ...rowLines, `out: ${rootRelative(outDir)}`, `transcript: ${transcriptRel}`, `metadata: ${metaRel}`].join("\n"), "verifier-walk", "seats/walk.ts", Infinity);
+  console.log([...rowLines, parsed.line, `transcript: ${transcriptRel}`, `metadata: ${metaRel}`].join("\n"));
   process.exit(parsed.verdict === "WALKED-DONE" ? 0 : parsed.verdict === "WALKED-NOT-DONE" ? 2 : 3);
 }
 

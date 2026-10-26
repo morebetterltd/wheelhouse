@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-codex-selftest.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+. "$ROOT/seats/selftest-lib.sh"
+. "$ROOT/seats/fixtures/driver-readiness.sh"
+TMP="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-codex-selftest.XXXXXX")" || exit 2
+selftest_isolate_git "$TMP" || exit 2
+selftest_install_cleanup_traps 'selftest_cleanup_fixture_processes "$TMP"; selftest_remove_fixture_dir "$TMP"'
 mkdir -p "$TMP/bin" "$TMP/home" "$TMP/proj/contracts" "$TMP/proj/.wheelhouse-worktrees/bead-a"
 cat > "$TMP/bin/codex" <<'CODEX'
 #!/usr/bin/env node
@@ -23,7 +26,7 @@ function complete(msg){
   send({jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'idle'}}});
   send({jsonrpc:'2.0',method:'turn/completed',params:{threadId:thread,turn:{id:turn,status:'completed'}}});
 }
-process.stdin.on('data',d=>{buf+=d;let i;while((i=buf.indexOf('\n'))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(!l.trim())continue;const r=JSON.parse(l),m=r.method,p=r.params||{};call({method:m,params:p});if(m==='initialize')send({jsonrpc:'2.0',id:r.id,result:{codexHome:home,userAgent:'stub'}});else if(m==='thread/start'){ensure();send({jsonrpc:'2.0',id:r.id,result:{thread:{id:thread,path:threadPath,status:{type:'idle'}},model:p.model,sandbox:p.sandbox,approvalPolicy:p.approvalPolicy}})}else if(m==='thread/resume'){thread=p.threadId;ensure();send({jsonrpc:'2.0',id:r.id,result:{thread:{id:thread,path:threadPath,status:{type:'idle'}},model:p.model}})}else if(m==='turn/start'||m==='turn/steer'){turn=m==='turn/start'?'turn-'+(++turns):turn;const msg=text(p.input);send({jsonrpc:'2.0',id:r.id,result:{turn:{id:turn,status:'inProgress'}}});if(m==='turn/start'){send({jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'active'}}});send({jsonrpc:'2.0',method:'turn/started',params:{threadId:thread,turn:{id:turn,status:'inProgress'}}});send({jsonrpc:'2.0',method:'account/rateLimits/updated',params:{rateLimits:{primary:{windowDurationMins:300,usedPercent:99},note:'quota text'}}});setTimeout(()=>complete(msg),1000);}}}});
+process.stdin.on('data',d=>{buf+=d;let i;while((i=buf.indexOf('\n'))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(!l.trim())continue;const r=JSON.parse(l),m=r.method,p=r.params||{};call({method:m,params:p});if(m==='initialize')send({jsonrpc:'2.0',id:r.id,result:{codexHome:home,userAgent:'stub'}});else if(m==='thread/start'){ensure();send({jsonrpc:'2.0',id:r.id,result:{thread:{id:thread,path:threadPath,status:{type:'idle'}},model:p.model,sandbox:p.sandbox,approvalPolicy:p.approvalPolicy}})}else if(m==='thread/resume'){thread=p.threadId;ensure();send({jsonrpc:'2.0',id:r.id,result:{thread:{id:thread,path:threadPath,status:{type:'idle'}},model:p.model}})}else if(m==='turn/start'||m==='turn/steer'){turn=m==='turn/start'?'turn-'+(++turns):turn;const msg=text(p.input);send({jsonrpc:'2.0',id:r.id,result:{turn:{id:turn,status:'inProgress'}}});if(m==='turn/start'){send({jsonrpc:'2.0',method:'thread/status/changed',params:{threadId:thread,status:{type:'active'}}});send({jsonrpc:'2.0',method:'turn/started',params:{threadId:thread,turn:{id:turn,status:'inProgress'}}});send({jsonrpc:'2.0',method:'account/rateLimits/updated',params:{rateLimits:{primary:{windowDurationMins:300,usedPercent:99},note:'quota text'}}});const release=setInterval(()=>{if(fs.existsSync(path.join(home,'turn-release'))){clearInterval(release);complete(msg);}},10);}}}});
 CODEX
 chmod +x "$TMP/bin/codex"
 printf 'brief CONTENT token\n' > "$TMP/proj/contracts/WORKER.md"
@@ -33,13 +36,21 @@ PATH="$TMP/bin:$PATH" HOME="$TMP/home" OPENAI_API_KEY=leak ANTHROPIC_API_KEY=lea
 exec 4>"$TMP/run-in"
 printf '{"id":"s","type":"get_state"}\n' >&4
 printf '{"id":"p","type":"prompt","message":"tools"}\n' >&4
-for i in {1..100}; do [ -f "$TMP/log.jsonl" ] && grep -q '"stopReason":"error"' "$TMP/log.jsonl" && break; sleep .02; done
+driver_wait_record "$TMP/log.jsonl" message.stopReason error "$pid" || exit 2
 printf '{"id":"mid","type":"get_state"}\n' >&4
-for i in {1..100}; do [ -f "$TMP/log.jsonl" ] && grep -q '"id":"mid"' "$TMP/log.jsonl" && break; sleep .02; done
+driver_wait_record "$TMP/log.jsonl" id mid "$pid" || exit 2
+# Streaming state is not a substitute for observing an early terminal record.
+if driver_read_record "$TMP/log.jsonl" type agent_end; then
+  echo 'FAIL driver turn completed before explicit release' >&2; exit 1
+else
+  rc=$?; [ "$rc" = 1 ] || exit "$rc"
+fi
 printf '{"id":"x","type":"steer","message":"steer now"}\n' >&4
-for i in {1..100}; do [ -f "$TMP/log.jsonl" ] && [ "$(grep -c '"type":"agent_end"' "$TMP/log.jsonl")" -ge 1 ] && break; sleep .1; done
+driver_wait_record "$TMP/log.jsonl" id x "$pid" || exit 2
+printf "release after native steer ack\n" > "$TMP/home/codex/turn-release"
+driver_wait_record "$TMP/log.jsonl" type agent_end "$pid" || exit 2
 printf '{"id":"idle","type":"get_state"}\n' >&4
-for i in {1..100}; do [ -f "$TMP/log.jsonl" ] && grep -q '"id":"idle"' "$TMP/log.jsonl" && break; sleep .02; done
+driver_wait_record "$TMP/log.jsonl" id idle "$pid" || exit 2
 exec 4>&-
 kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
 grep -q 'brief CONTENT token' "$TMP/home/codex/calls.jsonl"
@@ -54,10 +65,10 @@ grep -q '"type":"turn_end"' "$TMP/log.jsonl"; grep -q '"type":"agent_end"' "$TMP
 grep -q '"id":"mid".*"isStreaming":true' "$TMP/log.jsonl"
 grep -q '"id":"idle".*"isStreaming":false' "$TMP/log.jsonl"
 [ "$(grep -c '"type":"agent_end"' "$TMP/log.jsonl")" -eq 1 ]
-! grep -q leak "$TMP/home/codex/env.json"
+selftest_capture_lacks "$TMP/home/codex/env.json" -q -- leak
 PATH="$TMP/bin:$PATH" HOME="$TMP/home" bun "$ROOT/seats/drivers/codex/shim.ts" --log "$TMP/auth-log.jsonl" --raw-log "$TMP/auth-raw.jsonl" --err-log "$TMP/auth-err.log" --account-dir "$TMP/home/codex" --brief "$TMP/proj/contracts/WORKER.md" --model gpt-5.5 --cwd "$TMP/proj" --actor worker-1 < <(printf '{"id":"a","type":"prompt","message":"AUTH failure"}
 ') & apid=$!
-for i in {1..100}; do [ -f "$TMP/auth-log.jsonl" ] && grep -q '"authDead":true' "$TMP/auth-log.jsonl" && break; sleep .1; done
+driver_wait_record "$TMP/auth-log.jsonl" authDead true "$apid" || exit 2
 kill "$apid" 2>/dev/null || true; wait "$apid" 2>/dev/null || true
 grep -q '"authDead":true' "$TMP/auth-log.jsonl"
 grep -q '401 not logged in' "$TMP/auth-log.jsonl"

@@ -37,16 +37,6 @@ function findSessionFile(id: string): string | null {
   }
   return null;
 }
-function waitForSessionFile(id: string, ms = Number(process.env.WHEELHOUSE_CLAUDE_SESSION_LOCATE_MS || 2000)): string | null {
-  const deadline = Date.now() + ms;
-  let found: string | null = null;
-  do {
-    found = findSessionFile(id);
-    if (found) return found;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
-  } while (Date.now() < deadline);
-  return null;
-}
 
 const log = requiredArg("log");
 const rawLog = requiredArg("raw-log");
@@ -101,6 +91,18 @@ let currentAssistantContent: any[] = [];
 let turnEndEmitted = false;
 let capacityErrorEmitted = false;
 const toolNames = new Map<string, string>();
+let sessionDiscovery: ReturnType<typeof setTimeout> | null = null;
+// Publication is readiness; polling spacing is only observation cadence. A
+// busy native writer must not turn into an acknowledged null continuity key.
+function discoverSession(): void {
+  if (sessionId && !sessionFile) sessionFile = findSessionFile(sessionId);
+  if (sessionFile) {
+    if (sessionDiscovery) { clearTimeout(sessionDiscovery); sessionDiscovery = null; }
+    for (const id of pendingPromptResponses.splice(0)) sendResponse(id, true, responseState({ delivered: true }));
+  } else if (sessionId && pendingPromptResponses.length && !sessionDiscovery) {
+    sessionDiscovery = setTimeout(() => { sessionDiscovery = null; discoverSession(); }, 50);
+  }
+}
 
 function sendResponse(id: any, success: boolean, data?: any, error?: string): void {
   appendJson(log, { type: "response", id, success, ...(success ? { data } : { error }) });
@@ -162,11 +164,12 @@ child.stdout.on("data", (chunk) => {
       continue;
     }
     if (ev.type === "system" && ev.subtype === "init") {
-      sessionId = ev.session_id || sessionId;
+      const nextSession = ev.session_id || sessionId;
+      if (nextSession !== sessionId) sessionFile = null;
+      sessionId = nextSession;
       resolvedModel = ev.model || resolvedModel;
-      if (sessionId) sessionFile = waitForSessionFile(sessionId);
       if (streaming) appendJson(log, { type: "agent_start" });
-      for (const id of pendingPromptResponses.splice(0)) sendResponse(id, true, responseState({ delivered: true }));
+      discoverSession();
       continue;
     }
     if (ev.type === "assistant") {
@@ -180,7 +183,7 @@ child.stdout.on("data", (chunk) => {
     }
     if (ev.type === "result") {
       streaming = false;
-      if (sessionId && !sessionFile) sessionFile = waitForSessionFile(sessionId);
+      discoverSession();
       emitTurnEnd();
       const ok = ev.subtype === "success" && !ev.is_error;
       const stopReason = ok ? "stop" : ev.subtype === "error_during_execution" ? "aborted" : "error";
@@ -197,8 +200,8 @@ function sendUser(id: any, message: string): void {
   currentAssistantContent = [];
   appendJson(log, { type: "message_end", message: { role: "user", content: [{ type: "text", text: message }] } });
   child.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: message }] } }) + "\n");
-  if (sessionId) sendResponse(id, true, responseState({ delivered: true }));
-  else pendingPromptResponses.push(id);
+  pendingPromptResponses.push(id);
+  discoverSession();
 }
 
 process.stdin.on("data", (chunk) => {
@@ -220,4 +223,7 @@ process.on("SIGTERM", () => {
   try { child.stdin.end(); } catch {}
   setTimeout(() => { try { child.kill("SIGTERM"); } catch {} process.exit(143); }, Number(process.env.WHEELHOUSE_CLAUDE_STOP_GRACE_MS || 500));
 });
-child.on("exit", (code, sig) => process.exit(sig ? 143 : (code ?? 0)));
+child.on("exit", (code, sig) => {
+  if (sessionDiscovery) clearTimeout(sessionDiscovery);
+  process.exit(sig ? 143 : (code ?? 0));
+});

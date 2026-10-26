@@ -4,11 +4,12 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-report-issues.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 PROJ="$FIX/project"; mkdir -p "$PROJ/seats" "$PROJ/wheelhouse" "$FIX/bin" "$FIX/nogh"; selftest_copy_seat_runtime "$PROJ" "$HERE"
 chmod +x "$PROJ/seats/report-issues.ts" "$PROJ/seats/evidence-scrub.sh"
 cat > "$PROJ/seats/seats.json" <<'JSON'
@@ -36,7 +37,15 @@ process.exit(1);
 GH
 chmod +x "$FIX/bin/gh"
 cp "$FIX/bin/bd" "$FIX/nogh/bd"
-RUN_PATH="$FIX/bin:$PATH"; NOGH_PATH="$FIX/nogh:/usr/bin:/bin:$HOME/.bun/bin:$HOME/.nvm/versions/node/v22.21.0/bin"
+# Review sweeps deliberately use an empty private HOME for bd metrics safety.
+# Discover tools before base_env changes HOME; do not guess a login layout or
+# reintroduce the inherited PATH (which could expose the real gh binary).
+BUN_BIN="$(command -v bun)" || exit 2
+NODE_BIN="$(command -v node)" || exit 2
+[ -x "$BUN_BIN" ] && [ -x "$NODE_BIN" ] || exit 2
+ln -s "$BUN_BIN" "$FIX/nogh/bun"
+ln -s "$NODE_BIN" "$FIX/nogh/node"
+RUN_PATH="$FIX/bin:$PATH"; NOGH_PATH="$FIX/nogh:/usr/bin:/bin"
 TASKS="$FIX/tasks.json"; ISSUES="$FIX/issues.json"; BODY="$FIX/body.md"; CALLS="$FIX/calls.log"
 base_env(){ : > "$CALLS"; printf '[]' > "$ISSUES"; export WHEELHOUSE_REPORT_ROOT="$PROJ" BD_TASKS="$TASKS" GH_ISSUES="$ISSUES" GH_BODY_CAPTURE="$BODY" CALLS_LOG="$CALLS" HOME="/home/wheelhouse-report-fixture"; }
 write_tasks(){ printf '%s\n' "$1" > "$TASKS"; }

@@ -5,7 +5,15 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
-BASELINE=${WHEELHOUSE_UPGRADE_SELFTEST_BASELINE:-d8128d4}
+export WHEELHOUSE_CONTRACT_FIXTURE="$ROOT/seats/fixtures/contracts/valid.md"
+# Public old-install fixture: 7fcbaeb (2026-09-02, "Add seat provider probe cadence").
+# The former d8128d4 disappeared in the 2026-10-18 history purge; its rewrite
+# map was unavailable when this fallback was chosen, so this is NOT claimed
+# to be its rewritten equivalent. This is the latest public first-parent
+# commit before the PROMOTION.md autonomy update (4469ec4). It has all four
+# baseline files, predates the zsh brace fix, and both runbooks tested as
+# "updated" still differ from today's template. Pin the full public object ID.
+BASELINE=${WHEELHOUSE_UPGRADE_SELFTEST_BASELINE:-7fcbaeb470e9d24ff546512ae24011acb1e5deb9}
 TEMPLATE_SOURCE="$ROOT/wheelhouse/.template-source"
 
 source_refusal() {
@@ -25,13 +33,13 @@ ensure_template_cache_ignored() {
 }
 
 template_root() {
-  local recorded="" source="" commit="" cache="" short=""
+  local recorded="" source="" commit="" cache="" short="" cache_root="" cache_real="" parent_real=""
   if [ -d "$ROOT/wheelhouse" ] && [ ! -d "$ROOT/contracts" ]; then
     [ -f "$TEMPLATE_SOURCE" ] || source_refusal "$TEMPLATE_SOURCE missing; expected source= and commit= lines (path= is only a disposable cache hint)"
     recorded=$(read_template_source_field path)
     source=$(read_template_source_field source)
     commit=$(read_template_source_field commit)
-    [ -n "$commit" ] || commit=$BASELINE
+    [[ "$commit" =~ ^[0-9a-f]{7,40}$ ]] || source_refusal "invalid commit='$commit'; expected 7-40 lowercase hexadecimal characters"
 
     if [ -n "$recorded" ] \
       && git -C "$recorded" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
@@ -42,14 +50,22 @@ template_root() {
 
     [ -n "$source" ] || source_refusal "$TEMPLATE_SOURCE has no source= line; cannot fetch commit=$commit (path=${recorded:-<empty>} is not usable)"
     short=$(printf '%s' "$commit" | cut -c1-12)
-    cache="$ROOT/wheelhouse/.template-cache/$short"
+    cache_root="$ROOT/wheelhouse/.template-cache"
+    cache="$cache_root/$short"
+    [ ! -L "$cache_root" ] || source_refusal "STOP: cache root is a symlink: $cache_root"
+    [ "$(cd "$ROOT/wheelhouse" && pwd -P)" = "$ROOT/wheelhouse" ] || source_refusal "STOP: wheelhouse is not the physical install directory"
+    mkdir -p "$cache_root" || source_refusal "STOP: cannot create cache root: $cache_root"
+    [ -d "$cache_root" ] && [ ! -L "$cache_root" ] || source_refusal "STOP: cache root is not a real directory: $cache_root"
+    cache_real=$(cd "$cache_root" && pwd -P) || source_refusal "STOP: cannot resolve cache root"
+    [ "$cache_real" = "$cache_root" ] || source_refusal "STOP: cache root escapes install: $cache_root"
+    parent_real=$(cd "$(dirname "$cache")" && pwd -P) || source_refusal "STOP: cannot resolve cache parent"
+    [ "$parent_real" = "$cache_real" ] && [ ! -L "$cache" ] || source_refusal "STOP: cache path escapes its real directory: $cache"
     if [ -d "$cache/.git" ] && git -C "$cache" cat-file -e "${commit}^{commit}" >/dev/null 2>&1; then
       printf '%s\n' "$cache"
       return 0
     fi
 
     ensure_template_cache_ignored
-    mkdir -p "$ROOT/wheelhouse/.template-cache"
     rm -rf "$cache"
     if ! git clone --quiet "$source" "$cache" >/dev/null 2>&1; then
       source_refusal "source=$source unreachable; cannot fetch commit=$commit after path=${recorded:-<empty>} was unusable"
@@ -62,9 +78,17 @@ template_root() {
   printf '%s\n' "$ROOT"
 }
 TEMPLATE=$(template_root)
+if [ "${WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY:-0}" = 1 ]; then printf '%s\n' "$TEMPLATE"; exit 0; fi
+# Source/cache-only probes use tiny repositories and do not consume BASELINE.
+# Refuse a missing baseline before allocating fixtures or running any cases.
+if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" != 1 ] && [ "${WHEELHOUSE_UPGRADE_SKILLS_ONLY:-0}" != 1 ] && ! git -C "$TEMPLATE" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1; then
+  printf 'STOP: upgrade selftest baseline "%s" is missing from template history; fetch complete public history or set WHEELHOUSE_UPGRADE_SELFTEST_BASELINE to an available old-install commit\n' "$BASELINE" >&2
+  exit 2
+fi
 TMP=$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-upgrade-selftest.XXXXXX") || exit 2
+selftest_isolate_git "$TMP" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "${TMP:-}" "${SOCK:-}"; selftest_remove_fixture_dir "$TMP"; }
-trap cleanup EXIT
+selftest_install_cleanup_traps cleanup
 
 PASS=0
 fail() { echo "not ok $((PASS+1)) - $*"; exit 1; }
@@ -74,11 +98,265 @@ copy_installed_selftest() {
   local dest="$1"
   cp "$ROOT/seats/upgrade-runbook.selftest.sh" "$dest/upgrade-runbook.selftest.sh"
   cp "$ROOT/seats/selftest-lib.sh" "$dest/selftest-lib.sh"
+  cp "$ROOT/seats/selftest-sweep-lock.ts" "$dest/selftest-sweep-lock.ts"
+  cp "$ROOT/seats/native-command.ts" "$ROOT/seats/completed-command.ts" "$dest/"
 }
 
+cache_recovery_tests() {
+  local cases="$TMP/cache-cases" selected=${WHEELHOUSE_UPGRADE_CACHE_CASE:-all}
+  local helper=${WHEELHOUSE_UPGRADE_CACHE_HELPER:-$ROOT/seats/upgrade-runbook.selftest.sh}
+  local bootstrap=${WHEELHOUSE_UPGRADE_CACHE_BOOTSTRAP:-$TEMPLATE/BOOTSTRAP.md}
+  local upgrade=${WHEELHOUSE_UPGRADE_CACHE_RUNBOOK:-$TEMPLATE/runbooks/UPGRADE.md}
+  local name install value target rc expected needle good_sha cache_path
+  mkdir -p "$cases/bin" "$cases/source/contracts"
+  printf '# Fixture worker contract\n' > "$cases/source/contracts/WORKER.md"
+  git -C "$cases/source" init -q -b main
+  [ "$(git -C "$cases/source" rev-parse --show-toplevel)" = "$cases/source" ] || fail "cache fixture git root escaped"
+  git -C "$cases/source" add contracts/WORKER.md
+  git -C "$cases/source" -c user.email=selftest@local -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+  good_sha=$(git -C "$cases/source" rev-parse HEAD)
+  # Read the printed fence, stopping before BOOTSTRAP's separate integrity
+  # comparisons (/tmp/wh-* belong to i8sm, not this cache recovery test).
+  awk '
+    /^[[:space:]]*```bash$/ {f=1; b=""; next}
+    f && /^[[:space:]]*```$/ {if (b ~ /source-head/ && b ~ /TEMPLATE=/) {printf "%s", b; exit} f=0}
+    f {b=b $0 "\n"}
+  ' "$bootstrap" | awk '/# The pair list is positional/{exit} {print}' > "$cases/bootstrap.sh"
+  awk '
+    /^## 1\./ {s=1; next}
+    s && /^```bash$/ {f=1; next}
+    s && f && /^```$/ {exit}
+    s && f {print}
+  ' "$upgrade" | sed 's/^TARGET=main /TARGET=${CACHE_TEST_TARGET-main} /' > "$cases/upgrade.sh"
+  awk '
+    /^```bash$/ {f=1; b=""; next}
+    f && /^```$/ {if (b ~ /diff "\$BASE"/) {printf "%s", b; exit} f=0}
+    f {b=b $0 "\n"}
+  ' "$upgrade" > "$cases/diff.sh"
+  awk '
+    /^```bash$/ {f=1; b=""; next}
+    f && /^```$/ {if (b ~ /git commit -m "Upgrade wheelhouse contracts/) {printf "%s", b; exit} f=0}
+    f {b=b $0 "\n"}
+  ' "$upgrade" > "$cases/stamp.sh"
+  [ -s "$cases/bootstrap.sh" ] && [ -s "$cases/upgrade.sh" ] && [ -s "$cases/diff.sh" ] && [ -s "$cases/stamp.sh" ] || fail "printed cache recipe missing"
+  cat > "$cases/bin/git" <<'GITSTUB'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$CACHE_GIT_LOG"
+case "${1:-}" in
+  clone)
+    [ "${CACHE_CLONE_FAIL:-0}" != 1 ] || exit 1
+    last=''; for arg in "$@"; do last=$arg; done
+    mkdir -p "$last/.git" "$last/contracts"
+    printf '# Fixture worker contract\n' > "$last/contracts/WORKER.md"
+    ;;
+  -C) [ -d "$2/.git" ] || exit 1 ;;
+  add|status|commit) : ;;
+  *) echo 'unexpected fixture git command' >&2; exit 97;;
+esac
+GITSTUB
+  chmod +x "$cases/bin/git"
+  case "$selected" in all|helper-bad-commit|helper-invalid|helper-link|helper-parent-link|helper-good|bootstrap-link|bootstrap-parent-link|bootstrap-bad-commit|bootstrap-good|upgrade-link|upgrade-parent-link|upgrade-bad-commit|upgrade-target|upgrade-good|upgrade-diff-bad-commit|upgrade-stamp-bad-commit|helper-leaf-link|bootstrap-leaf-link|upgrade-leaf-link) ;; *) fail "unknown cache case: $selected";; esac
+  for name in helper-bad-commit helper-invalid helper-link helper-parent-link helper-good bootstrap-link bootstrap-parent-link bootstrap-bad-commit bootstrap-good upgrade-link upgrade-parent-link upgrade-bad-commit upgrade-target upgrade-good upgrade-diff-bad-commit upgrade-stamp-bad-commit helper-leaf-link bootstrap-leaf-link upgrade-leaf-link; do
+    [ "$selected" = all ] || [ "$selected" = "$name" ] || continue
+    install="$cases/$name"
+    mkdir -p "$install/seats" "$install/wheelhouse" "$install/outside/source-head" "$install/outside/main" "$install/outside/1234567" "$install/victim"
+    printf KEEP > "$install/victim/KEEP"
+    printf KEEP > "$install/outside/source-head/KEEP"
+    printf KEEP > "$install/outside/main/KEEP"
+    printf KEEP > "$install/outside/1234567/KEEP"
+    cp -f "$helper" "$install/seats/upgrade-runbook.selftest.sh"
+    cp -f "$ROOT/seats/selftest-lib.sh" "$install/seats/selftest-lib.sh"
+    cp -f "$ROOT/seats/selftest-sweep-lock.ts" "$install/seats/selftest-sweep-lock.ts"
+    cp -f "$ROOT/seats/native-command.ts" "$ROOT/seats/completed-command.ts" "$install/seats/"
+    value=1234567; target=main; expected=1; needle='STOP:'
+    case "$name" in
+      helper-*) expected=42 ;;
+    esac
+    case "$name" in
+      *bad-commit) value=${WHEELHOUSE_UPGRADE_CACHE_COMMIT-../../victim}; needle="invalid commit='$value'" ;;
+      helper-invalid) value=${WHEELHOUSE_UPGRADE_CACHE_COMMIT-unknown}; needle="invalid commit='$value'" ;;
+      helper-link|bootstrap-link|upgrade-link) ln -s "$install/outside" "$install/wheelhouse/.template-cache" ;;
+      upgrade-target) target=${WHEELHOUSE_UPGRADE_CACHE_TARGET-..}; needle='STOP: unsafe TARGET cache name' ;;
+      *-good) value=$good_sha; expected=0 ;;
+    esac
+    case "$name" in *leaf-link)
+      mkdir -p "$install/wheelhouse/.template-cache" "$install/outside/.git"
+      case "$name" in helper-*) cache_path=1234567;; bootstrap-*) cache_path=source-head;; *) cache_path=main;; esac
+      ln -s "$install/outside" "$install/wheelhouse/.template-cache/$cache_path"
+      ;;
+    esac
+    # A symlinked wheelhouse ancestor must fail the physical-directory check,
+    # even when .template-cache itself is a real directory.
+    case "$name" in *parent-link)
+      mv -f "$install/wheelhouse" "$install/owned-wheelhouse"
+      ln -s "$install/owned-wheelhouse" "$install/wheelhouse"
+      ;;
+    esac
+    printf 'source=%s\ncommit=%s\npath=%s\nnamespace=fixture\n' "$cases/source" "$value" "$install/dead-path" > "$install/wheelhouse/.template-source"
+    : > "$install/git.log"
+    rc=0
+    case "$name" in
+      helper-*)
+        if [ "$expected" = 0 ]; then
+          WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY=1 bash "$install/seats/upgrade-runbook.selftest.sh" > "$install/out" 2> "$install/err" || rc=$?
+        else
+          PATH="$cases/bin:$PATH" CACHE_GIT_LOG="$install/git.log" CACHE_CLONE_FAIL=1 WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY=1 bash "$install/seats/upgrade-runbook.selftest.sh" > "$install/out" 2> "$install/err" || rc=$?
+        fi
+        ;;
+      *)
+        case "$name" in bootstrap-*) cache_path="$cases/bootstrap.sh";; upgrade-diff-*) cache_path="$cases/diff.sh";; upgrade-stamp-*) cache_path="$cases/stamp.sh";; *) cache_path="$cases/upgrade.sh";; esac
+        if [ "$expected" = 0 ]; then
+          (cd "$install" && CACHE_TEST_TARGET="$target" bash -e "$cache_path") > "$install/out" 2> "$install/err" || rc=$?
+        else
+          (cd "$install" && PATH="$cases/bin:$PATH" CACHE_GIT_LOG="$install/git.log" CACHE_TEST_TARGET="$target" bash -e "$cache_path") > "$install/out" 2> "$install/err" || rc=$?
+        fi
+        ;;
+    esac
+    [ "$rc" -eq "$expected" ] || { cat "$install/out" "$install/err"; fail "$name: exit $rc expected $expected; victim=$(test -f "$install/victim/KEEP" && echo present || echo GONE) source-head=$(test -f "$install/outside/source-head/KEEP" && echo present || echo GONE) main=$(test -f "$install/outside/main/KEEP" && echo present || echo GONE)"; }
+    if [ "$expected" = 0 ]; then
+      case "$name" in
+        helper-good) cache_path="$install/wheelhouse/.template-cache/$(printf '%s' "$good_sha" | cut -c1-12)"; grep -qxF "$cache_path" "$install/out" || fail "$name: wrong returned cache path" ;;
+        bootstrap-good) cache_path="$install/wheelhouse/.template-cache/source-head" ;;
+        upgrade-good) cache_path="$install/wheelhouse/.template-cache/main" ;;
+      esac
+      git -C "$cache_path" cat-file -e "$good_sha^{commit}" || fail "$name: real local clone lacks commit"
+    else
+      grep -qF "$needle" "$install/err" && ! grep -q '^clone ' "$install/git.log" || { cat "$install/err"; fail "$name: no pre-action refusal (exit $rc); victim=$(test -f "$install/victim/KEEP" && echo present || echo GONE) source-head=$(test -f "$install/outside/source-head/KEEP" && echo present || echo GONE) main=$(test -f "$install/outside/main/KEEP" && echo present || echo GONE)"; }
+    fi
+    [ -f "$install/victim/KEEP" ] && [ -f "$install/outside/source-head/KEEP" ] && [ -f "$install/outside/main/KEEP" ] && [ -f "$install/outside/1234567/KEEP" ] || fail "$name: KEEP deleted"
+    pass "cache recovery $name: sentinel preserved, expected exit $rc"
+  done
+}
+
+if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" = 1 ]; then
+  cache_recovery_tests
+  echo "upgrade-runbook.selftest: PASS (cache recovery only; $PASS checks)"
+  exit 0
+fi
 command -v zsh >/dev/null 2>&1 || fail "zsh is required for this selftest"
 
+producer_migration_tests() (
+  # No adapter, dispatch, remote, reset, or enclosing-repo discovery in this leg.
+  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+  export GIT_CEILING_DIRECTORIES="$TMP"
+  local runbook=${WHEELHOUSE_UPGRADE_RUNBOOK:-$TEMPLATE/runbooks/UPGRADE.md}
+  [ -f "$runbook" ] && [ -f "$TEMPLATE/contracts/PRODUCER.md" ] || fail "producer migration target source missing"
+  block() {
+    awk -v heading="$1" '
+      $0 ~ heading { section=1; next }
+      section && !fence && /^##/ { exit }
+      section && /^[[:space:]]*```bash$/ { fence=1; next }
+      section && fence && /^[[:space:]]*```$/ { exit }
+      section && fence { print }
+    ' "$runbook"
+  }
+  block '^### .* becomes producer$' > "$TMP/rename.sh"
+  block '^### Copy the contracts$' > "$TMP/copy.sh"
+  block '^## 4\\.' > "$TMP/splice.sh"
+  block '^## 5\\.' > "$TMP/reverify.sh"
+  local old_path old_role
+  # Retired identifiers have one source: the migration subsection itself.
+  old_path=$(awk '$1=="git" && $2=="mv" {print $3}' "$TMP/rename.sh")
+  # Negative runbooks remove the mv command, so derive from the guard as well.
+  [ -n "$old_path" ] || old_path=$(awk '$1=="test" && $2=="!" && $3=="-e" {print $4}' "$TMP/rename.sh")
+  case "$old_path" in wheelhouse/crew/*.md) ;; *) fail "migration old path missing or ambiguous: $old_path";; esac
+  old_role=$(basename "$old_path" .md | tr '[:upper:]' '[:lower:]')
+  for file in rename copy splice reverify; do [ -s "$TMP/$file.sh" ] || fail "missing printed $file block"; done
+  { printf 'set -e\nTEMPLATE=$1\n'; cat "$TMP/rename.sh" "$TMP/copy.sh" "$TMP/splice.sh"; } > "$TMP/migrate.sh"
+  { awk '/^check_producer_rename\(\)/ {f=1} f {print} f && /^}$/ {exit}' "$TMP/rename.sh"; cat "$TMP/reverify.sh"; } > "$TMP/check-rename.sh"
+  local selected=${WHEELHOUSE_UPGRADE_PRODUCER_CASE:-all}
+  case "$selected" in all|bash-existing|bash-absent|zsh-existing|zsh-absent|bash-no-roster|zsh-no-roster|bash-existing-guard|bash-absent-guard|zsh-existing-guard|zsh-absent-guard) ;; *) fail "unknown producer migration case: $selected";; esac
+  for shell in bash zsh; do
+    for mode in existing absent no-roster; do
+      [ "$selected" = all ] || [ "$selected" = "$shell-$mode" ] || [ "$selected" = "$shell-$mode-guard" ] || continue
+      local project="$TMP/producer-$shell-$mode"
+      mkdir -p "$project/wheelhouse/crew" "$project/wheelhouse/fleet"
+      git -C "$project" init -q -b main
+      [ -d "$project/.git" ] && [ "$(git -C "$project" rev-parse --show-toplevel)" = "$(cd "$project" && pwd -P)" ] || fail "migration fixture git root escaped: $project"
+      # A pre-seats install has neither a roster nor a seats directory. Other
+      # cases carry Step 5's CLI, reading only this fixture's metadata.
+      if [ "$mode" != no-roster ]; then
+        mkdir -p "$project/seats"
+        for source in roster.ts pool.ts harness.ts credential-shapes.ts; do cp -f "$ROOT/seats/$source" "$project/seats/$source"; done
+      fi
+      if [ "$mode" != absent ]; then
+        printf '# Old planning contract\n\n## This project\n\n### The territory\n\nTerritory sentinel — local boundaries, not template prose.\nKeep these trailing spaces.  \n\n' > "$project/$old_path"
+        awk 'f{print} /^## This project$/{f=1}' "$project/$old_path" > "$project/before-half"
+        if [ "$mode" = existing ]; then
+          printf '{"seats":{"planner":{"role":"%s","account":{"dir":"fixture-account-unchanged"}}}}\n' "$old_role" > "$project/seats/seats.json"
+        fi
+      else
+        printf '%s\n' '{"seats":{"producer":{"role":"producer","external":true,"runtime":"commander-subagent"}}}' > "$project/seats/seats.json"
+      fi
+      git -C "$project" add .
+      git -C "$project" -c user.name=selftest -c user.email=selftest@local -c commit.gpgsign=false commit -q -m fixture
+      [ "$(git -C "$project" rev-parse --show-toplevel)" = "$(cd "$project" && pwd -P)" ] || fail "migration fixture moved before commands"
+      if [ "$mode" = no-roster ]; then
+        [ ! -e "$project/seats" ] || fail "pre-seats fixture already has seats before migration ($shell)"
+      fi
+      (cd "$project" && "$shell" "$TMP/migrate.sh" "$TEMPLATE") > "$project/migration.out" 2> "$project/migration.err" || { cat "$project/migration.err"; fail "printed producer migration failed ($shell/$mode)"; }
+      [ -f "$project/wheelhouse/crew/PRODUCER.md" ] || fail "producer brief absent ($shell/$mode)"
+      if [ "$mode" != absent ]; then
+        awk 'f{print} /^## This project$/{f=1}' "$project/wheelhouse/crew/PRODUCER.md" > "$project/after-half"
+        cmp "$project/before-half" "$project/after-half" || fail "producer migration lost byte-identical installed territory ($shell)"
+        awk '/^## This project$/{exit} {print}' "$project/wheelhouse/crew/PRODUCER.md" > "$project/contract"
+        awk '/^## This project$/{exit} {print}' "$TEMPLATE/contracts/PRODUCER.md" > "$project/expected-contract"
+        cmp "$project/contract" "$project/expected-contract" || fail "producer migration contract differs ($shell)"
+        if [ "$mode" = existing ]; then
+          bun -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(r.seats.planner.role!=="producer" || r.seats.planner.account.dir!=="fixture-account-unchanged") process.exit(1)' "$project/seats/seats.json" || fail "producer role rewrite failed or account changed ($shell)"
+          grep -qx 'producer role changed: planner' "$project/migration.out" || fail "producer role rewrite did not name changed seat ($shell)"
+        fi
+        [ ! -e "$project/$old_path" ] || fail "old brief remains ($shell)"
+      else
+        cmp "$TEMPLATE/contracts/PRODUCER.md" "$project/wheelhouse/crew/PRODUCER.md" || fail "absent producer was not copied whole ($shell)"
+      fi
+      if [ "$mode" = no-roster ]; then
+        [ ! -e "$project/seats" ] || fail "migration invented seats metadata ($shell)"
+        [ ! -s "$project/migration.err" ] || { cat "$project/migration.err"; fail "pre-seats migration emitted stderr ($shell)"; }
+        [ "$(grep -Fxc 'producer roster rewrite skipped: seats/seats.json absent (pre-seats install)' "$project/migration.out")" = 1 ] || fail "pre-seats migration did not report exactly one roster skip ($shell)"
+        pass "PASS producer migration no-roster ($shell): skip reported once, territory preserved, no seats metadata invented"
+        # Provisioning the required producer belongs to the operator before
+        # Step 5. This case tests the printed rename/copy/splice, not that CLI.
+        continue
+      fi
+      (cd "$project" && "$shell" "$TMP/check-rename.sh") > "$project/check.out" 2> "$project/check.err" || fail "printed step 5 producer guard failed ($shell/$mode)"
+      if [ "$selected" != "$shell-$mode-guard" ]; then pass "PASS producer migration $mode ($shell): contract and territory checked"; fi
+      # The re-verify guard must catch an independently left-behind old brief.
+      printf 'leftover fixture brief\n' > "$project/$old_path"
+      local rc=0
+      (cd "$project" && "$shell" "$TMP/check-rename.sh") > "$project/leftover.out" 2> "$project/leftover.err" || rc=$?
+      [ "$rc" -eq 1 ] && grep -qF 'STOP: legacy planning brief remains' "$project/leftover.err" || fail "step 5 accepted leftover old brief ($shell/$mode rc=$rc)"
+      pass "PASS producer leftover guard ($shell/$mode)"
+    done
+  done
+)
+
+skills_tests() {
+  mkdir -p "$TMP/skills fixture"
+  bun "$TEMPLATE/seats/fixtures/upgrade-skills.ts" "$TEMPLATE" "$TMP/skills fixture" || fail "printed skills recipes or owner signal command failed"
+  pass "skills recipes: fresh upgrade, repeat, preserved product manuals, refusal, install, scoped readback and owner command (bash/zsh)"
+}
+if [ "${WHEELHOUSE_UPGRADE_SKILLS_ONLY:-0}" = 1 ]; then
+  skills_tests
+  echo "upgrade-runbook.selftest: PASS (skills only; no adapter leg)"
+  exit 0
+fi
+
+if [ "${WHEELHOUSE_UPGRADE_PRODUCER_ONLY:-0}" = 1 ]; then
+  producer_migration_tests
+  echo "upgrade-runbook.selftest: PASS (producer migration only: ${WHEELHOUSE_UPGRADE_PRODUCER_CASE:-all}; no adapter leg)"
+  exit 0
+fi
+# Installed history fixtures may resolve a source predating this migration.
 if [ "$TEMPLATE" = "$ROOT" ]; then
+  skills_tests
+  bun "$ROOT/seats/fixtures/upgrade-baseline.ts" "$ROOT" "$TMP"
+  pass "default baseline is public old-install shape; missing baseline refuses before fixture setup (negative controls detected)"
+  cache_recovery_tests
+  producer_migration_tests
+  PASS=$((PASS+10))
+
   if grep -q 'remove `seats/bin`' "$TEMPLATE/runbooks/UPGRADE.md"; then
     fail "UPGRADE.md still tells non-opt-in installs to remove seats/bin"
   fi
@@ -102,6 +380,9 @@ if [ "$TEMPLATE" = "$ROOT" ]; then
   grep -qF 'seats/comms.ts send' "$TEMPLATE/generated/CLAUDE.md.example" || fail "generated CLAUDE specimen missing seats/comms.ts send"
   grep -qF 'inbound' "$TEMPLATE/generated/CLAUDE.md.example" || fail "generated CLAUDE specimen missing inbound rule"
   pass "stakeholder-channel upgrade docs name channels, comms, specimens, and read-back"
+  grep -qF 'merge-target' "$TEMPLATE/runbooks/UPGRADE.md" || fail "UPGRADE.md missing merge-target migration"
+  grep -qF 'merge-target=' "$TEMPLATE/BOOTSTRAP.md" || fail "BOOTSTRAP.md missing merge-target install record"
+  pass "merge-target install and upgrade docs record the dispatch base"
 fi
 
 PROJ="$TMP/project"
@@ -160,11 +441,11 @@ for f in "$TEMPLATE"/runbooks/*; do
   rm -f "$baseline"
 done
 ' zsh "$TEMPLATE" "$PROJ" "$BASELINE")
-printf '%s\n' "$STEP3_OUT" | grep -q 'baseline unreadable' && fail "zsh step 3 reported baseline unreadable on a healthy baseline: $STEP3_OUT"
+printf '%s\n' "$STEP3_OUT" | grep >/dev/null 'baseline unreadable' && fail "zsh step 3 reported baseline unreadable on a healthy baseline: $STEP3_OUT"
 for b in PROMOTION.md RUNNING_THE_LOOP.md; do
-  printf '%s\n' "$STEP3_OUT" | grep -Eq "runbook updated: $b" || fail "zsh step 3 did not update ${b}: $STEP3_OUT"
+  printf '%s\n' "$STEP3_OUT" | grep -E >/dev/null "runbook updated: $b" || fail "zsh step 3 did not update ${b}: $STEP3_OUT"
 done
-printf '%s\n' "$STEP3_OUT" | grep -Eq "runbook current: UPGRADE.md" || fail "zsh step 3 did not report byte-equal UPGRADE.md as current: $STEP3_OUT"
+printf '%s\n' "$STEP3_OUT" | grep -E >/dev/null "runbook current: UPGRADE.md" || fail "zsh step 3 did not report byte-equal UPGRADE.md as current: $STEP3_OUT"
 pass "zsh step 3 runbook loop reads real baseline and reports byte-equal files current"
 
 REMOTE_SRC="$TMP/reused-cache-source"
@@ -223,7 +504,7 @@ sed -i.bak "s|^commit=.*|commit=$NEW_COMMIT|" wheelhouse/.template-source
 ' 2>&1)
 STEP6_STOP_RC=$?
 set -e
-if [ "$STEP6_STOP_RC" -eq 1 ] && printf '%s\n' "$STEP6_STOP_OUT" | grep -q 'target resolves to the baseline; the cache did not advance'; then
+if [ "$STEP6_STOP_RC" -eq 1 ] && printf '%s\n' "$STEP6_STOP_OUT" | grep >/dev/null 'target resolves to the baseline; the cache did not advance'; then
   pass "step 6 stale-cache guard STOPs when origin target differs from BASE"
 else
   fail "step 6 stale-cache guard did not STOP (rc=$STEP6_STOP_RC): $STEP6_STOP_OUT"
@@ -242,7 +523,7 @@ printf 'untracked\n' > "$GITPROJ/wheelhouse/evidence-dir/proof.txt"
   cd "$GITPROJ"
   git add wheelhouse/ seats/ .gitignore CLAUDE.md
 )
-if git -C "$GITPROJ" diff --cached --name-only | grep -qx 'wheelhouse/evidence-dir/proof.txt'; then
+if git -C "$GITPROJ" diff --cached --name-only | grep -x >/dev/null 'wheelhouse/evidence-dir/proof.txt'; then
   pass "step 8 broad wheelhouse add stages untracked files under wheelhouse"
 else
   fail "step 8 broad wheelhouse add did not demonstrate untracked wheelhouse staging"
@@ -280,11 +561,11 @@ comm -13 <(sort -u "$yours_h") <(sort -u "$upstream_h") | sed "s|^|project secti
 awk -v file="$yours" '\''NR==FNR { if (!($0 in yi)) yi[$0]=FNR; next } ($0 in yi) && yi[$0] != FNR { print "project section UPSTREAM, present, different position — " file ": " $0 }'\'' "$yours_h" "$upstream_h"
 rm -f "$yours_h" "$upstream_h"
 ' zsh "$HEADING_FIX/upstream.md" "$HEADING_FIX/yours.md")
-if printf '%s\n' "$HEADING_OUT" | grep -q 'not in yours .*### Gamma' \
-  && ! printf '%s\n' "$HEADING_OUT" | grep -q 'not in yours .*### Alpha' \
-  && ! printf '%s\n' "$HEADING_OUT" | grep -q 'not in yours .*### Beta' \
-  && printf '%s\n' "$HEADING_OUT" | grep -q 'present, different position .*### Alpha' \
-  && printf '%s\n' "$HEADING_OUT" | grep -q 'present, different position .*### Beta'; then
+if printf '%s\n' "$HEADING_OUT" | grep >/dev/null 'not in yours .*### Gamma' \
+  && ! printf '%s\n' "$HEADING_OUT" | grep >/dev/null 'not in yours .*### Alpha' \
+  && ! printf '%s\n' "$HEADING_OUT" | grep >/dev/null 'not in yours .*### Beta' \
+  && printf '%s\n' "$HEADING_OUT" | grep >/dev/null 'present, different position .*### Alpha' \
+  && printf '%s\n' "$HEADING_OUT" | grep >/dev/null 'present, different position .*### Beta'; then
   pass "step 4 heading report separates new headings from reordered existing headings"
 else
   fail "step 4 heading report misclassified moved headings: $HEADING_OUT"
@@ -307,7 +588,7 @@ EOF
   set +e
   NO_LIB_RC=0; NO_LIB_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_NO_LIB/seats/upgrade-runbook.selftest.sh" 2>&1) || NO_LIB_RC=$?
   set -e
-  if [ "$NO_LIB_RC" -ne 0 ] && printf '%s\n' "$NO_LIB_OUT" | grep -q 'selftest-lib.sh'; then
+  if [ "$NO_LIB_RC" -ne 0 ] && printf '%s\n' "$NO_LIB_OUT" | grep >/dev/null 'selftest-lib.sh'; then
     pass "installed-layout fixture without selftest-lib.sh fails honestly instead of passing"
   else
     fail "installed-layout fixture without selftest-lib.sh was not caught (rc=$NO_LIB_RC): $NO_LIB_OUT"
@@ -365,7 +646,7 @@ EOF
   set +e
   DEAD_UNREACHABLE_RC=0; DEAD_UNREACHABLE_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_DEAD_UNREACHABLE/seats/upgrade-runbook.selftest.sh" 2>&1) || DEAD_UNREACHABLE_RC=$?
   set -e
-  if [ "$DEAD_UNREACHABLE_RC" -eq 42 ] && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep -q 'REFUSED template source: source=' && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep -q 'unreachable'; then
+  if [ "$DEAD_UNREACHABLE_RC" -eq 42 ] && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep >/dev/null 'REFUSED template source: source=' && printf '%s\n' "$DEAD_UNREACHABLE_OUT" | grep >/dev/null 'unreachable'; then
     pass "installed-layout dead path= with unreachable source= refuses by named source reason"
   else
     fail "installed-layout dead path= with unreachable source= was not legible (rc=$DEAD_UNREACHABLE_RC): $DEAD_UNREACHABLE_OUT"
@@ -378,7 +659,7 @@ EOF
   set +e
   MISSING_RC=0; MISSING_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_MISSING/seats/upgrade-runbook.selftest.sh" 2>&1) || MISSING_RC=$?
   set -e
-  if [ "$MISSING_RC" -eq 42 ] && printf '%s\n' "$MISSING_OUT" | grep -q 'wheelhouse/.template-source missing' && printf '%s\n' "$MISSING_OUT" | grep -q 'source= and commit='; then
+  if [ "$MISSING_RC" -eq 42 ] && printf '%s\n' "$MISSING_OUT" | grep >/dev/null 'wheelhouse/.template-source missing' && printf '%s\n' "$MISSING_OUT" | grep >/dev/null 'source= and commit='; then
     pass "installed-layout missing .template-source fails legibly with source= and commit= expectation"
   else
     fail "installed-layout missing .template-source was not legible (rc=$MISSING_RC): $MISSING_OUT"
@@ -392,7 +673,7 @@ EOF
   set +e
   BAD_RC=0; BAD_OUT=$(WHEELHOUSE_UPGRADE_SELFTEST_INSTALLED_LEG=0 bash "$INSTALL_BAD/seats/upgrade-runbook.selftest.sh" 2>&1) || BAD_RC=$?
   set -e
-  if [ "$BAD_RC" -eq 42 ] && printf '%s\n' "$BAD_OUT" | grep -q 'has no source= line' && printf '%s\n' "$BAD_OUT" | grep -q 'path='; then
+  if [ "$BAD_RC" -eq 42 ] && printf '%s\n' "$BAD_OUT" | grep >/dev/null 'has no source= line' && printf '%s\n' "$BAD_OUT" | grep >/dev/null 'path='; then
     pass "installed-layout bad path= without source= fails legibly before raw git fatal"
   else
     fail "installed-layout bad path= without source= was not legible (rc=$BAD_RC): $BAD_OUT"
@@ -402,7 +683,7 @@ fi
 
 if [ -f "$ROOT/seats/adapter.ts" ] && [ -f "$ROOT/seats/seat-env.sh" ]; then
 # Dynamic-staffing upgrade: declining the pool is a byte-for-byte no-op, while
-# accepting moves old worker/verifier rows into seats/pool.json without copying
+# accepting moves old worker/reviewer rows into seats/pool.json without copying
 # their login directories.
 POOL_FIX="$TMP/pool-upgrade"
 POOL_HOME="$POOL_FIX/home"
@@ -414,20 +695,23 @@ printf 'seats/run/\nseats/logs/\nseats/state.json\nseats/staffing.json\n.wheelho
 printf '# ISA\n' > "$POOL_PROJ/wheelhouse/ISA.md"
 git -C "$POOL_PROJ" add .gitignore wheelhouse/ISA.md
 git -C "$POOL_PROJ" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
-for f in adapter.ts seat-worktree.ts seat-activity.ts pool.ts roster.ts credential-shapes.ts quota.ts harness.ts briefs.ts host-budget.ts fleet-snapshot.ts staffing.ts lock.ts jev.ts seat-env.sh; do cp "$ROOT/seats/$f" "$POOL_PROJ/seats/$f"; done
-cp -R "$ROOT/seats/drivers" "$POOL_PROJ/seats/drivers"
+selftest_copy_seat_runtime "$POOL_PROJ" "$ROOT/seats"
 chmod +x "$POOL_PROJ/seats/seat-env.sh"
 printf '# Fleet: Worker\n\nfixture brief.\n' > "$POOL_PROJ/contracts/WORKER.md"
 printf 'namespace=poolupgrade\n' > "$POOL_PROJ/wheelhouse/.template-source"
 cat > "$POOL_PROJ/seats/seats.json" <<'JSON'
-{"version":1,"seats":{"worker-a":{"role":"worker","harness":"pi","provider":"anthropic","model":"stub-model","account":{"dir":"~/.pi-seats-poolupgrade/worker-a","authRoute":"oauth","label":"old worker login"}},"verifier-a":{"role":"verifier","harness":"pi","provider":"anthropic","model":"stub-model","account":{"dir":"~/.pi-seats-poolupgrade/verifier-a","authRoute":"oauth","label":"old verifier login"}},"designer":{"role":"designer","harness":"pi","provider":"anthropic","model":"stub-model","account":{"dir":"~/.pi-seats-poolupgrade/designer","authRoute":"oauth"}}}}
+{"version":1,"seats":{"worker-a":{"role":"worker","harness":"pi","provider":"anthropic","model":"stub-model","account":{"dir":"~/.pi-seats-poolupgrade/worker-a","authRoute":"oauth","label":"old worker login"}},"verifier-a":{"role":"reviewer","harness":"pi","provider":"anthropic","model":"stub-model","account":{"dir":"~/.pi-seats-poolupgrade/verifier-a","authRoute":"oauth","label":"old verifier login"}},"producer":{"role":"producer","external":true},"verifier":{"role":"verifier","harness":"pi","provider":"anthropic","model":"stub-model","account":{"dir":"~/.pi-seats-poolupgrade/walker","authRoute":"oauth"}}}}
 JSON
-mkdir -p "$POOL_HOME/.pi-seats-poolupgrade/designer"
+mkdir -p "$POOL_HOME/.pi-seats-poolupgrade/walker"
 printf '{"seats":{"worker-a":{"pid":999999,"sessionFile":"old-worker"},"verifier-a":{"pid":999998,"sessionFile":"old-verifier"}}}\n' > "$POOL_PROJ/seats/state.json"
 cp "$POOL_PROJ/seats/seats.json" "$POOL_FIX/seats.before.json"
 cp "$POOL_PROJ/seats/state.json" "$POOL_FIX/state.before.json"
 rm -f "$POOL_PROJ/seats/pool.json"
-POOL_DECLINE_OUT=$(cd "$POOL_PROJ" && HOME="$POOL_HOME" bun seats/pool.ts check 2>&1)
+# Execute the runbook's decline block, including both printed diff commands.
+awk '/^### Move a fixed roster to a pool \(optional\)/{section=1;next} section && /^```bash$/{fence=1;next} section && fence && /^```$/{exit} section && fence {print}' "$TEMPLATE/runbooks/UPGRADE.md" > "$POOL_FIX/decline.sh"
+[ -s "$POOL_FIX/decline.sh" ] || fail "pool migration decline block missing"
+POOL_DECLINE_OUT=$(cd "$POOL_PROJ" && HOME="$POOL_HOME" bash -e "$POOL_FIX/decline.sh" 2>&1)
+printf '%s\n' "$POOL_DECLINE_OUT"
 if [ "$POOL_DECLINE_OUT" = 'pool: none (fixed roster)' ] && cmp -s "$POOL_FIX/seats.before.json" "$POOL_PROJ/seats/seats.json" && cmp -s "$POOL_FIX/state.before.json" "$POOL_PROJ/seats/state.json" && [ ! -e "$POOL_PROJ/seats/pool.json" ]; then
   pass "pool migration decline leaves seats.json, state.json, and pool.json untouched"
 else
@@ -472,9 +756,12 @@ chmod +x "$POOL_BIN/bd"
 POOL_RUN(){ PRC=0; POUT=$(cd "$POOL_PROJ" && env HOME="$POOL_HOME" PATH="$POOL_BIN:$PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun seats/staffing.ts "$@" 2>&1) || PRC=$?; }
 POOL_RUN add reviewers; [ "$PRC" -eq 0 ] || fail "pool migration add reviewer failed: $POUT"
 POOL_RUN status; [ "$PRC" -eq 0 ] || fail "pool migration status failed: $POUT"
-printf '%s\n' "$POUT" | grep -q 'verifier-verifier-a | verifier | pi | stub-model | old verifier login' || fail "pool migration status missing staffed reviewer: $POUT"
-node -e 'const s=require(process.argv[1]); if(!s.seats["verifier-verifier-a"]) process.exit(1)' "$POOL_PROJ/seats/staffing.json" || fail "pool migration did not register a staffed seat"
-if grep -q 'worker-a' "$POOL_PROJ/seats/seats.json" || grep -q 'verifier-a' "$POOL_PROJ/seats/seats.json"; then fail "pool migration left old fixed worker/verifier rows"; fi
+printf '%s\n' "$POUT"
+printf '%s\n' "$POUT" | grep -q 'reviewer-verifier-a | reviewer | pi | stub-model | old verifier login' || fail "pool migration status missing staffed reviewer: $POUT"
+node -e 'const s=require(process.argv[1]); if(s.seats["reviewer-verifier-a"]?.role!=="reviewer") process.exit(1)' "$POOL_PROJ/seats/staffing.json" || fail "pool migration did not register a staffed reviewer"
+node -e 'const s=require(process.argv[1]); if(s.seats.verifier?.role!=="verifier" || !s.seats.producer || s.seats["worker-a"] || s.seats["verifier-a"]) process.exit(1)' "$POOL_PROJ/seats/seats.json" || fail "pool migration changed walker/producer or left pooled fixed rows"
+POOL_RUN drop reviewer-verifier-a
+[ "$PRC" -eq 0 ] && printf '%s\n' "$POUT" | grep -q 'at minimum: reviewers 1/1' || fail "pool migration reviewer drop miscounted: $POUT"
 pass "pool migration adopt reuses existing login dirs, loads pool, removes fixed rows, and registers a staffed seat"
 
 # Harness-switch upgrade: old rosters without harness fields still mean pi, and
@@ -537,7 +824,7 @@ set +e
 HRUN_CANARY_OUT=$(set -e; HRUN_ADAPTER_CMD="$HARNESS_BIN/fail-command"; hrun probe worker-a; [ "$HRC" -eq 0 ] || fail "hrun canary surfaced failing adapter command: $HOUT")
 HRUN_CANARY_RC=$?
 set -e
-if [ "$HRUN_CANARY_RC" -eq 1 ] && printf '%s\n' "$HRUN_CANARY_OUT" | grep -q '^not ok '; then
+if [ "$HRUN_CANARY_RC" -eq 1 ] && printf '%s\n' "$HRUN_CANARY_OUT" | grep >/dev/null '^not ok '; then
   pass "hrun reports failing adapter commands with a not ok line"
 else
   fail "hrun canary did not emit a not ok line for a failing adapter command (rc=$HRUN_CANARY_RC): $HRUN_CANARY_OUT"
@@ -551,18 +838,23 @@ hrun stop worker-a; [ "$HRC" -eq 0 ] || fail "stop switched seat before harness 
 env HOME="$HARNESS_HOME" PROJ="$HARNESS_PROJ" node -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); const s=r.seats["worker-a"]; s.harness="claude-code"; s.model="sonnet"; s.provider="anthropic"; s.allowedTools="Bash(printf *)"; s.account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 printf '{"loggedIn":true}\n' > "$HARNESS_HOME/.pi-seats-harnessswitch/worker-a/.claude.json"
 SEAT_ENV_OUT=$(env HOME="$HARNESS_HOME" PATH="$HARNESS_BIN:$PATH" "$ROOT/seats/seat-env.sh" harnessswitch worker-a "$HARNESS_PROJ")
-printf '%s\n' "$SEAT_ENV_OUT" | grep -q 'CLAUDE_CONFIG_DIR' || fail "seat-env did not print claude binding after switch: $SEAT_ENV_OUT"
+printf '%s\n' "$SEAT_ENV_OUT" | grep >/dev/null 'CLAUDE_CONFIG_DIR' || fail "seat-env did not print claude binding after switch: $SEAT_ENV_OUT"
 hrun probe worker-a; [ "$HRC" -eq 0 ] && [ "$HOUT" = OK ] || fail "claude-code binding probe failed: $HOUT"
 hrun reset worker-a; [ "$HRC" -eq 0 ] || fail "claude-code reset failed: $HOUT"
 hrun dispatch worker-a smoke-a 'Smoke check after harness switch: reply OK and stop.'; [ "$HRC" -eq 0 ] || fail "claude-code smoke dispatch failed: $HOUT"
-for i in $(seq 1 50); do grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl" && break; sleep 0.1; done
+printf 'FIXTURE_WAIT upgrade runbook: actual worker-a smoke response\n' >&2
+while ! grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl"; do
+  HARNESS_SMOKE_PID="$(hstate worker-a pid)"
+  [ -n "$HARNESS_SMOKE_PID" ] && kill -0 "$HARNESS_SMOKE_PID" 2>/dev/null || break
+  sleep 0.1
+done
 grep -q '"text":"OK"' "$HARNESS_PROJ/seats/logs/worker-a.jsonl" || fail "claude-code smoke dispatch did not complete OK"
 [ "$(hstate worker-b pid)" = "$B_PID_BEFORE" ] && [ "$(hstate worker-b sessionFile)" = "$B_SESS_BEFORE" ] || fail "switching worker-a touched worker-b state/session"
 # Switch back to pi, again without touching worker-b.
 hrun stop worker-a; [ "$HRC" -eq 0 ] || fail "stop claude-code seat before switching back failed: $HOUT"
 env HOME="$HARNESS_HOME" PROJ="$HARNESS_PROJ" node -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const r=require(p); const s=r.seats["worker-a"]; s.harness="pi"; s.model="stub-model"; s.provider="anthropic"; delete s.allowedTools; s.account.authRoute="oauth"; fs.writeFileSync(p, JSON.stringify(r,null,2)+"\n")'
 SEAT_ENV_OUT=$(env HOME="$HARNESS_HOME" PATH="$HARNESS_BIN:$PATH" "$ROOT/seats/seat-env.sh" harnessswitch worker-a "$HARNESS_PROJ")
-printf '%s\n' "$SEAT_ENV_OUT" | grep -q 'PI_CODING_AGENT_DIR' || fail "seat-env did not print pi binding after switch back: $SEAT_ENV_OUT"
+printf '%s\n' "$SEAT_ENV_OUT" | grep >/dev/null 'PI_CODING_AGENT_DIR' || fail "seat-env did not print pi binding after switch back: $SEAT_ENV_OUT"
 hrun probe worker-a; [ "$HRC" -eq 0 ] || fail "pi binding probe after switch back failed: $HOUT"
 hrun reset worker-a; [ "$HRC" -eq 0 ] || fail "pi reset after switch back failed: $HOUT"
 hrun dispatch worker-a smoke-b 'Smoke check after switching back to pi: reply OK and stop.'; [ "$HRC" -eq 0 ] || fail "pi smoke dispatch after switch back failed: $HOUT"

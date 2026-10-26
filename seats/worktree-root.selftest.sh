@@ -7,6 +7,7 @@ set -uo pipefail
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+export WHEELHOUSE_CONTRACT_FIXTURE="$HERE/fixtures/contracts/valid.md"
 ADAPTER="$HERE/adapter.ts"
 PRUNE="$HERE/prune.ts"
 SEAT_ENV="$HERE/seat-env.sh"
@@ -26,13 +27,14 @@ command -v bun >/dev/null 2>&1 || { echo "selftest: bun is required" >&2; exit 2
 command -v node >/dev/null 2>&1 || { echo "selftest: node is required" >&2; exit 2; }
 
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-worktree-root-selftest.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"
 HOME_FIX="$FIX/home"
 BIN="$FIX/bin"
 PROJ="$FIX/project"
 RUN_PATH="$BIN:$(dirname "$(command -v bun)"):$(dirname "$(command -v node)"):/usr/bin:/bin"
 cleanup() { pkill -f "$FIX" 2>/dev/null || true; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 mkdir -p "$HOME_FIX" "$BIN" "$PROJ/seats" "$PROJ/contracts"
 
 cat > "$BIN/pi" <<'STUB'
@@ -88,7 +90,15 @@ process.on('SIGTERM', () => process.exit(0));
 STUB
 chmod +x "$BIN/pi"
 
-selftest_copy_seat_runtime "$PROJ" "$HERE"
+copy_runtime() {
+  selftest_copy_seat_runtime "$1" "$HERE" || return 2
+  # Counterfactuals replace only the copied module, never this checkout.
+  if [ -n "${WHEELHOUSE_TEST_SEAT_WORKTREE_SOURCE:-}" ]; then
+    [ -f "$WHEELHOUSE_TEST_SEAT_WORKTREE_SOURCE" ] || return 2
+    cp -f "$WHEELHOUSE_TEST_SEAT_WORKTREE_SOURCE" "$1/seats/seat-worktree.ts" || return 2
+  fi
+}
+copy_runtime "$PROJ" || exit 2
 printf '# Fleet: Worker\n\nfixture brief\n' > "$PROJ/contracts/WORKER.md"
 cat > "$PROJ/seats/seats.json" <<EOF
 {
@@ -105,7 +115,7 @@ cat > "$PROJ/seats/seats.json" <<EOF
 EOF
 
 # prune.ts discovers repositories from --root, so make the fixture root a real repo.
-git -C "$PROJ" init -q
+git -C "$PROJ" init -q -b main
 printf 'fixture\n' > "$PROJ/README.md"
 git -C "$PROJ" add README.md
 git -C "$PROJ" -c user.email=selftest@local -c user.name=selftest commit -q -m init
@@ -150,7 +160,7 @@ phase "umbrella root git repo with product-repo seat worktree"
 UMB="$FIX/umbrella"
 PRODUCT="$UMB/template"
 mkdir -p "$UMB/seats" "$UMB/contracts" "$UMB/wheelhouse" "$PRODUCT"
-selftest_copy_seat_runtime "$UMB" "$HERE"
+copy_runtime "$UMB" || exit 2
 printf '# Fleet: Worker\n\nfixture brief\n' > "$UMB/contracts/WORKER.md"
 cat > "$UMB/seats/seats.json" <<EOF
 {
@@ -173,12 +183,12 @@ namespace=umbrella
 EOF
 # This is the regression shape: the container root is itself a git repo, but
 # the worker branch belongs to the product repo recorded in .template-source.
-git -C "$UMB" init -q
+git -C "$UMB" init -q -b main
 printf 'umbrella machinery\n' > "$UMB/README.md"
 git -C "$UMB" add README.md wheelhouse/.template-source
 git -C "$UMB" -c user.email=selftest@local -c user.name=selftest commit -q -m umbrella
 
-git -C "$PRODUCT" init -q
+git -C "$PRODUCT" init -q -b main
 printf 'product\n' > "$PRODUCT/README.md"
 git -C "$PRODUCT" add README.md
 git -C "$PRODUCT" -c user.email=selftest@local -c user.name=selftest commit -q -m product
@@ -201,6 +211,70 @@ if [ $RC -eq 0 ] && [ "$(git -C "$PRODUCT" worktree list --porcelain | awk -v wt
 else
   fail "umbrella dispatch did not reuse product repo worktree (exit $RC): out=$OUT branch=$(git -C "$UMB_WT" branch --show-current 2>&1)"
 fi
+
+phase "umbrella declaration wins over an occupied product worktree"
+# Real bd show --json is an array of records. The inline declaration shape
+# reproduces a contract whose first paragraph reads 'Closes: ... . Repo: ...'.
+cat > "$BIN/bd" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1" = show ]; then cat "$FIXTURE_REPO_CLAIM"; else printf '[]\n'; fi
+STUB
+chmod +x "$BIN/bd"
+CLAIM="$FIX/repo-claim.json"
+write_repo_claim() {
+  node - "$CLAIM" "$1" "$2" <<'JS'
+const fs=require('fs'),[file,mode,id]=process.argv.slice(2);
+const repo=mode==='occupied-line'?'Repo: UMBRELLA':'Closes: H7. Repo: UMBRELLA (project-owned machinery).';
+const description=repo+'\nTrace: Dispatch regression fixture: prepare work in the repository its contract names.\nSignal: isa-gap: W3\nSkills: intent@1.0.0 outcomes@1.0.0\n\nIntent:\nRoute this fixture task to its declared repository without creating a branch in the product repository. Refuse clearly if the occupied target belongs to another repository.\n\nOutcomes:\n- O1 Dispatch prepares the declared worktree or refuses without changing the live seat.\n  consumer: machine — the fixture dispatcher and its Git witness\n  surface: the seat worktree, dispatch output and both repositories\' refs\n  check: run — dispatch this task and inspect the native branch lists and retained seat record\n';
+fs.writeFileSync(file,JSON.stringify([{id,description}])+'\n');
+JS
+}
+check_repo_claim() {
+  local bead="$1" rc=0 out
+  out="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/contract.ts" check "$bead" 2>&1)" || rc=$?
+  if [ "$rc" = 0 ]; then
+    pass "$bead fixture passes the real contract gate (native metadata, no fallback)"
+  else
+    fail "$bead fixture is not a contract (exit $rc): $out"
+    return 1
+  fi
+}
+# The original bare Repo description must still be rejected by the production gate.
+printf '%s\n' '[{"id":"bead-invalid-repo","description":"Repo: UMBRELLA"}]' > "$CLAIM"
+RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/contract.ts" check bead-invalid-repo 2>&1)" || RC=$?
+if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -qF 'contract: Signal: missing'; then
+  pass "unchanged production gate rejects the former bare Repo fixture"
+else fail "former non-contract was not rejected for its missing Signal (exit $RC): $OUT"; fi
+for mode in occupied-line occupied-inline; do
+  bead="bead-$mode"
+  write_repo_claim "$mode" "$bead"
+  check_repo_claim "$bead" || exit 1
+  cp -f "$UMB/seats/state.json" "$FIX/$mode-before.json"
+  RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/adapter.ts" dispatch worker-1 "$bead" "must not prepare a product branch" 2>&1)" || RC=$?
+  printf '%s\n' "$OUT" > "$FIX/$mode-output.txt"
+  if HOME="$HOME_FIX" bun "$HERE/fixtures/dispatch-repo.mjs" "$UMB" "$bead" "$RC" "$mode" "$FIX/$mode-before.json" "$FIX/$mode-output.txt"; then
+    pass "$mode declaration refuses a product target before creating or switching a branch"
+  else fail "$mode declaration was not safely refused: $OUT"; fi
+done
+
+phase "inline umbrella declaration prepares a fresh seat in the correct repo"
+# A second isolated account gives this seat a genuinely absent worktree target.
+node - "$UMB/seats/seats.json" <<'JS'
+const fs=require('fs'),file=process.argv[2],r=JSON.parse(fs.readFileSync(file,'utf8'));
+r.seats['worker-2']={...r.seats['worker-1'],account:{dir:'~/.pi-seats-umbrella/worker-2'}};
+fs.writeFileSync(file,JSON.stringify(r));
+JS
+RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" bash "$UMB/seats/seat-env.sh" umbrella worker-2 "$UMB" 2>&1)" || RC=$?
+if [ "$RC" = 0 ]; then pass "fresh umbrella seat is provisioned in the fixture"; else fail "fresh seat provisioning failed: $OUT"; fi
+printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-umbrella/worker-2/auth.json"
+RC=0; OUT="$(env -u BEADS_ACTOR HOME="$HOME_FIX" PATH="$RUN_PATH" bun "$UMB/seats/adapter.ts" spawn worker-2 2>&1)" || RC=$?
+if [ "$RC" = 0 ]; then pass "fresh umbrella fixture seat spawns"; else fail "fresh seat spawn failed: $OUT"; fi
+write_repo_claim fresh-inline bead-umbrella-inline
+check_repo_claim bead-umbrella-inline || exit 1
+RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/adapter.ts" dispatch worker-2 bead-umbrella-inline "prepare umbrella, not product" 2>&1)" || RC=$?
+if HOME="$HOME_FIX" bun "$HERE/fixtures/dispatch-repo.mjs" "$UMB" bead-umbrella-inline "$RC" fresh-inline unused unused; then
+  pass "inline Repo: UMBRELLA prepares the fresh worktree in umbrella only"
+else fail "inline declaration prepared the wrong repository: $OUT"; fi
 
 if [ "$FAILED" -eq 0 ]; then
   echo "worktree-root selftest passed."

@@ -1,0 +1,494 @@
+#!/usr/bin/env bash
+# selftest-sweep.selftest.sh — fixture proof for the host-wide sweep lock.
+
+SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
+. "$SELFTEST_LIB"
+
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+SWEEP="${1:-$HERE/selftest-sweep.sh}"
+[ -x "$SWEEP" ] || { echo "selftest: not executable: $SWEEP" >&2; exit 2; }
+export WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="${WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER:-$HERE/selftest-sweep-lock.ts}"
+make_lock(){
+  bun -e '
+import fs from "node:fs"; import os from "node:os"; import p from "node:path";
+const [dir,pidText]=process.argv.slice(1),pid=Number(pidText),started=new Date().toISOString().replace(/\.\d{3}Z$/,"Z");
+fs.mkdirSync(dir); fs.writeFileSync(p.join(dir,"pid"),pid+"\n"); fs.writeFileSync(p.join(dir,"started"),started+"\n");
+fs.writeFileSync(p.join(dir,"wheelhouse-selftest-sweep"),JSON.stringify({kind:"wheelhouse-selftest-sweep",version:1,pid,hostname:os.hostname(),started,token:crypto.randomUUID().replace(/-/g,"")})+"\n");
+' "$1" "$2"
+}
+
+FAILED=0
+CHECKED=0
+FIX=""
+pass(){ CHECKED=$((CHECKED + 1)); printf 'ok - %s\n' "$*"; }
+fail(){ CHECKED=$((CHECKED + 1)); printf 'not ok - %s\n' "$*"; FAILED=$((FAILED + 1)); }
+# Native event or participant exit, not a fixed number of scheduling polls.
+wait_sweep_event(){
+  local pid="$1"; shift
+  local file pattern rc
+  local -a observations=("$@")
+  printf 'FIXTURE_WAIT sweep checkpoint: pid=%s observations=%s\n' "$pid" "$*" >&2
+  while :; do
+    set -- "${observations[@]}"
+    while [ "$#" -gt 0 ]; do
+      file="$1"; pattern="$2"; shift 2
+      if [ -f "$file" ]; then
+        [ "$pattern" != '@exists' ] || return 0
+        grep -Eq -- "$pattern" "$file"; rc=$?
+        [ "$rc" != 0 ] || return 0
+        [ "$rc" = 1 ] || return "$rc"
+      fi
+    done
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.05
+  done
+}
+cleanup(){
+  [ -n "$FIX" ] && selftest_cleanup_fixture_processes "$FIX" >/dev/null 2>&1 || true
+  [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
+  return 0
+}
+selftest_install_cleanup_traps cleanup
+
+FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-selftest-sweep-selftest.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
+FIX="$(cd "$FIX" && pwd -P)"
+SUITES="$FIX/suites"
+LOCK="$FIX/host.lock"
+EVENTS="$FIX/events.log"
+mkdir -p "$SUITES"
+cat > "$SUITES/fixture.selftest.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+: "${SWEEP_ID:?}"
+: "${SWEEP_EVENTS:?}"
+printf '%s start\n' "$SWEEP_ID" >> "$SWEEP_EVENTS"
+if [ -n "${SWEEP_RELEASE:-}" ]; then
+  while [ ! -f "$SWEEP_RELEASE" ]; do sleep 0.05; done
+fi
+printf '%s end\n' "$SWEEP_ID" >> "$SWEEP_EVENTS"
+EOF
+chmod +x "$SUITES/fixture.selftest.sh"
+
+# Exercise the default (override unset), but relocate only its constant /tmp
+# prefix into this fixture. Otherwise a full sweep would wait on its own lock.
+default_tmpdir_leg(){
+  local runner="$FIX/default-project/seats/selftest-sweep.sh" host="$FIX/default-host"
+  local tmp_a="$FIX/tmp-A" tmp_b="$FIX/tmp-B" events="$FIX/default-events.log"
+  local release="$FIX/default-release" pid_a pid_b rc_a rc_b order
+  mkdir -p "$(dirname "$runner")" "$host" "$tmp_a" "$tmp_b"
+  sed "/^LOCK=/s|/tmp|$host|g" "$SWEEP" > "$runner"
+  cp -f "$(dirname "$SWEEP")/python-invocations.ts" "$(dirname "$runner")/python-invocations.ts" || exit 2
+  git -C "$FIX/default-project" init -q -b main || exit 2
+  git -C "$FIX/default-project" add seats || exit 2
+  env -u WHEELHOUSE_SELFTEST_SWEEP_LOCK TMPDIR="$tmp_a" SWEEP_RELEASE="$release" SWEEP_ID=TA SWEEP_EVENTS="$events" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$runner" > "$FIX/TA.out" 2> "$FIX/TA.err" &
+  pid_a=$!
+  wait_sweep_event "$pid_a" "$events" '^TA start$' || true
+  if ! grep -q '^TA start$' "$events" 2>/dev/null; then
+    : > "$release"; wait "$pid_a" || true
+    fail "default TMPDIR fixture first sweep never started"; return
+  fi
+  env -u WHEELHOUSE_SELFTEST_SWEEP_LOCK TMPDIR="$tmp_b" SWEEP_RELEASE="$release" SWEEP_ID=TB SWEEP_EVENTS="$events" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$runner" > "$FIX/TB.out" 2> "$FIX/TB.err" &
+  pid_b=$!
+  wait_sweep_event "$pid_b" "$FIX/TB.err" 'waiting for host-wide lock' "$events" '^TB start$' || true
+  if grep -qF "waiting for host-wide lock $host/wheelhouse-selftest-sweep.lock" "$FIX/TB.err" && selftest_capture_lacks "$events" -q -- '^TB start$'; then
+    pass "different TMPDIRs share the default lock: second sweep waits on first"
+  else
+    fail "different TMPDIRs did not wait on default lock (err=$(cat "$FIX/TB.err") events=$(cat "$events"))"
+  fi
+  : > "$release"
+  wait "$pid_a"; rc_a=$?
+  wait "$pid_b"; rc_b=$?
+  order="$(tr '\n' '|' < "$events")"
+  if [ "$rc_a" -eq 0 ] && [ "$rc_b" -eq 0 ] && [ "$order" = 'TA start|TA end|TB start|TB end|' ]; then
+    pass "different TMPDIR default sweeps complete serially after release"
+  else
+    fail "different TMPDIR default sweep order wrong (rcA=$rc_a rcB=$rc_b order=$order)"
+  fi
+}
+# A copied real runner scans its own seats tree even with a filtered pattern.
+source_policy_leg(){
+  local project="$FIX/source-project" file kind rc ran
+  mkdir -p "$project/seats/nested space" "$FIX/source-linked"
+  cp -f "$SWEEP" "$project/seats/selftest-sweep.sh"
+  cp -f "$(dirname "$SWEEP")/python-invocations.ts" "$project/seats/python-invocations.ts" || exit 2
+  printf '#!/usr/bin/env bash\nprintf ran > "$POLICY_RAN"\n' > "$project/seats/pass.selftest.sh"
+  git -C "$project" init -q -b main || exit 2
+  git -C "$project" add seats || exit 2
+  ran="$project/ran"
+  for kind in suffix direct env split quoted compact split-equals no-newline linked; do
+    file="$project/seats/nested space/no-extension"
+    case "$kind" in
+      suffix) file="$file.py"; printf 'not even executable\n' > "$file" ;;
+      direct) printf '#!/opt/venv/bin/python3.12\n' > "$file" ;;
+      env) printf '#!/usr/bin/env python3\n' > "$file" ;;
+      split) printf '#!/usr/bin/env -S python3 -u\n' > "$file" ;;
+      quoted) printf '#!/usr/bin/env -S "python3 -u"\n' > "$file" ;;
+      compact) printf '#!/usr/bin/env -Spython3\n' > "$file" ;;
+      split-equals) printf '#!/usr/bin/env --split-string="python3 -u"\n' > "$file" ;;
+      no-newline) printf '#! /usr/bin/python' > "$file" ;;
+      linked)
+        printf '#!/usr/bin/env python2.7\n' > "$FIX/source-linked/script"
+        file="$project/seats/link"; ln -s "$FIX/source-linked" "$file" ;;
+    esac
+    rc=0
+    POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+    if [ "$rc" != 0 ] && [ ! -e "$ran" ] && grep -F 'forbidden Python' "$project/err" >/dev/null; then
+      pass "source guard rejects $kind before even a filtered suite runs"
+    else
+      fail "source guard missed $kind (rc=$rc suiteRan=$([ -e "$ran" ] && echo yes || echo no))"
+    fi
+    rm -f "$ran" "$file"
+  done
+  printf '#!/usr/bin/env bash\npython3 -c "print(1)"\n' > "$project/seats/inline.sh"
+  git -C "$project" add seats/inline.sh || exit 2
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 1 ] && [ ! -e "$ran" ] && [ ! -e "$project/lock" ] && [ ! -e "$project/lock.queue" ] && ! grep -q 'selftest-sweep: START ' "$project/out" && grep -F 'forbidden Python invocation' "$project/err" >/dev/null; then
+    pass 'tracked inline call fails before lock, queue or filtered suite START'
+  else fail "tracked invocation guard missed inline call (rc=$rc)"; fi
+  # The same tracked path may contain ordinary arguments, not an interpreter call.
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "python3 is inert fixture data"\n' > "$project/seats/inline.sh"
+  printf 'documentation\n#!/usr/bin/env python3\n' > "$project/seats/embedded.txt"
+  rm -f "$ran"
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 0 ] && [ -f "$ran" ]; then pass 'source guard permits inert inline arguments and non-first-line shebang text'
+  else fail "source guard incorrectly rejects inert data (rc=$rc)"; fi
+  rm -f "$ran"
+  mv -f "$project/seats/inline.sh" "$FIX/saved-inline.sh" || exit 2
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 2 ] && [ ! -e "$ran" ] && [ ! -e "$project/lock" ] && [ ! -e "$project/lock.queue" ] && grep -F 'cannot audit tracked source' "$project/err" >/dev/null; then
+    pass 'unreadable tracked source remains incomplete exit2 before admission'
+  else fail "source audit setup failure lost incomplete status (rc=$rc)"; fi
+  mv -f "$FIX/saved-inline.sh" "$project/seats/inline.sh" || exit 2
+  mv -f "$project/seats/python-invocations.ts" "$FIX/saved-auditor.ts" || exit 2
+  rc=0
+  POLICY_RAN="$ran" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/pass.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$project/lock" bash "$project/seats/selftest-sweep.sh" > "$project/out" 2> "$project/err" || rc=$?
+  if [ "$rc" = 2 ] && [ ! -e "$ran" ] && [ ! -e "$project/lock" ] && [ ! -e "$project/lock.queue" ] && grep -F 'auditor missing or unreadable' "$project/err" >/dev/null; then
+    pass 'missing invocation auditor fails2 before admission, never bypasses policy'
+  else fail "missing invocation auditor did not fail incomplete (rc=$rc)"; fi
+  mv -f "$FIX/saved-auditor.ts" "$project/seats/python-invocations.ts" || exit 2
+}
+timing_leg(){
+  local project="$FIX/timing-project" rc
+  mkdir -p "$project/seats"
+  printf 'sleep 1\n' > "$project/seats/one.selftest.sh"
+  printf 'sleep 1\nexit "${TIMING_EXIT:-0}"\n' > "$project/seats/two.selftest.sh"
+  for rc in 0 7; do
+    TIMING_EXIT="$rc" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$project/seats/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/timing.lock" bash "$SWEEP" > "$FIX/timing-$rc.out" 2> "$FIX/timing-$rc.err"
+    local actual=$?
+    if bun - "$FIX/timing-$rc.out" "$project/seats" "$rc" "$actual" <<'JS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const [file,seats,code,actual]=process.argv.slice(2),text=fs.readFileSync(file,'utf8');
+assert.equal(Number(actual),code==='0'?0:1);
+const lines=text.split('\n').filter(s=>s.startsWith('selftest-sweep: '));
+assert.equal(lines[0],'selftest-sweep: tier=full suites=2');
+assert.deepEqual(lines.filter(s=>s.startsWith('selftest-sweep: START ')),['one','two'].map(n=>`selftest-sweep: START ${seats}/${n}.selftest.sh`));
+const ends=lines.filter(s=>/^selftest-sweep: (PASS|FAIL) .*\.selftest\.sh /.test(s));assert.equal(ends.length,2);
+let sum=0;
+for(let i=0;i<ends.length;i++){
+ const name=['one','two'][i],prefix=i===1&&code!=='0'?`FAIL ${seats}/${name}.selftest.sh rc=${code}`:`PASS ${seats}/${name}.selftest.sh`;
+ assert(ends[i].startsWith('selftest-sweep: '+prefix+' elapsed='),ends[i]);
+ const elapsed=/ elapsed=(0|[1-9][0-9]*)s$/.exec(ends[i]);assert(elapsed,ends[i]);assert(Number(elapsed[1])>=1);sum+=Number(elapsed[1]);
+}
+const footer=code==='0'?/^selftest-sweep: PASS \(2 suite\(s\), ([0-9]+)s\)$/m:/^selftest-sweep: FAIL \(1 failure\(s\) of 2 suite\(s\), ([0-9]+)s\)$/m;
+const total=footer.exec(text);assert(total,text);assert(Number(total[1])>=sum);console.log(`timing fixture rc=${code}: per-suite whole seconds, total=${total[1]}s >= sum=${sum}s`);
+JS
+    then pass "two-suite timing envelope and total for rc=$rc"
+    else fail "two-suite timing envelope for rc=$rc (actual=$actual)"; fi
+  done
+}
+timing_leg
+if [ "${WHEELHOUSE_SELFTEST_SWEEP_TIMING_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] || exit 1
+  echo 'selftest-sweep.selftest: PASS (timing checks)'; exit 0
+fi
+if bun "$HERE/fixtures/sweep-core.ts" "$HERE" "$FIX" "$SWEEP"; then
+  pass 'core manifest/CLI admission and matching removal controls'
+else fail 'core manifest/CLI regression'; fi
+if bun "$HERE/fixtures/quarantine-sweep.ts" "$HERE" "$FIX" "$SWEEP"; then
+  pass 'quarantine execution, expiry, validation and sensitive removals'
+else fail 'quarantine sweep regression'; fi
+default_tmpdir_leg
+if [ "${WHEELHOUSE_SELFTEST_SWEEP_TMPDIR_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" -eq 0 ] || { echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"; exit 1; }
+  echo 'selftest-sweep.selftest: PASS (2 TMPDIR checks)'
+  exit 0
+fi
+
+# Every invalid-lock case must leave the whole record (including inode) intact.
+lock_snapshot(){
+  bun -e '
+import fs from "node:fs"; import p from "node:path"; import {createHash} from "node:crypto";
+const rows:any[]=[];
+function visit(file:string){const s=fs.lstatSync(file,{bigint:true}),row:any[]=[file,String(s.dev),String(s.ino),String(s.mode)];
+if(s.isSymbolicLink())row.push(fs.readlinkSync(file));else if(s.isFile())row.push(createHash("sha256").update(fs.readFileSync(file)).digest("hex"));
+rows.push(row);if(s.isDirectory())for(const child of fs.readdirSync(file).sort())visit(p.join(file,child));}
+visit(process.argv[1]);console.log(JSON.stringify(rows));
+' "$1"
+}
+ownership_tests(){
+  local EVENTS="$FIX/ownership-events.log"
+  local case path before after rc pid
+  # Bun exits1 for missing/malformed programs too. Only the helper's reserved
+  # held result may retry; missing and broken helpers must fail once, before START.
+  for case in missing broken; do
+    local helper="$FIX/$case-helper.ts" calls="$FIX/$case-helper.calls" call_count=0
+    if [ "$case" = broken ]; then
+      printf 'import fs from "node:fs";fs.appendFileSync(process.env.HELPER_CALLS!,"called\\n");process.exit(1);\n' > "$helper"
+    fi
+    path="$FIX/$case-helper.lock"
+    # Deliberately broken helpers must refuse, never hang the whole suite.
+    # This named outer negative-leg policy cannot count as a passing refusal.
+    local HELPER_REFUSAL_OUTER_SECONDS=120
+    printf 'FIXTURE_WAIT helper refusal: case=%s helper=%s\n' "$case" "$helper" >&2
+    with_timeout "$HELPER_REFUSAL_OUTER_SECONDS" env HELPER_CALLS="$calls" WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER="$helper" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/$case-helper.out" 2> "$FIX/$case-helper.err"; rc=$?
+    if [ -f "$calls" ]; then call_count="$(wc -l < "$calls" | tr -d ' ')"; fi
+    if [ "$rc" = 2 ] && [ ! -e "$path" ] && ! grep -q 'waiting for host-wide lock' "$FIX/$case-helper.err" && ! grep -q 'selftest-sweep: START ' "$FIX/$case-helper.out" && { [ "$case" = missing ] || [ "$call_count" = 1 ]; }; then
+      pass "$case helper fails2 without retry, lock mutation or suite START"
+    else
+      fail "$case helper was mistaken for lock-held (rc=$rc calls=$call_count)"
+    fi
+  done
+  for case in plain extra nested bad-marker mismatch bad-time other-host link legacy-bad legacy-duplicate; do
+    path="$FIX/invalid-$case.lock"
+    case "$case" in
+      plain) mkdir "$path"; printf 'KEEP\n' > "$path/KEEP" ;;
+      legacy-bad) printf 'pid=not-a-pid\n' > "$path" ;;
+      legacy-duplicate) printf 'pid=999999999\npid=999999998\n' > "$path" ;;
+      *) make_lock "$path" 999999999 ;;
+    esac
+    case "$case" in
+      extra) printf 'KEEP\n' > "$path/KEEP" ;;
+      nested) mkdir "$path/extra"; printf 'KEEP\n' > "$path/extra/KEEP" ;;
+      bad-marker) printf '{broken\n' > "$path/wheelhouse-selftest-sweep" ;;
+      mismatch) printf '999999998\n' > "$path/pid" ;;
+      bad-time) printf 'not-a-time\n' > "$path/started" ;;
+      other-host) bun -e 'import fs from "node:fs";const p=process.argv[1],m=JSON.parse(fs.readFileSync(p,"utf8"));m.hostname="not-this-host";fs.writeFileSync(p,JSON.stringify(m)+"\n")' "$path/wheelhouse-selftest-sweep"
+        ;;
+      link) mv -f "$path" "$path.target"; ln -s "$path.target" "$path" ;;
+    esac
+    before="$(lock_snapshot "$path")"
+    SWEEP_ID="invalid-$case" SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/invalid-$case.out" 2> "$FIX/invalid-$case.err"
+    rc=$?
+    after="$(lock_snapshot "$path" 2>/dev/null || true)"
+    if [ "$rc" = 2 ] && [ "$before" = "$after" ] && grep -q 'STOP: .* is not a selftest-sweep lock (' "$FIX/invalid-$case.err" && ! grep -q 'selftest-sweep: START ' "$FIX/invalid-$case.out"; then
+      pass "invalid $case lock STOPs2 without moving/removing any record"
+    else
+      fail "invalid $case lock mutated/ran (rc=$rc intact=$([ "$before" = "$after" ] && echo yes || echo NO))"
+    fi
+  done
+  # Shape from the real 6cb9dc9 atomic-file capture; normalize pid/root/pattern.
+  path="$FIX/legacy-valid.lock"
+  printf 'pid=999999999\nstarted=2026-10-14T21:32:07Z\nroot=/fixture\npattern=/fixture/*.selftest.sh\n' > "$path"
+  SWEEP_ID=legacy SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" bash "$SWEEP" > "$FIX/legacy.out" 2> "$FIX/legacy.err"
+  rc=$?
+  [ "$rc" = 0 ] && [ ! -e "$path" ] && grep -q '^legacy start$' "$EVENTS" && pass 'valid dead-pid legacy file is compatible and released' || fail "legacy compatibility failed rc=$rc"
+
+  # A suite replaces the lock with a new file bearing the SAME runner pid.
+  # PID equality alone must not authorize release of that replacement.
+  local replacement_suite="$FIX/replacement.selftest.sh"
+  cat > "$replacement_suite" <<'EOF'
+mv -f "$REPLACEMENT_LOCK" "$REPLACEMENT_LOCK.saved"
+printf 'pid=%s\n' "$PPID" > "$REPLACEMENT_LOCK"
+EOF
+  path="$FIX/replacement.lock"
+  REPLACEMENT_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$replacement_suite" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" bash "$SWEEP" > "$FIX/replacement.out" 2> "$FIX/replacement.err"
+  rc=$?
+  [ "$rc" = 0 ] && [ -f "$path" ] && [ -e "$path.saved" ] && pass 'release preserves replacement with same pid but different identity' || fail "release removed same-pid replacement (rc=$rc present=$([ -f "$path" ] && echo yes || echo GONE))"
+
+  # Termination before acquisition must not delete a file we did not publish.
+  path="$FIX/not-acquired.lock"
+  local pid_wait rc_wait
+  env TEST_LOCK="$path" TEST_SWEEP="$SWEEP" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$path" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash -c 'printf "pid=%s\n" "$$" > "$TEST_LOCK"; exec bash "$TEST_SWEEP"' > "$FIX/not-acquired.out" 2> "$FIX/not-acquired.err" &
+  pid_wait=$!
+  wait_sweep_event "$pid_wait" "$FIX/not-acquired.err" 'waiting for host-wide lock' || fail 'never-acquired child exited before its queued checkpoint'
+  before="$(lock_snapshot "$path")"
+  kill -TERM "$pid_wait" 2>/dev/null || true
+  wait "$pid_wait"; rc_wait=$?
+  after="$(lock_snapshot "$path" 2>/dev/null || true)"
+  [ "$rc_wait" = 143 ] && [ "$before" = "$after" ] && pass 'TERM before acquisition preserves unowned same-pid legacy file' || fail "TERM removed never-acquired file (rc=$rc_wait intact=$([ "$before" = "$after" ] && echo yes || echo NO))"
+}
+ownership_tests
+if [ "${WHEELHOUSE_SELFTEST_SWEEP_OWNERSHIP_ONLY:-0}" = 1 ]; then
+  [ "$FAILED" = 0 ] && { echo 'selftest-sweep.selftest: PASS (15 ownership checks)'; exit 0; }
+  echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"; exit 1
+fi
+source_policy_leg
+
+RELEASE_A="$FIX/release-A"
+SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=A SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/A.out" 2> "$FIX/A.err" &
+PID_A=$!
+wait_sweep_event "$PID_A" "$EVENTS" '^A start$' || fail 'first sweep exited before actual suite entry'
+if bun -e '
+import fs from "node:fs";import p from "node:path";import os from "node:os";import assert from "node:assert/strict";
+const [dir,pid]=process.argv.slice(1);assert(fs.lstatSync(dir).isDirectory());
+assert.deepEqual(fs.readdirSync(dir).sort(),["pid","started","wheelhouse-selftest-sweep"]);
+const m=JSON.parse(fs.readFileSync(p.join(dir,"wheelhouse-selftest-sweep"),"utf8"));assert.equal(m.pid,Number(pid));assert.equal(m.hostname,os.hostname());
+assert.equal(fs.readFileSync(p.join(dir,"pid"),"utf8"),m.pid+"\n");assert.equal(fs.readFileSync(p.join(dir,"started"),"utf8"),m.started+"\n");
+' "$LOCK" "$PID_A"
+then
+  pass "atomic acquire publishes a complete marked pid-bearing directory before waiters can see it"
+else
+  fail "active lock was not a complete marked directory"
+fi
+# Readiness is a real queued retry, acknowledged after the diagnostic point.
+# The controller also signals early child exit, so absent output cannot hang.
+mkfifo "$FIX/B-ready"
+exec 9<>"$FIX/B-ready"
+SWEEP_RELEASE="$RELEASE_A" SWEEP_ID=B SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bun "$HERE/fixtures/sweep-wait-diagnostic.ts" "$SWEEP" "$FIX" 4>&9 > "$FIX/B.out" 2> "$FIX/B.err" &
+PID_B=$!
+IFS= read -r WAIT_SIGNAL <&9
+if [ "$WAIT_SIGNAL" = ticket ] && grep -q "waiting for host-wide lock .*queue_position=1 holder=pid=$PID_A started=" "$FIX/B.err" && selftest_capture_lacks "$EVENTS" -q -- '^B start$'; then
+  pass "second fixture sweep reports the holder and waits before starting"
+else
+  fail "second fixture sweep did not wait (signal=$WAIT_SIGNAL B.err=$(cat "$FIX/B.err" 2>/dev/null) events=$(cat "$EVENTS" 2>/dev/null))"
+fi
+: > "$RELEASE_A"
+wait "$PID_A"; RC_A=$?
+wait "$PID_B"; RC_B=$?
+exec 9>&-
+ORDER="$(tr '\n' '|' < "$EVENTS")"
+if [ "$RC_A" -eq 0 ] && [ "$RC_B" -eq 0 ] && [ "$ORDER" = 'A start|A end|B start|B end|' ]; then
+  pass "host-wide lock serializes concurrent fixture sweeps in order"
+else
+  fail "fixture sweeps did not serialize (rcA=$RC_A rcB=$RC_B order=$ORDER A=$(cat "$FIX/A.out" 2>/dev/null) B=$(cat "$FIX/B.out" 2>/dev/null))"
+fi
+
+STALE="$FIX/stale.lock"
+make_lock "$STALE" 999999999
+SWEEP_ID=C SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$STALE" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/stale.out" 2> "$FIX/stale.err"
+RC_STALE=$?
+if [ "$RC_STALE" -eq 0 ] && grep -q 'removing stale lock' "$FIX/stale.err"; then
+  pass "dead-pid stale lock is recovered before running"
+else
+  fail "stale lock was not recovered (rc=$RC_STALE err=$(cat "$FIX/stale.err" 2>/dev/null))"
+fi
+
+RACE="$FIX/race.lock"
+make_lock "$RACE" 999999999
+RELEASE_RACE="$FIX/release-race"
+SWEEP_RELEASE="$RELEASE_RACE" SWEEP_ID=D SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$RACE" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/race-D.out" 2> "$FIX/race-D.err" &
+PID_D=$!
+SWEEP_RELEASE="$RELEASE_RACE" SWEEP_ID=E SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$RACE" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/race-E.out" 2> "$FIX/race-E.err" &
+PID_E=$!
+printf 'FIXTURE_WAIT stale takeover: actual contender queue/entry checkpoints\n' >&2
+while :; do
+  if { [ -f "$FIX/race-D.err" ] && grep -q 'waiting for host-wide lock' "$FIX/race-D.err"; } || { [ -f "$FIX/race-E.err" ] && grep -q 'waiting for host-wide lock' "$FIX/race-E.err"; }; then break; fi
+  if [ -f "$EVENTS" ] && grep -q '^D start$' "$EVENTS" && grep -q '^E start$' "$EVENTS"; then break; fi
+  kill -0 "$PID_D" 2>/dev/null && kill -0 "$PID_E" 2>/dev/null || break
+  sleep 0.05
+ done
+: > "$RELEASE_RACE"
+wait "$PID_D"; RC_D=$?
+wait "$PID_E"; RC_E=$?
+REMOVE_COUNT="$(awk '/removing stale lock/{n++} END {print n+0}' "$FIX/race-D.err" "$FIX/race-E.err")"; REMOVE_COUNT_RC=$?
+if [ "$RC_D" -eq 0 ] && [ "$RC_E" -eq 0 ] && [ "$REMOVE_COUNT_RC" = 0 ] && [ "$REMOVE_COUNT" -eq 1 ]; then
+  pass "exactly one waiter wins stale-lock takeover"
+else
+  fail "stale-lock takeover was not single-winner (rcD=$RC_D rcE=$RC_E remove_count=$REMOVE_COUNT D.err=$(cat "$FIX/race-D.err" 2>/dev/null) E.err=$(cat "$FIX/race-E.err" 2>/dev/null))"
+fi
+
+ORPHANED_TAKEOVER="$FIX/orphaned-takeover.lock"
+make_lock "$ORPHANED_TAKEOVER" 999999999
+mkdir -p "$ORPHANED_TAKEOVER.takeover"
+SWEEP_ID=F SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$ORPHANED_TAKEOVER" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/orphaned-takeover.out" 2> "$FIX/orphaned-takeover.err"
+RC_ORPHANED=$?
+if [ "$RC_ORPHANED" -eq 0 ] && grep -q 'removing stale lock' "$FIX/orphaned-takeover.err"; then
+  pass "orphaned takeover guard cannot wedge stale-lock recovery"
+else
+  fail "orphaned takeover guard wedged recovery (rc=$RC_ORPHANED err=$(cat "$FIX/orphaned-takeover.err" 2>/dev/null))"
+fi
+rm -rf "$ORPHANED_TAKEOVER.takeover"
+
+NO_PID="$FIX/no-pid.lock"
+mkdir -p "$NO_PID"
+printf 'KEEP\n' > "$NO_PID/KEEP"
+SWEEP_ID=G SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$NO_PID" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/no-pid.out" 2> "$FIX/no-pid.err"
+RC_NO_PID=$?
+# Deliberate H7 contract change: an unmarked directory is NOT a stale lock.
+if [ "$RC_NO_PID" -eq 2 ] && [ -f "$NO_PID/KEEP" ] && grep -q 'STOP: .* is not a selftest-sweep lock' "$FIX/no-pid.err" && selftest_capture_lacks "$EVENTS" -q -- '^G start$'; then
+  pass "unmarked pid-less directory STOPs with exit 2 and KEEP survives"
+else
+  fail "unmarked directory was not refused (rc=$RC_NO_PID KEEP=$([ -f "$NO_PID/KEEP" ] && echo present || echo GONE) err=$(cat "$FIX/no-pid.err" 2>/dev/null))"
+fi
+
+EPERM="$FIX/eperm.lock"
+make_lock "$EPERM" 1
+SWEEP_ID=H SWEEP_EVENTS="$EVENTS" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$EPERM" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/eperm.out" 2> "$FIX/eperm.err" &
+PID_G=$!
+wait_sweep_event "$PID_G" "$FIX/eperm.err" 'waiting for host-wide lock' || fail 'live-holder child exited before its queued checkpoint'
+if [ -d "$EPERM" ] && grep -q 'waiting for host-wide lock' "$FIX/eperm.err" && ! grep -q 'removing stale lock' "$FIX/eperm.err"; then
+  pass "EPERM holder pid is treated as live instead of stale"
+else
+  fail "EPERM holder pid was not treated as live (err=$(cat "$FIX/eperm.err" 2>/dev/null))"
+fi
+kill -TERM "$PID_G" 2>/dev/null || true
+wait "$PID_G" 2>/dev/null || true
+rm -rf "$EPERM"
+
+# PID 1 can also be a real runner (a container entrypoint). Unlike the bare
+# live-holder fixture above, its complete token/FIFO record proves admission.
+PID_ONE="$FIX/pid-one-owned.lock"
+PID_ONE_TOKEN="$(bun -e 'console.log(crypto.randomUUID().replace(/-/g,""))')"
+PID_ONE_OWNED="$(bun "$WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER" acquire "$PID_ONE" 1 "$PID_ONE_TOKEN" "" 2> "$FIX/pid-one-acquire.err")"; PID_ONE_ACQUIRE_RC=$?
+PID_ONE_INHERITED_RC=2; PID_ONE_RELEASE_RC=2
+if [ "$PID_ONE_ACQUIRE_RC" = 0 ]; then
+  bun "$WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER" inherited "$PID_ONE" > "$FIX/pid-one-inherited.out" 2> "$FIX/pid-one-inherited.err"; PID_ONE_INHERITED_RC=$?
+  bun "$WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER" release "$PID_ONE" 1 "$PID_ONE_TOKEN" "$PID_ONE_OWNED" > "$FIX/pid-one-release.out" 2> "$FIX/pid-one-release.err"; PID_ONE_RELEASE_RC=$?
+fi
+if [ "$PID_ONE_ACQUIRE_RC" = 0 ] && [ "$PID_ONE_INHERITED_RC" = 0 ] && [ "$PID_ONE_RELEASE_RC" = 0 ] && [ ! -e "$PID_ONE" ]; then
+  pass 'a valid token/FIFO PID-1 owner remains inheritable and releasable'
+else
+  fail "valid token/FIFO PID-1 owner refused (acquire=$PID_ONE_ACQUIRE_RC inherited=$PID_ONE_INHERITED_RC release=$PID_ONE_RELEASE_RC)"
+fi
+
+TERM_SUITES="$FIX/term-suites"
+TERM_LOCK="$FIX/term.lock"
+TERM_EVENTS="$FIX/term-events.log"
+TERM_STARTED="$FIX/term-started"
+TERM_RELEASE="$FIX/term-release"
+mkdir -p "$TERM_SUITES"
+cat > "$TERM_SUITES/one.selftest.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf 'one start\n' >> "$TERM_EVENTS"
+# A census can legitimately take longer than one second before delivering TERM.
+# Hold the child's work until cleanup returns; require its actual TERM receipt,
+# not a race between an arbitrary sleep and native ownership observation.
+( trap 'printf "child TERM\n" >> "$TERM_EVENTS"; exit 0' TERM
+  : > "$TERM_STARTED"
+  while [ ! -f "$TERM_RELEASE" ]; do sleep 0.05; done
+  printf 'child survived\n' >> "$TERM_EVENTS"
+) &
+while :; do sleep 0.05; done
+EOF
+cat > "$TERM_SUITES/two.selftest.sh" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf 'two start\n' >> "$TERM_EVENTS"
+EOF
+chmod +x "$TERM_SUITES"/*.selftest.sh
+TERM_EVENTS="$TERM_EVENTS" TERM_STARTED="$TERM_STARTED" TERM_RELEASE="$TERM_RELEASE" WHEELHOUSE_SELFTEST_SWEEP_PATTERN="$TERM_SUITES/*.selftest.sh" WHEELHOUSE_SELFTEST_SWEEP_LOCK="$TERM_LOCK" WHEELHOUSE_SELFTEST_SWEEP_WAIT_SECONDS=0.05 bash "$SWEEP" > "$FIX/term.out" 2> "$FIX/term.err" &
+PID_TERM=$!
+wait_sweep_event "$PID_TERM" "$TERM_STARTED" '@exists' || fail 'TERM fixture exited before its child installed the signal handler'
+kill -TERM "$PID_TERM" 2>/dev/null || true
+wait "$PID_TERM"; RC_TERM=$?
+: > "$TERM_RELEASE"
+# The runner's own joined exit, not an extra grace sleep, is the observation.
+TERM_ORDER="$(tr '\n' '|' < "$TERM_EVENTS" 2>/dev/null || true)"
+if [ "$RC_TERM" -eq 143 ] && [ "$TERM_ORDER" = 'one start|child TERM|' ] && [ ! -e "$TERM_LOCK" ]; then
+  pass "TERM reaches the ready child, stops the suite group, skips later suites, and releases the lock"
+else
+  fail "TERM did not stop cleanly (rc=$RC_TERM order=$TERM_ORDER lock=$(ls -ld "$TERM_LOCK" 2>/dev/null || true) out=$(cat "$FIX/term.out" 2>/dev/null) err=$(cat "$FIX/term.err" 2>/dev/null))"
+fi
+
+if [ "$FAILED" -eq 0 ]; then
+  echo "selftest-sweep.selftest: PASS ($CHECKED checks)"
+else
+  echo "selftest-sweep.selftest: FAIL ($FAILED failure(s))"
+  exit 1
+fi

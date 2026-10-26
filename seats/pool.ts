@@ -22,7 +22,7 @@ function readFixedRoster(root: string): Record<string, SeatEntry> { try { return
 function real(p: string): string { return fs.realpathSync(p); }
 function commandDirs(): string[] { const home = process.env.HOME ?? ""; return [process.env.CLAUDE_CONFIG_DIR ?? "", path.join(home, ".claude"), path.join(home, ".pi", "agent"), path.join(home, ".codex")].filter(Boolean).map((p) => { try { return real(p); } catch { return path.resolve(p); } }); }
 function roleModel(role: PoolRole, entryName: string): string { return typeof role.model === "string" ? role.model : role.model[entryName]; }
-export function roleRosterName(role: "workers" | "reviewers"): "worker" | "verifier" { return role === "workers" ? "worker" : "verifier"; }
+export function roleRosterName(role: "workers" | "reviewers"): "worker" | "reviewer" { return role === "workers" ? "worker" : "reviewer"; }
 export function staffedSeatName(role: "workers" | "reviewers", entry: string): string { return `${roleRosterName(role)}-${entry}`; }
 
 export function loadPool(root: string): Pool {

@@ -4,15 +4,16 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-jev.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 SERVER_PID=""
-cleanup(){ [ -n "$SERVER_PID" ] && kill "$SERVER_PID" >/dev/null 2>&1; selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+cleanup(){ [ -z "$SERVER_PID" ] || kill "$SERVER_PID" >/dev/null 2>&1 || true; selftest_cleanup_fixture_processes "${FIX:-}"; selftest_remove_fixture_dir "$FIX"; }
+selftest_install_cleanup_traps cleanup
 FAILED=0
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED+1)); }
 phase(){ printf '\n%s\n' "$*"; }
 ROOT="$FIX/project"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$BIN" "$HOME_FIX" "$FIX/out"
-for f in staffing.ts jev.ts pool.ts roster.ts fleet-snapshot.ts seat-activity.ts seat-worktree.ts harness.ts credential-shapes.ts quota.ts lock.ts; do cp "$HERE/$f" "$ROOT/seats/$f"; done
+selftest_copy_seat_runtime "$ROOT" "$HERE"
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"seats":{"commander":{"role":"commander","external":true}}}
 JSON
@@ -85,13 +86,16 @@ if ! grep -R "$KEY" "$FIX/out" "$ROOT/seats/logs" >/dev/null 2>&1; then pass 'se
 cat > "$ROOT/seats/staffing.json" <<'JSON'
 {"version":1,"seats":{"worker-e1":{"role":"worker","entry":"e1"},"worker-e2":{"role":"worker","entry":"e2"}},"rateLimited":{}}
 JSON
-printf '{"seats":{"worker-e1":{"pid":%s,"log":"%s"},"worker-e2":{"pid":%s,"log":"%s"}}}\n' $$ "$ROOT/seats/logs/worker-e1.jsonl" $$ "$ROOT/seats/logs/worker-e2.jsonl" > "$ROOT/seats/state.json"; printf '{"type":"agent_end"}\n' > "$ROOT/seats/logs/worker-e1.jsonl"; printf '{"type":"agent_end"}\n' > "$ROOT/seats/logs/worker-e2.jsonl"
+# Capture the actual fixture shell's start time; bare live PIDs no longer prove
+# seat identity under main's PID-reuse guard.
+STARTED_AT="$(ps -p $$ -o lstart=)"; [ -n "$STARTED_AT" ] || exit 2
+printf '{"seats":{"worker-e1":{"pid":%s,"startedAt":"%s","log":"%s"},"worker-e2":{"pid":%s,"startedAt":"%s","log":"%s"}}}\n' $$ "$STARTED_AT" "$ROOT/seats/logs/worker-e1.jsonl" $$ "$STARTED_AT" "$ROOT/seats/logs/worker-e2.jsonl" > "$ROOT/seats/state.json"; printf '{"type":"agent_end"}\n' > "$ROOT/seats/logs/worker-e1.jsonl"; printf '{"type":"agent_end"}\n' > "$ROOT/seats/logs/worker-e2.jsonl"
 run_staff max bun seats/staffing.ts check --dry-run
 [ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && grep -q 'at limit: workers 2/2' <<<"$OUT" && pass 'Jev add at max is clamped' || fail "add at max not clamped: $OUT"
-python3 - <<PY
-import json, pathlib
-p=pathlib.Path('$ROOT/seats/pool.json'); j=json.load(open(p)); j['roles']['workers']['min']=2; json.dump(j,open(p,'w'))
-PY
+node - "$ROOT/seats/pool.json" <<'JS'
+const fs=require('fs'), p=process.argv[2], j=JSON.parse(fs.readFileSync(p));
+j.roles.workers.min=2; fs.writeFileSync(p,JSON.stringify(j));
+JS
 set_reply '{"model":"jev-latest","answers":{"":{"type":"choice","choice":"drop_seat","probabilities":{"drop_seat":0.9},"confidence":0.9}},"usage":{"input_tokens":1,"output_tokens":1}}'
 run_staff min bun seats/staffing.ts check --dry-run
 [ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && grep -q 'at minimum: workers 2/2' <<<"$OUT" && pass 'Jev drop at min is clamped' || fail "drop at min not clamped: $OUT"

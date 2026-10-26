@@ -33,7 +33,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync, nativeJsonArray } from "./native-command";
 import { effectiveRoster } from "./roster";
 import { CREDENTIAL_SHAPE_RE } from "./credential-shapes";
 
@@ -50,13 +50,28 @@ export interface StateLike { seats: Record<string, SeatRecordLike> }
 export class SeatWorktreeError extends Error {}
 function refuse(msg: string): never { throw new SeatWorktreeError(msg); }
 
-export function git(root: string, args: string[], cwd?: string): { ok: boolean; out: string; err: string; code: number | null } {
-  const r = spawnSync("git", args, { cwd: cwd ?? root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
-  return { ok: r.status === 0, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim(), code: r.status };
+/** Shared by adapter CLI and library callers. Same segment rule as verify.ts:
+ * no empty/dot segments, separators, whitespace or shell quote characters. */
+export function validateSegment(kind: string, value: string): string {
+  const bad =
+    typeof value !== "string" ? "not a string" :
+    value.length === 0 ? "empty" :
+    value === "." || value === ".." ? "a dot segment" :
+    /[/\\]/.test(value) ? "a path separator" :
+    /\s/.test(value) ? "whitespace" :
+    /['"`]/.test(value) ? "a quote character" :
+    null;
+  if (bad !== null) refuse(`invalid ${kind} ${JSON.stringify(value)} (${bad}) — must be a single path segment: no /, no .., no whitespace, no quotes`);
+  return value;
+}
+
+export function git(root: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv): { ok: boolean; out: string; err: string; code: number | null } {
+  const r = spawnSync("git", args, { cwd: cwd ?? root, env: env ? { ...process.env, ...env } : process.env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+  return { ok: !r.error && !r.signal && r.status === 0, out: (r.stdout ?? "").trim(), err: String(r.stderr || r.error?.message || r.signal || "").trim(), code: r.status ?? null };
 }
 
 export function worktreesDir(root: string): string { return path.join(root, WORKTREES_DIRNAME); }
-export function seatWorktreeDir(root: string, seat: string): string { return path.join(worktreesDir(root), seat); }
+export function seatWorktreeDir(root: string, seat: string): string { return path.join(worktreesDir(root), validateSegment("seat name", seat)); }
 export function beadBranch(beadId: string): string { return `fleet/${beadId}`; }
 
 export function registeredWorktrees(root: string): RegisteredWorktree[] {
@@ -112,8 +127,8 @@ function beadStatuses(root: string): Map<string, string> {
   if (process.env.WHEELHOUSE_SKIP_BD === "1" && !process.env.FIXTURE_BD_CLOSED_FILE) return out;
   for (const st of ["open", "in_progress", "blocked", "deferred", "closed"]) {
     const r = spawnSync("bd", ["list", `--status=${st}`, "--json", "--limit", "5000"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000 });
-    if (r.status !== 0 || !r.stdout) continue;
-    try { for (const b of JSON.parse(r.stdout)) if (b?.id) out.set(String(b.id), String(b.status ?? st)); } catch {}
+    try { for (const b of nativeJsonArray(r, `bd list ${st}`, ["id"])) out.set(String(b.id), String(b.status ?? st)); }
+    catch (e: any) { refuse(`cannot verify bead statuses: ${e.message}`); }
   }
   return out;
 }
@@ -128,7 +143,7 @@ function legacyBeadOpen(root: string, wt: RegisteredWorktree, state: StateLike, 
   const name = path.basename(wt.path);
   const st = statuses.get(name);
   if (st) return st !== "closed";
-  if (Object.values(state.seats ?? {}).some((rec) => rec?.cwd && samePath(rec.cwd, wt.path))) return true;
+  if (Object.values(state.seats ?? {}).some((rec) => rec?.cwd && pidAlive(rec.pid ?? null) && samePath(rec.cwd, wt.path))) return true;
   return true;
 }
 
@@ -163,18 +178,38 @@ export function refExists(root: string, ref: string): boolean {
   return git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).ok;
 }
 
+function templateSourceValue(root: string, key: string): string | null {
+  try {
+    const text = fs.readFileSync(path.join(root, "wheelhouse", ".template-source"), "utf8");
+    const m = text.match(new RegExp(`^${key}=(.*)$`, "m"));
+    const value = m?.[1]?.trim() ?? "";
+    return value || null;
+  } catch { return null; }
+}
+
+function pushBaseCandidate(candidates: string[], ref: string | null): void {
+  if (!ref) return;
+  if (!ref.includes("/") && !ref.startsWith("refs/")) candidates.push(`origin/${ref}`);
+  candidates.push(ref);
+}
+
+function pushIntegrationBaseCandidate(root: string, candidates: string[], ref: string | null): void {
+  if (!ref) return;
+  if (!ref.includes("/") || !refExists(root, ref)) candidates.push(`origin/${ref}`);
+  candidates.push(ref);
+}
+
 /** Which base a bead branches from. Explicit wins, then the bead's own
  * `Integration:` line (via bd, when available), then the install's env
- * default, then the remote's default branch, then local main/master/HEAD. */
+ * default, then the install's recorded merge target, then the remote's default
+ * branch, then local main/master/HEAD. */
 export function resolveBase(root: string, beadId: string, explicit?: string | null, bdRoot: string = root): string {
   const candidates: string[] = [];
   if (explicit) candidates.push(explicit);
   const fromBead = integrationLineFor(bdRoot, beadId);
-  if (fromBead) {
-    if (!fromBead.includes("/") || !refExists(root, fromBead)) candidates.push(`origin/${fromBead}`);
-    candidates.push(fromBead);
-  }
+  if (fromBead) pushIntegrationBaseCandidate(root, candidates, fromBead);
   if (process.env.WHEELHOUSE_WORKTREE_BASE) candidates.push(process.env.WHEELHOUSE_WORKTREE_BASE);
+  pushBaseCandidate(candidates, templateSourceValue(bdRoot, "merge-target"));
   const originHead = git(root, ["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"]);
   if (originHead.ok && originHead.out) candidates.push(originHead.out);
   candidates.push("origin/main", "origin/master", "main", "master", "HEAD");
@@ -182,17 +217,26 @@ export function resolveBase(root: string, beadId: string, explicit?: string | nu
   refuse(`no base ref resolves for bead ${beadId} (tried ${candidates.join(", ")}); pass --base <ref>`);
 }
 
-function integrationLineFor(root: string, beadId: string): string | null {
-  if (process.env.WHEELHOUSE_SKIP_BD === "1") return null;
+function beadText(root: string, beadId: string): string {
+  if (process.env.WHEELHOUSE_SKIP_BD === "1") return "";
   const r = spawnSync("bd", ["show", beadId, "--json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000 });
-  if (r.status !== 0 || !r.stdout) return null;
-  let text = "";
   try {
-    const j = JSON.parse(r.stdout);
-    const b = Array.isArray(j) ? j[0] : j;
-    text = [b?.title, b?.description, b?.notes, b?.design, b?.body].filter((s) => typeof s === "string").join("\n");
-  } catch { text = r.stdout; }
-  const m = text.match(/^\s*Integration:\s*([^\s`'"]+)/m);
+    const rows = nativeJsonArray(r, `bd show ${beadId}`, ["id"]);
+    if (rows.length !== 1 || rows[0].id !== beadId) refuse(`bd show ${beadId} did not return the requested bead`);
+    const b = rows[0];
+    return [b.title, b.description, b.notes, b.design, b.body].filter((s) => typeof s === "string").join("\n");
+  } catch (e: any) { refuse(`cannot verify bead metadata: ${e.message}`); }
+}
+
+function integrationLineFor(root: string, beadId: string): string | null {
+  const m = beadText(root, beadId).match(/^\s*Integration:\s*([^\s`'"]+)/m);
+  return m ? m[1] : null;
+}
+
+function repoLineFor(root: string, beadId: string): string | null {
+  // Contracts also put the field after another sentence ("Closes: H7. Repo:").
+  // Do not match ordinary prose such as "a task naming Repo: UMBRELLA".
+  const m = beadText(root, beadId).match(/(?:^[ \t]*|[.;][ \t]+)Repo:[ \t]*([^\s`'",;]+)/mi);
   return m ? m[1] : null;
 }
 
@@ -212,7 +256,7 @@ export function phantomOnlyStatus(statusPorcelain: string): { clean: boolean; ph
 /** Untrimmed `git status --porcelain`: the first line's leading space is part of its XY code. */
 export function porcelainStatus(wt: string): { ok: boolean; out: string; err: string } {
   const r = spawnSync("git", ["-C", wt, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
-  return { ok: r.status === 0, out: r.stdout ?? "", err: (r.stderr ?? "").trim() };
+  return { ok: !r.error && !r.signal && r.status === 0, out: r.stdout ?? "", err: String(r.stderr || r.error?.message || r.signal || "").trim() };
 }
 
 export function ensureSeatLocalExcludes(wt: string): void {
@@ -248,27 +292,80 @@ export function remoteTrackingTip(root: string, remote: string, branch: string):
 export function pushMarkerPath(root: string, seat: string): string { return path.join(root, "seats", "run", `push.${seat}.json`); }
 
 
-function commitsToPublish(repo: string, remote: string, branch: string, headSha: string): string[] {
-  const remoteTip = remoteTrackingTip(repo, remote, branch);
-  const args = remoteTip ? ["rev-list", `${remoteTip}..${headSha}`] : ["rev-list", headSha, `--not`, `--remotes=${remote}`];
+export interface CredentialScanHit { commit: string; path: string; line: string; text: string }
+export function credentialShapeHits(repo: string, base: string | null, headSha: string): CredentialScanHit[] {
+  const args = base ? ["diff", "--unified=0", `${base}..${headSha}`, "--", "."] : ["show", "--format=", "--unified=0", headSha, "--", "."];
   const r = git(repo, args);
-  if (!r.ok) return [headSha];
+  if (!r.ok) return [{ commit: "scan", path: "git diff", line: "0", text: r.err || r.out || "credential scan failed" }];
+  const hits: CredentialScanHit[] = [];
+  const credentialRe = new RegExp(CREDENTIAL_SHAPE_RE);
+  let file = "?";
+  let nextLine = 0;
+  for (const line of r.out.split("\n")) {
+    if (line.startsWith("+++ b/")) { file = line.slice(6); continue; }
+    if (line === "+++ /dev/null") { file = "?"; continue; }
+    const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (h) { nextLine = Number(h[1]); continue; }
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      const text = line.slice(1);
+      if (credentialRe.test(text)) hits.push({ commit: headSha, path: file, line: String(nextLine), text });
+      nextLine++;
+    } else if (!line.startsWith("-")) {
+      nextLine++;
+    }
+  }
+  return hits;
+}
+
+function remoteReachableRefs(repo: string, remote: string): string[] {
+  const r = git(repo, ["for-each-ref", "--format=%(refname)", `refs/remotes/${remote}`]);
+  if (!r.ok) return [];
+  return r.out.split("\n").map((s) => s.trim()).filter((s) => s && !s.endsWith("/HEAD"));
+}
+
+function newlyPublishedCommits(repo: string, remote: string, headSha: string): string[] | null {
+  const refs = remoteReachableRefs(repo, remote);
+  if (refs.length === 0) return null;
+  const r = git(repo, ["rev-list", "--reverse", headSha, "--not", ...refs]);
+  if (!r.ok) return null;
   return r.out.split("\n").map((s) => s.trim()).filter(Boolean);
 }
 
-export interface CredentialScanHit { commit: string; path: string; line: string; text: string }
-export function credentialShapeHits(repo: string, commits: string[]): CredentialScanHit[] {
-  if (commits.length === 0) return [];
-  const r = git(repo, ["grep", "-I", "-n", "-E", CREDENTIAL_SHAPE_RE, ...commits, "--", "."]);
-  if (!r.ok && r.code !== 1) return [{ commit: "scan", path: "git grep", line: "0", text: r.err || r.out || "credential scan failed" }];
-  return r.out.split("\n").filter(Boolean).map((line) => {
-    const m = line.match(/^([^:]+):([^:]+):(\d+):(.*)$/);
-    return m ? { commit: m[1], path: m[2], line: m[3], text: m[4] } : { commit: "scan", path: "git grep", line: "0", text: line };
-  });
+function credentialShapeHitsInPatch(patch: string, commit: string): CredentialScanHit[] {
+  const hits: CredentialScanHit[] = [];
+  const credentialRe = new RegExp(CREDENTIAL_SHAPE_RE);
+  let file = "?";
+  let nextLine = 0;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("+++ b/")) { file = line.slice(6); continue; }
+    if (line === "+++ /dev/null") { file = "?"; continue; }
+    const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (h) { nextLine = Number(h[1]); continue; }
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      const text = line.slice(1);
+      if (credentialRe.test(text)) hits.push({ commit, path: file, line: String(nextLine), text });
+      nextLine++;
+    } else if (!line.startsWith("-") && nextLine > 0) {
+      nextLine++;
+    }
+  }
+  return hits;
+}
+
+export function credentialShapeHitsForPublish(repo: string, remote: string, branch: string, headSha: string): CredentialScanHit[] {
+  const commits = newlyPublishedCommits(repo, remote, headSha);
+  if (!commits) return credentialShapeHits(repo, diffBaseForPublish(repo, remote, branch, headSha), headSha);
+  const hits: CredentialScanHit[] = [];
+  for (const commit of commits) {
+    const r = git(repo, ["show", "--format=", "--unified=0", commit, "--", "."]);
+    if (!r.ok) return [{ commit: "scan", path: "git show", line: "0", text: r.err || r.out || "credential scan failed" }];
+    hits.push(...credentialShapeHitsInPatch(r.out, commit));
+  }
+  return hits;
 }
 
 export function credentialScanSummary(repo: string, remote: string, branch: string, headSha: string): string | null {
-  const hits = credentialShapeHits(repo, commitsToPublish(repo, remote, branch, headSha));
+  const hits = credentialShapeHitsForPublish(repo, remote, branch, headSha);
   if (hits.length === 0) return null;
   return hits.slice(0, 5).map((h) => `${h.path}:${h.line}`).join(", ");
 }
@@ -285,15 +382,11 @@ function diffBaseForPublish(repo: string, remote: string, branch: string, headSh
   return null;
 }
 
-function addedLineHits(repo: string, base: string | null, headSha: string, patterns: { kind: string; re: RegExp }[]): PublicStateScanHit[] {
-  if (patterns.length === 0) return [];
-  const args = base ? ["diff", "--unified=0", `${base}..${headSha}`, "--", "."] : ["show", "--format=", "--unified=0", headSha, "--", "."];
-  const r = git(repo, args);
-  if (!r.ok) return [{ path: "git diff", line: "0", kind: "state scan failed" }];
+function addedLineHitsInPatch(patch: string, patterns: { kind: string; re: RegExp }[]): PublicStateScanHit[] {
   const hits: PublicStateScanHit[] = [];
   let file = "?";
   let nextLine = 0;
-  for (const line of r.out.split("\n")) {
+  for (const line of patch.split("\n")) {
     if (line.startsWith("+++ b/")) { file = line.slice(6); continue; }
     const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
     if (h) { nextLine = Number(h[1]); continue; }
@@ -301,9 +394,30 @@ function addedLineHits(repo: string, base: string | null, headSha: string, patte
       const text = line.slice(1);
       for (const p of patterns) if (p.re.test(text)) { hits.push({ path: file, line: String(nextLine), kind: p.kind }); break; }
       nextLine++;
-    } else if (!line.startsWith("-")) {
+    } else if (!line.startsWith("-") && nextLine > 0) {
       nextLine++;
     }
+  }
+  return hits;
+}
+
+function addedLineHits(repo: string, base: string | null, headSha: string, patterns: { kind: string; re: RegExp }[]): PublicStateScanHit[] {
+  if (patterns.length === 0) return [];
+  const args = base ? ["diff", "--unified=0", `${base}..${headSha}`, "--", "."] : ["show", "--format=", "--unified=0", headSha, "--", "."];
+  const r = git(repo, args);
+  if (!r.ok) return [{ path: "git diff", line: "0", kind: "state scan failed" }];
+  return addedLineHitsInPatch(r.out, patterns);
+}
+
+function addedLineHitsForPublish(repo: string, remote: string, branch: string, headSha: string, patterns: { kind: string; re: RegExp }[]): PublicStateScanHit[] {
+  if (patterns.length === 0) return [];
+  const commits = newlyPublishedCommits(repo, remote, headSha);
+  if (!commits) return addedLineHits(repo, diffBaseForPublish(repo, remote, branch, headSha), headSha, patterns);
+  const hits: PublicStateScanHit[] = [];
+  for (const commit of commits) {
+    const r = git(repo, ["show", "--format=", "--unified=0", commit, "--", "."]);
+    if (!r.ok) return [{ path: "git show", line: "0", kind: "state scan failed" }];
+    hits.push(...addedLineHitsInPatch(r.out, patterns));
   }
   return hits;
 }
@@ -315,16 +429,13 @@ function installBeadPrefixes(root: string): string[] {
   const out = new Set(env);
   if (process.env.WHEELHOUSE_SKIP_BD !== "1") {
     const r = spawnSync("bd", ["list", "--limit", "20", "--json"], { cwd: root, encoding: "utf8", timeout: 10000 });
-    if (r.status === 0) {
-      try {
-        const rows = JSON.parse(r.stdout || "[]");
-        for (const row of Array.isArray(rows) ? rows : []) {
-          const id = String(row?.id ?? "");
-          const m = id.match(/^(.+)-[a-z0-9]{4}(?:\.\d+)?$/);
-          if (m) out.add(m[1]);
-        }
-      } catch { /* ignore bd output shape drift; explicit env/test fixtures still work */ }
-    }
+    try {
+      for (const row of nativeJsonArray(r, "bd list for public-state guard", ["id"])) {
+        const id = String(row.id);
+        const m = id.match(/^(.+)-[a-z0-9]{4}(?:\.\d+)?$/);
+        if (m) out.add(m[1]);
+      }
+    } catch (e: any) { refuse(`public-state guard cannot verify bead prefixes: ${e.message}`); }
   }
   return Array.from(out).filter((s) => /^[A-Za-z0-9_.-]+$/.test(s));
 }
@@ -345,7 +456,7 @@ function publicStatePatterns(root: string): { kind: string; re: RegExp }[] {
 }
 
 export function publicStateScanSummary(root: string, repo: string, remote: string, branch: string, headSha: string): string | null {
-  const hits = addedLineHits(repo, diffBaseForPublish(repo, remote, branch, headSha), headSha, publicStatePatterns(root));
+  const hits = addedLineHitsForPublish(repo, remote, branch, headSha, publicStatePatterns(root));
   if (hits.length === 0) return null;
   return hits.slice(0, 5).map((h) => `${h.path}:${h.line}`).join(", ");
 }
@@ -384,19 +495,27 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   const remote = o.remote ?? process.env.WHEELHOUSE_PUSH_REMOTE ?? "origin";
   const seatPush = o.seatPush ?? "on";
 
-  // 1. one seat per worktree
+  // 1. one live seat per worktree. Stopped/dead seats may retain stale cwd
+  // records from crashes or older adapters; those records must not pin a
+  // worktree forever.
   for (const [other, rec] of Object.entries(o.state.seats ?? {})) {
-    if (other === o.seat || !rec?.cwd) continue;
+    if (other === o.seat || !rec?.cwd || !pidAlive(rec.pid ?? null)) continue;
     if (samePath(rec.cwd, seatTarget)) refuse(`worktree ${seatTarget} is occupied by seat ${other} (recorded cwd); two seats never share a worktree`);
   }
 
   const rec = o.state.seats?.[o.seat];
-  const recordedLegacy = rec?.cwd && isLegacyWorktree(root, rec.cwd, o.roster) && fs.existsSync(rec.cwd) ? rec.cwd : null;
+  const statuses = beadStatuses(root);
+  const recordedLegacyBead = rec?.cwd && isLegacyWorktree(root, rec.cwd, o.roster) ? path.basename(rec.cwd) : null;
+  const recordedLegacy = rec?.cwd && recordedLegacyBead && statuses.get(recordedLegacyBead) !== "closed" && fs.existsSync(rec.cwd) ? rec.cwd : null;
   const namedLegacy = path.join(worktreesDir(root), o.beadId);
   const legacy = recordedLegacy ?? (fs.existsSync(namedLegacy) ? namedLegacy : null);
-  const repo = gitRepoFor(root, legacy ?? seatTarget);
+  const repo = gitRepoFor(root, legacy ?? seatTarget, o.beadId);
   const registered = registeredWorktrees(repo);
   const atLegacy = legacy ? registered.find((w) => samePath(w.path, legacy)) : undefined;
+  // A task-named legacy directory may carry an intentional custom branch,
+  // even after migration to the seat anchor. lastBead alone proves neither:
+  // a stale dispatch record must not preserve an unrelated current branch.
+  const legacyTaskBranch = atLegacy && path.basename(atLegacy.path) === o.beadId && (!rec?.lastBead || rec.lastBead === o.beadId) ? atLegacy.branch : null;
   if (atLegacy && (!rec?.pid || !pidAlive(rec.pid ?? null)) && !fs.existsSync(seatTarget)) {
     const mv = git(repo, ["worktree", "move", atLegacy.path, seatTarget]);
     if (mv.ok) {
@@ -410,9 +529,9 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     target = atLegacy.path;
   }
   let atTarget = registeredWorktrees(repo).find((w) => samePath(w.path, target));
-  if (atTarget?.branch && (path.basename(target) === o.beadId || rec?.lastBead === o.beadId)) branch = atTarget.branch;
+  if (atTarget?.branch && legacyTaskBranch === atTarget.branch) branch = atTarget.branch;
   for (const [other, otherRec] of Object.entries(o.state.seats ?? {})) {
-    if (other === o.seat || !otherRec?.cwd) continue;
+    if (other === o.seat || !otherRec?.cwd || !pidAlive(otherRec.pid ?? null)) continue;
     if (samePath(otherRec.cwd, target)) refuse(`worktree ${target} is occupied by seat ${other} (recorded cwd); two seats never share a worktree`);
   }
   const marker = path.join(target, PLACEHOLDER_MARKER);
@@ -440,13 +559,12 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
 
   const base = resolveBase(repo, o.beadId, o.base, root);
   const baseTip = git(repo, ["rev-parse", `${base}^{commit}`]).out;
-  const elsewhere = registeredWorktrees(repo).find((w) => w.branch === branch && !samePath(w.path, target));
-  if (elsewhere) refuse(`branch ${branch} is already checked out at ${elsewhere.path}; a branch can be in one worktree at a time`);
+  const elsewhere = registeredWorktrees(repo).find((w) => (w.branch === branch || w.branch === beadBranch(o.beadId)) && !samePath(w.path, target));
+  if (elsewhere) refuse(`branch ${elsewhere.branch} is already checked out at ${elsewhere.path}; cannot prepare target ${target}: a branch can be in one worktree at a time`);
   const exists = branchExists(repo, branch);
 
   if (!atTarget) {
     // 3. cap gates creation only
-    const statuses = beadStatuses(root);
     const live = fleetWorktrees(root, repo).filter((w) => {
       if (fs.existsSync(path.join(w.path, PLACEHOLDER_MARKER))) return false;
       if (!isLegacyWorktree(root, w.path, o.roster)) return true;
@@ -504,7 +622,7 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     try {
       const lease = currentBranch.startsWith("fleet/") ? remoteTrackingTip(repo, remote, currentBranch) : null;
       const pushArgs = ["push", "-u", ...(lease ? [`--force-with-lease=refs/heads/${currentBranch}:${lease}`] : []), remote, `${currentBranch}:${currentBranch}`];
-      push = git(repo, pushArgs, target);
+      push = git(repo, pushArgs, target, { WHEELHOUSE_INTEGRATOR_PUSH: "1" });
     } finally {
       try { fs.rmSync(markerFile, { force: true }); } catch {}
     }
@@ -556,10 +674,23 @@ export function productRepoFor(root: string): string | null {
 
 /** The repository seat worktrees belong to. A single-repo install IS the
  * repository unless wheelhouse/.template-source records a product-repo= for an
- * umbrella layout. An existing target's own repository wins first, because the
- * seat may already have been hand-created or may belong to the product repo
- * even when the umbrella root is itself a git repository. */
-export function gitRepoFor(root: string, target: string): string {
+ * umbrella layout. An explicit UMBRELLA declaration wins over an existing
+ * target: silently reusing a product worktree would prepare the wrong repo.
+ * Otherwise retain the existing target's repository, including hand-created
+ * product worktrees when the umbrella itself is also a git repository. */
+export function gitRepoFor(root: string, target: string, beadId?: string): string {
+  if (beadId && /^UMBRELLA$/i.test(repoLineFor(root, beadId) ?? "")) {
+    const umbrella = git(root, ["rev-parse", "--show-toplevel"]);
+    const expected = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    if (!umbrella.ok || !expected.ok) refuse(`${root} is not a git repository, but bead ${beadId} declares Repo: UMBRELLA`);
+    if (fs.existsSync(target)) {
+      const actual = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], target);
+      if (actual.ok && !samePath(actual.out, expected.out)) {
+        refuse(`bead ${beadId} declares Repo: UMBRELLA, but worktree ${target} belongs to another repository; refusing to create or switch its branch. Prepare an umbrella-owned seat worktree before dispatching this task.`);
+      }
+    }
+    return umbrella.out;
+  }
   if (fs.existsSync(target)) {
     const common = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], target);
     if (common.ok && common.out) return path.dirname(common.out);
@@ -595,6 +726,12 @@ function adapterSeatPushSetting(root: string): "on" | "off" {
 export function removeSeatWorktree(root: string, seat: string): void {
   const wt = seatWorktreeDir(root, seat);
   if (!fs.existsSync(wt)) return;
+  // Only resolve directories: a final FIFO must never be opened by realpath.
+  if (!fs.statSync(wt).isDirectory() || !fs.statSync(worktreesDir(root)).isDirectory()) refuse(`worktree ${wt} is not a directory; leaving seat registered`);
+  const managed = fs.realpathSync(worktreesDir(root)), target = fs.realpathSync(wt);
+  if (path.dirname(target) !== managed || path.basename(target) !== seat || fs.lstatSync(wt).isSymbolicLink()) {
+    refuse(`worktree ${wt} is not the seat's direct child of ${managed}; leaving seat registered`);
+  }
   const st = worktreeStatus(root, wt);
   if (!st.clean) refuse(`worktree ${wt} has real changes (${st.real[0]}); leaving seat registered`);
   const head = git(root, ["rev-parse", "HEAD"], wt).out;

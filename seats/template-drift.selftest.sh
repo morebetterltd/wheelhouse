@@ -3,11 +3,14 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/selftest-lib.sh"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-template-drift.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
-SCRIPT="$HERE/template-drift.sh"
+SCRIPT="${1:-$HERE/template-drift.sh}"
+bun "$HERE/fixtures/scratch-ownership.ts" drift "$HERE/.." "$FIX" && pass 'old pid scratch remains unrelated and intact' || fail 'scratch ownership collision'
+bun "$HERE/fixtures/template-drift-json.ts" "$SCRIPT" "$FIX/json-parity" "$HERE/fixtures/template-drift-json-reference.json" || fail 'original JSON output parity without Python'
 TEMPLATE="$FIX/template"; INSTALL="$FIX/install"
 mkdir -p "$TEMPLATE/seats/transports" "$TEMPLATE/runbooks" "$TEMPLATE/wheelhouse/crew" "$INSTALL/wheelhouse"
 ( cd "$TEMPLATE" && git init -q -b main && git config user.email selftest@example.invalid && git config user.name selftest )
@@ -57,6 +60,17 @@ path=$TEMPLATE
 EOF
 ( cd "$TEMPLATE" && git archive "$COMMIT2" | tar -x -C "$INSTALL" )
 run; [ $RC -eq 0 ] && [ -z "$OUT" ] && pass 'clean install exits 0 with no findings' || fail "clean failed rc=$RC out=$OUT"
+cat > "$INSTALL/wheelhouse/ISA.md" <<'EOF'
+# Install-specific ISA
+EOF
+cat > "$INSTALL/wheelhouse/INTEGRATOR.md" <<'EOF'
+# Install-specific integrator notes
+EOF
+mkdir -p "$INSTALL/wheelhouse/fleet" "$INSTALL/wheelhouse/crew"
+cat > "$INSTALL/wheelhouse/fleet/LOCAL.md" <<'EOF'
+# Local fleet notes
+EOF
+run; [ $RC -eq 0 ] && [ -z "$OUT" ] && pass 'install-owned wheelhouse docs are not local-only drift' || fail "install-owned docs drifted rc=$RC out=$OUT"
 cat > "$INSTALL/wheelhouse/.template-source" <<EOF
 source=$FIX/unreachable-source-must-not-be-used
 commit=$COMMIT2
@@ -64,6 +78,11 @@ path=$TEMPLATE
 EOF
 run; [ $RC -eq 0 ] && [ -z "$OUT" ] && pass 'path containing commit is sufficient; unreachable source is not fetched'
 printf "export const herald = 'install edit';\n" > "$INSTALL/seats/herald.ts"
+cat > "$INSTALL/wheelhouse/.template-forks" <<'EOF'
+seats/herald.ts # local herald behavior intentionally differs for this install
+EOF
+run; [ $RC -eq 0 ] && [ -z "$OUT" ] && pass 'declared fork with reason is not drift' || fail "declared fork drifted rc=$RC out=$OUT"
+rm -f "$INSTALL/wheelhouse/.template-forks"
 run; [ $RC -eq 1 ] && grep -q '^MODIFIED seats/herald.ts$' <<<"$OUT" && pass 'edited template seat file reports MODIFIED' || fail "modified failed rc=$RC out=$OUT"
 printf 'local tool\n' > "$INSTALL/seats/commander-watch.ts"
 run; [ $RC -eq 1 ] && grep -q '^LOCAL-ONLY seats/commander-watch.ts$' <<<"$OUT" && pass 'install-only seat file reports LOCAL-ONLY' || fail "local-only failed rc=$RC out=$OUT"
@@ -90,13 +109,12 @@ install contract changed
 local project half
 EOF
 run; [ $RC -eq 1 ] && grep -q '^MODIFIED wheelhouse/crew/WORKER.md$' <<<"$OUT" && pass 'contract-half changes report MODIFIED' || fail "contract-half failed rc=$RC out=$OUT"
-run_json; [ $RC -eq 1 ] && python3 - <<'PY' <<<"$OUT"
-import json,sys
-j=json.load(sys.stdin)
-assert 'wheelhouse/crew/WORKER.md' in j['modified']
-assert isinstance(j['localOnly'], list) and isinstance(j['missing'], list)
-assert j['comparedAgainst']
-PY
+run_json; [ $RC -eq 1 ] && bun -e '
+const assert=(await import("node:assert/strict")).default, j=JSON.parse((await import("node:fs")).default.readFileSync(0,"utf8"));
+assert.ok(j.modified.includes("wheelhouse/crew/WORKER.md"));
+assert.ok(Array.isArray(j.localOnly)&&Array.isArray(j.missing));
+assert.ok(j.comparedAgainst);
+' <<<"$OUT"
 [ $? -eq 0 ] && pass '--json shape includes arrays and comparedAgainst' || fail "json shape failed rc=$RC out=$OUT"
 cat > "$INSTALL/wheelhouse/.template-source" <<EOF
 source=$FIX/no-such-remote
@@ -107,15 +125,14 @@ run; [ $RC -eq 3 ] && grep -q '^DRIFT: cannot compare' <<<"$OUT" && pass 'unreac
 # Canary: if the split rule is removed, the project-half-only leg reports drift.
 BROKEN="$FIX/template-drift-nosplit.sh"
 cp "$SCRIPT" "$BROKEN"
-python3 - "$BROKEN" <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1])
-s=p.read_text()
-s=s.replace("split_contract() { awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}' \"$1\"; }", 'split_contract() { cat "$1"; }')
-s=s.replace('if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null | awk \'BEGIN{p=1} /^## This project$/{p=0} p{print}\'', 'if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null')
-p.write_text(s)
-PY
+bun - "$BROKEN" <<'JS'
+const fs=(await import('node:fs')).default, p=process.argv[2]; let s=fs.readFileSync(p,'utf8');
+for(const [old,replacement] of [
+  [`split_contract() { awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}' "$1"; }`, 'split_contract() { cat "$1"; }'],
+  [`if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null | awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}'`, 'if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null']
+]) { if(s.split(old).length!==2) throw new Error('canary source changed'); s=s.replace(old,replacement); }
+fs.writeFileSync(p,s);
+JS
 chmod +x "$BROKEN"
 cat > "$INSTALL/wheelhouse/.template-source" <<EOF
 source=$TEMPLATE

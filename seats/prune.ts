@@ -49,9 +49,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import * as crypto from "node:crypto";
 import { PLACEHOLDER_MARKER, phantomOnlyStatus, porcelainStatus } from "./seat-worktree";
+import { acquireCleanupLock, prepareCleanupRuntime, cleanupPathIdentity, cleanupPathUnchanged, scratchOwnership, type CleanupPathIdentity } from "./cleanup-identity";
+import { assertSeatIdentities, seatIdentity } from "./seat-activity";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const FLEET_CONTAINER = ".wheelhouse-worktrees";
@@ -62,6 +64,11 @@ const DEPENDENCY_SEGMENTS = new Set(["node_modules", "vendor", ".venv", "venv", 
 const NEVER = new Set(["needs-review", "seat-anchor"]);
 const CATEGORY_ALIASES: Record<string, string> = { "bead-runs": "run-scratch" };
 const SQUASH_LOG_DEPTH = Number(process.env.WHEELHOUSE_SQUASH_LOG_DEPTH || 2000);
+const SCAN_KIND = "wheelhouse-prune-scan";
+const SCAN_TSV_MARKER = "# wheelhouse-prune-scan-v1";
+const REVIEWED_ACTIONS = new Set(["rm", "worktree", "branch", "simctl", "xctest-devices"]);
+const CACHE_NAMES = [".wheelhouse-build", "DerivedData", "target", "bin", "obj", ".build", "dist", "build", ".next", "out"];
+function isDependencySegment(segment: string): boolean { return DEPENDENCY_SEGMENTS.has(segment) || /^node[-_]?modules$/i.test(segment); }
 
 interface Row {
   category: string;
@@ -94,7 +101,7 @@ const CATEGORIES: Record<string, string> = {
 
 function run(cmd: string, args: string[], cwd?: string, input?: string): { ok: boolean; out: string; err: string; code: number | null } {
   const r = spawnSync(cmd, args, { cwd, encoding: "utf8", stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], input, maxBuffer: 256 * 1024 * 1024 });
-  return { ok: r.status === 0, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim(), code: r.status };
+  return { ok: !r.error && !r.signal && r.status === 0, out: (r.stdout ?? "").trim(), err: String(r.stderr || r.error?.message || r.signal || "").trim(), code: r.status ?? null };
 }
 function isDir(p: string): boolean { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
 function subdirs(p: string): string[] { try { return fs.readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(p, d.name)); } catch { return []; } }
@@ -118,8 +125,9 @@ function repositories(root: string): string[] {
   return [...out].filter(Boolean);
 }
 
-function worktrees(repo: string): { path: string; branch: string; sha: string }[] {
+function worktrees(repo: string, strict = false): { path: string; branch: string; sha: string }[] {
   const r = run("git", ["worktree", "list", "--porcelain"], repo);
+  if (strict && !r.ok) throw new Error(`cannot verify worktree registrations: ${r.err || r.out}`);
   const out: { path: string; branch: string; sha: string }[] = [];
   let cur: any = {};
   for (const line of r.out.split("\n")) {
@@ -221,8 +229,12 @@ function beadStatuses(root: string): Map<string, string> {
   if (!isDir(path.join(root, ".beads"))) return m;
   for (const st of ["open", "in_progress", "blocked", "deferred", "closed"]) {
     const r = run("bd", ["list", `--status=${st}`, "--json", "--limit", "5000"], root);
-    if (!r.ok || !r.out) continue;
-    try { for (const b of JSON.parse(r.out)) if (b?.id) m.set(String(b.id), String(b.status ?? st)); } catch {}
+    if (!r.ok || !r.out) { console.error(`UNVERIFIED bead statuses ${st}: ${r.err || `native exit ${r.code}, empty JSON`}; no closed-bead authority supplied`); continue; }
+    try {
+      const rows = JSON.parse(r.out);
+      if (!Array.isArray(rows) || rows.some(b => !b || typeof b !== "object" || !b.id)) throw new Error("expected an issue array");
+      for (const b of rows) m.set(String(b.id), String(b.status ?? st));
+    } catch (e: any) { console.error(`UNVERIFIED bead statuses ${st}: ${e.message}; no closed-bead authority supplied`); }
   }
   return m;
 }
@@ -265,9 +277,10 @@ function liveCwds(fresh = false): Set<string> | null {
   let set: Set<string> | null = null;
   for (const lsof of candidates) {
     const r = spawnSync(lsof, ["-d", "cwd", "-Fpn"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
-    if (r.error || typeof r.stdout !== "string" || r.stdout.length === 0) continue;
-    set = new Set<string>();
-    for (const line of r.stdout.split("\n")) if (line.startsWith("n")) set.add(line.slice(1));
+    if (r.error || r.signal || r.status !== 0 || typeof r.stdout !== "string" || r.stdout.length === 0) continue;
+    const paths = r.stdout.split("\n").filter(line => line.startsWith("n")).map(line => line.slice(1));
+    if (!paths.length || paths.some(p => !path.isAbsolute(p))) continue;
+    set = new Set(paths);
     break;
   }
   liveCwdCache = { at: Date.now(), set };
@@ -284,7 +297,7 @@ function liveCwdHolders(): LiveCwdHolder[] | null {
   const candidates = process.env.WHEELHOUSE_LSOF ? [process.env.WHEELHOUSE_LSOF] : ["lsof", "/usr/sbin/lsof", "/usr/bin/lsof"];
   for (const lsof of candidates) {
     const r = spawnSync(lsof, ["-d", "cwd", "-Fpcn"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
-    if (r.error || typeof r.stdout !== "string" || r.stdout.length === 0) continue;
+    if (r.error || r.signal || r.status !== 0 || typeof r.stdout !== "string" || r.stdout.length === 0) continue;
     const holders: LiveCwdHolder[] = [];
     let current: Partial<LiveCwdHolder> = {};
     const flush = () => { if (current.pid && current.cwd) holders.push({ pid: current.pid, command: current.command ?? "?", cwd: path.resolve(current.cwd) }); };
@@ -295,6 +308,7 @@ function liveCwdHolders(): LiveCwdHolder[] | null {
       else if (line.startsWith("n")) current.cwd = line.slice(1);
     }
     flush();
+    if (!holders.length || holders.some(h => !Number.isSafeInteger(h.pid) || h.pid <= 0 || !path.isAbsolute(h.cwd))) continue;
     return holders;
   }
   return null;
@@ -323,8 +337,11 @@ function pushInProgress(root: string, p: string, live: Set<string> | null): stri
       } catch {}
     }
   } catch {}
-  const ps = spawnSync("ps", ["axo", "pid=,command="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).stdout || "";
-  for (const line of ps.split("\n")) {
+  const observation = spawnSync("ps", ["axo", "pid=,command="], { encoding: "utf8" });
+  if (observation.error || observation.signal || observation.status !== 0 || !observation.stdout.trim()) return `cannot verify pushes in flight: native ps status=${observation.status ?? "unknown"} signal=${observation.signal ?? "none"}; ${observation.error?.message ?? observation.stderr}`.trim();
+  const processLines = observation.stdout.split("\n");
+  if (!processLines.some(line => Number(/^\s*(\d+)\s+/.exec(line)?.[1]) === process.pid)) return "cannot verify pushes in flight: native process table lacks the observing process";
+  for (const line of processLines) {
     const m = line.match(/^\s*(\d+)\s+(.*)$/);
     if (!m || !/\bgit(-remote-\w+)?\b.*\bpush\b/.test(m[2])) continue;
     const cwd = processCwd(Number(m[1]));
@@ -468,9 +485,9 @@ function scanBranches(repo: string, root: string, beads: Map<string, string>, re
 }
 
 
-function scanBeadRuns(root: string, beads: Map<string, string>, seats: Map<string, string>, live: Set<string> | null): Row[] {
+function scanBeadRuns(root: string, beads: Map<string, string>, seats: Map<string, string>, live: Set<string> | null, containers = [path.join(root, RUNS_DIRNAME), path.join(root, ".wheelhouse-build")]): Row[] {
   const rows: Row[] = [];
-  for (const runs of [path.join(root, RUNS_DIRNAME), path.join(root, ".wheelhouse-build")].filter(isDir)) {
+  for (const runs of containers.filter(isDir)) {
     for (const d of subdirs(runs)) {
       const b = beadPrefix(path.basename(d), beads);
       if (!b) continue;
@@ -486,8 +503,25 @@ function scanBeadRuns(root: string, beads: Map<string, string>, seats: Map<strin
   return rows;
 }
 
+// An ambiguous "container" brief sent scratch above the install. Observe only
+// names matching this graph; never traverse/size/chmod/remove foreign scratch.
+const MISPLACED_SCRATCH = "misplaced scratch outside install";
+function scanMisplacedBeadRuns(root: string, beads: Map<string, string>): Row[] {
+  const parent = path.dirname(root);
+  if (parent === root || beads.size === 0) return [];
+  const rows: Row[] = [];
+  for (const d of subdirs(path.join(parent, RUNS_DIRNAME))) {
+    const name = path.basename(d), b = beadPrefix(name, beads);
+    if (b && (name === b[0] || name.startsWith(`${b[0]}-`) || name.startsWith(`${b[0]}_`))) rows.push(row("needs-review", false, root, d, "", "none",
+      `${MISPLACED_SCRATCH}: matches bead ${b[0]} in this install; reporting only, never deleted`, 0));
+  }
+  return rows;
+}
+
 function scanPrivateTmp(root: string, beads: Map<string, string>): Row[] {
-  const tmpRoots = [...new Set(["/private/tmp", path.resolve(os.tmpdir())])].filter(isDir);
+  // Record the physical parent, not TMPDIR's alias spelling. Reviewed rows
+  // must stay canonical; do not relax their symlink/identity checks instead.
+  const tmpRoots = [...new Set(["/private/tmp", os.tmpdir()].map((d) => realpathOr(d)).filter((d): d is string => !!d))].filter(isDir);
   const rows: Row[] = [];
   for (const tmpRoot of tmpRoots) {
     for (const d of subdirs(tmpRoot)) {
@@ -550,10 +584,9 @@ function scanBenchJunk(root: string): Row[] {
 }
 
 function scanCaches(root: string, includeOptional: boolean, activeBench: boolean): Row[] {
-  const names = [".wheelhouse-build", "DerivedData", "target", "bin", "obj", ".build", "dist", "build", ".next", "out"];
+  const names = CACHE_NAMES;
   const dependencyBins = new Set([".bin"]);
   const rows: Row[] = [];
-  const isDependencySegment = (segment: string): boolean => DEPENDENCY_SEGMENTS.has(segment) || /^node[-_]?modules$/i.test(segment);
   const cacheRow = (child: string, category: "build-cache" | "node-modules", reason: string) => {
     if (activeBench) rows.push(row("needs-review", false, root, child, "", "none", `bench lock present at ${path.join(root, ".wheelhouse-bench.lock")}; ${reason}`));
     else rows.push(row(category, true, root, child, "", "rm", reason));
@@ -586,7 +619,9 @@ function scan(roots: string[], includeOptional: boolean): Row[] {
     const beads = beadStatuses(root);
     const isa = isaAnchors(root);
     const registeredPaths = new Set<string>();
-    for (const repo of repositories(root)) {
+    const begin = rows.length;
+    const repos = repositories(root);
+    for (const repo of repos) {
       const wts = worktrees(repo);
       for (const wt of wts) registeredPaths.add(path.resolve(wt.path));
       rows.push(...scanWorktrees(root, repo, seats, beads, extra, live, isa));
@@ -595,114 +630,164 @@ function scan(roots: string[], includeOptional: boolean): Row[] {
     const activeBench = benchInProgress(root);
     rows.push(...scanOrphans(root, registeredPaths, seats, live));
     rows.push(...scanBeadRuns(root, beads, seats, live));
+    rows.push(...scanMisplacedBeadRuns(root, beads));
     rows.push(...scanPrivateTmp(root, beads));
     rows.push(...scanSimulators(root, beads));
     rows.push(...scanXCTestDevices(root));
     rows.push(...scanBenchJunk(root));
     rows.push(...scanCaches(root, includeOptional, activeBench));
+    // Non-Git umbrella roots still describe rows against a real product repo.
+    for (const r of rows.slice(begin)) if (!repositoryRoot(r.repo) && repos.length) r.repo = repos[0];
   }
   return rows.sort((a, b) => `${a.category}\t${a.path}`.localeCompare(`${b.category}\t${b.path}`));
 }
 
-function toTsv(rows: Row[]): string {
-  return ["category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason", ...rows.map((r) => [r.category, r.safe, r.repo, r.path, r.branch, r.size_bytes, r.size_human, r.action, r.reason].map((x) => String(x).replace(/\t|\n/g, " ")).join("\t"))].join("\n") + "\n";
+function scanMetadata(roots: string[]): object {
+  const scope = roots.map((r) => realpathOr(path.resolve(r)) ?? path.resolve(r));
+  // Keep JSON a flat array for adapter host-budget consumers. Inactive repo/path
+  // fields let pre-fix code ignore the header in deletion regression fixtures.
+  return { kind: SCAN_KIND, version: 1, root: scope[0], roots: scope, safe: 0, repo: scope[0], path: scope[0] };
+}
+function reviewedRow(r: Row): Row {
+  if (r.action !== "none") return r;
+  // Unsafe rows remain unsafe, but the reviewed wire uses real operation kinds.
+  const action = r.path.startsWith("simctl:") ? "simctl" : r.path === path.join(os.homedir(), "Library", "Developer", "XCTestDevices") ? "xctest-devices" : r.branch ? (r.path === r.repo ? "branch" : "worktree") : "rm";
+  return { ...r, action };
+}
+function toTsv(rows: Row[], roots: string[]): string {
+  return [`${SCAN_TSV_MARKER}\t${JSON.stringify((scanMetadata(roots) as any).roots)}`, "category\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason", ...rows.map(reviewedRow).map((r) => [r.category, r.safe, r.repo, r.path, r.branch, r.size_bytes, r.size_human, r.action, r.reason].map((x) => String(x).replace(/\t|\n/g, " ")).join("\t"))].join("\n") + "\n";
+}
+class ScanValidationError extends Error {}
+function badScan(row: number, field: string, reason: string): never { throw new ScanValidationError(`scan row ${row} field ${field}: ${reason}`); }
+function repositoryRoot(p: string): boolean {
+  if (!path.isAbsolute(p) || !isDir(p) || !fs.existsSync(path.join(p, ".git"))) return false;
+  const r = run("git", ["rev-parse", "--show-toplevel"], p);
+  return r.ok && realpathOr(r.out) === realpathOr(p);
+}
+function validateScanRoots(roots: unknown, row: number): void {
+  const expected = realpathOr(ROOT) ?? path.resolve(ROOT);
+  if (!Array.isArray(roots) || roots.length !== 1 || typeof roots[0] !== "string" || !path.isAbsolute(roots[0]) || realpathOr(roots[0]) !== expected) badScan(row, "root", `expected this install ${expected}; rescan from its prune.ts`);
+}
+function validateScanRow(value: any, n: number): Row {
+  if (!value || typeof value !== "object" || Array.isArray(value)) badScan(n, "row", "expected an object");
+  for (const f of ["category", "repo", "path", "branch", "size_human", "action", "reason"]) if (typeof value[f] !== "string") badScan(n, f, "expected a string");
+  if (value.safe !== 0 && value.safe !== 1) badScan(n, "safe", "expected exactly the number 0 or 1");
+  const category = Object.hasOwn(CATEGORY_ALIASES, value.category) ? CATEGORY_ALIASES[value.category] : value.category;
+  if (!Object.hasOwn(CATEGORIES, category)) badScan(n, "category", `unknown category ${value.category}`);
+  if (!REVIEWED_ACTIONS.has(value.action)) badScan(n, "action", `unknown action ${value.action}`);
+  if (!path.isAbsolute(value.path) && !(value.action === "simctl" && value.path.startsWith("simctl:") && value.path.length > 7)) badScan(n, "path", "expected an absolute path (or simctl: target for simctl)");
+  if (!repositoryRoot(value.repo)) badScan(n, "repo", "expected an existing Git repository root");
+  if (typeof value.size_bytes !== "number" || !Number.isFinite(value.size_bytes) || value.size_bytes < 0) badScan(n, "size_bytes", "expected a finite nonnegative number");
+  const actions: Record<string, string> = { "merged-worktree":"worktree", "zero-commit-worktree":"worktree", "detached-snapshot":"worktree", "orphaned-worktree":"rm", "stale-branch":"branch", "bead-simulator":"simctl", "xctest-devices":"xctest-devices", "build-cache":"rm", "node-modules":"rm", "bench-junk":"rm", "run-scratch":"rm", "bead-tmp":"rm" };
+  if (actions[category] && actions[category] !== value.action) badScan(n, "action", `${category} requires ${actions[category]}`);
+  return { ...value, category };
+}
+function validateScanMetadata(meta: any): void {
+  if (!meta || meta.kind !== SCAN_KIND || meta.version !== 1 || meta.safe !== 0) badScan(1, "root", "missing or invalid scan metadata; rescan");
+  validateScanRoots(meta.roots ?? [meta.root], 1);
+  if (meta.root !== (meta.roots ?? [meta.root])[0]) badScan(1, "root", "inconsistent root metadata");
 }
 function parseScan(file: string): Row[] {
-  const text = fs.readFileSync(file, "utf8");
-  if (/\.jsonl$/i.test(file)) return text.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
-  if (/\.json$/i.test(file)) return JSON.parse(text);
-  const [head, ...lines] = text.trimEnd().split("\n");
-  const cols = head.split("\t");
-  return lines.filter(Boolean).map((l) => {
-    const v = l.split("\t"); const o: any = {};
-    cols.forEach((c, i) => o[c] = v[i] ?? "");
-    o.safe = Number(o.safe) as 0 | 1; o.size_bytes = Number(o.size_bytes); return o as Row;
-  });
+  let text: string;
+  try { text = fs.readFileSync(file, "utf8"); } catch (e: any) { badScan(1, "file", e.message); }
+  let values: any[];
+  if (/\.jsonl?$/i.test(file)) {
+    if (/\.jsonl$/i.test(file)) {
+      const lines = text!.split("\n").filter((l) => l.trim());
+      const decode = (line: string, n: number): any => { try { return JSON.parse(line); } catch { badScan(n, "json", "malformed JSON"); } };
+      validateScanMetadata(decode(lines[0] ?? "", 1));
+      // Validate each record before decoding the next: report the FIRST bad row.
+      return lines.slice(1).map((line, i) => validateScanRow(decode(line, i + 2), i + 2));
+    }
+    try { values = JSON.parse(text!); } catch { badScan(1, "json", "malformed JSON"); }
+    if (!Array.isArray(values!)) badScan(1, "row", "expected a JSON array");
+    validateScanMetadata(values![0]);
+    values = values!.slice(1);
+  } else {
+    const [meta, head, ...lines] = text!.trimEnd().split(/\r?\n/);
+    if (!meta.startsWith(SCAN_TSV_MARKER + "\t")) badScan(1, "root", "missing scan metadata; rescan");
+    try { validateScanRoots(JSON.parse(meta.slice(SCAN_TSV_MARKER.length + 1)), 1); } catch(e) { if(e instanceof ScanValidationError) throw e; badScan(1, "root", "malformed scan metadata"); }
+    if (!head) badScan(2, "columns", "missing TSV columns");
+    const cols = head.split("\t");
+    if (new Set(cols).size !== cols.length) badScan(2, "columns", "duplicate TSV column");
+    return lines.filter(Boolean).map((l, i) => {
+      const v = l.split("\t"), o: any = {};
+      if (v.length !== cols.length) badScan(i + 2, "columns", "wrong TSV column count");
+      cols.forEach((c, j) => o[c] = v[j]);
+      if (!/^[01]$/.test(o.safe ?? "")) badScan(i + 2, "safe", "expected exactly 0 or 1");
+      if (!o.size_bytes?.trim()) badScan(i + 2, "size_bytes", "expected a number");
+      o.safe = Number(o.safe); o.size_bytes = Number(o.size_bytes);
+      return validateScanRow(o, i + 2);
+    });
+  }
+  // Eagerly validate ALL rows before any prune action, even excluded/unsafe rows.
+  return values!.map((r, i) => validateScanRow(r, i + 2));
 }
-function readJsonlResponse(log: string, id: string, start: number, deadlineMs: number): any | null {
-  while (Date.now() < deadlineMs) {
-    try {
-      const fd = fs.openSync(log, "r");
-      try {
-        const size = fs.fstatSync(fd).size;
-        if (size > start) {
-          const buf = Buffer.alloc(size - start);
-          fs.readSync(fd, buf, 0, buf.length, start);
-          for (const line of buf.toString("utf8").split("\n")) {
-            if (!line.trim()) continue;
-            try { const j = JSON.parse(line); if (j?.id === id && j?.type === "response") return j; } catch {}
-          }
+const PRUNE_STATE_OBSERVE_LIMIT_MS = Number(process.env.WHEELHOUSE_PRUNE_STATE_OBSERVE_MS || 120000);
+function readJsonlResponse(rec: any, fd: number, id: string, start: number, until: number): any {
+  const initial = fs.fstatSync(fd, { bigint: true }), identity = `${initial.dev}:${initial.ino}`;
+  let offset = start, pending = Buffer.alloc(0);
+  const last = () => `pid=${rec.pid} source=${identity} observedOffset=${offset} partialBytes=${pending.length}`;
+  for (;;) {
+    const st = fs.statSync(String(rec.log), { bigint: true });
+    if (`${st.dev}:${st.ino}` !== identity || st.size < BigInt(offset)) throw new Error(`state response source changed; ${last()}`);
+    const n = Number(st.size - BigInt(offset));
+    if (n > 0) {
+      const bytes = Buffer.alloc(Math.min(n, 64 * 1024)), read = fs.readSync(fd, bytes, 0, bytes.length, offset);
+      offset += read; pending = Buffer.concat([pending, bytes.subarray(0, read)]);
+      for (;;) {
+        const lf = pending.indexOf(10); if (lf < 0) break;
+        const line = pending.subarray(0, lf).toString("utf8"); pending = pending.subarray(lf + 1);
+        let response: any; try { response = JSON.parse(line); } catch { continue; }
+        if (response?.id === id && response?.type === "response") {
+          const proof = seatIdentity(rec.pid, rec.fifo, rec.startedAt);
+          if (proof.kind !== "owned") throw new Error(`state response identity ${proof.kind}: ${proof.reason}; ${last()}`);
+          return response;
         }
-      } finally { fs.closeSync(fd); }
-    } catch {}
+      }
+      if (read > 0) {
+        if (performance.now() >= until) throw new Error(`state observation policy expired, not an idle result; ${last()}`);
+        continue;
+      }
+    }
+    if (!pidAlive(Number(rec.pid))) throw new Error(`seat exited before state response; ${last()}`);
+    if (performance.now() >= until) throw new Error(`state observation policy expired, not an idle result; ${last()}`);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   }
+}
+function getState(rec: any): any {
+  if (!rec?.fifo || !rec?.log) throw new Error("state transport is not recorded");
+  if (!Number.isFinite(PRUNE_STATE_OBSERVE_LIMIT_MS) || PRUNE_STATE_OBSERVE_LIMIT_MS <= 0) throw new Error("invalid prune state-observation policy bound");
+  const id = crypto.randomUUID(), fd = fs.openSync(String(rec.log), fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  try {
+    const st = fs.fstatSync(fd); if (!st.isFile()) throw new Error("state response source is not a regular file");
+    const writer = fs.openSync(String(rec.fifo), fs.constants.O_WRONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+    try {
+      if (!fs.fstatSync(writer).isFIFO()) throw new Error("state request target is not a FIFO");
+      const request = Buffer.from(JSON.stringify({ id, type: "get_state" }) + "\n");
+      if (fs.writeSync(writer, request) !== request.length) throw new Error("state request was not written completely");
+    } finally { fs.closeSync(writer); }
+    return readJsonlResponse(rec, fd, id, st.size, performance.now() + PRUNE_STATE_OBSERVE_LIMIT_MS);
+  } finally { fs.closeSync(fd); }
+}
+function midTurnSeatReason(): string | null {
+  assertSeatIdentities(ROOT);
+  let state: any;
+  try { state = JSON.parse(fs.readFileSync(path.join(ROOT, "seats", "state.json"), "utf8")); }
+  catch (e: any) { return e.code === "ENOENT" ? null : `seat state UNVERIFIED: ${e.message}; prune not authorized`; }
+  for (const [name, rec] of Object.entries<any>(state.seats ?? {})) {
+    if (!pidAlive(Number(rec?.pid ?? 0))) continue;
+    // Cwd-only records are generic anchors, not declarations of an RPC seat.
+    // They remain protected by the independent live-cwd/seat-anchor guards;
+    // do not invent an idle result or require a protocol they never claimed.
+    const rpcSeat = rec.fifo !== undefined || rec.log !== undefined || rec.role === "worker" || rec.role === "reviewer" || rec.accountDir || rec.sessionFile || rec.sessionId;
+    if (!rpcSeat) continue;
+    let st: any;
+    try { st = getState(rec); } catch (e: any) { return `seat "${name}" state UNVERIFIED: ${e.message}; prune not authorized`; }
+    if (!st?.success || typeof st?.data?.isStreaming !== "boolean") return `seat "${name}" state UNVERIFIED: no successful streaming observation; prune not authorized`;
+    if (st.data.isStreaming) return `seat "${name}" is mid-turn per get_state; settle seats before prune --yes`;
+  }
   return null;
-}
-function getState(rec: any): any | null {
-  if (!rec?.fifo || !rec?.log || !fs.existsSync(String(rec.fifo)) || !fs.existsSync(String(rec.log))) return null;
-  const id = crypto.randomUUID();
-  const start = fs.existsSync(String(rec.log)) ? fs.statSync(String(rec.log)).size : 0;
-  try { fs.appendFileSync(String(rec.fifo), JSON.stringify({ id, type: "get_state" }) + "\n"); } catch { return null; }
-  return readJsonlResponse(String(rec.log), id, start, Date.now() + 2000);
-}
-function rootsWithInstallFiles(rows: Row[]): string[] {
-  const out = new Set<string>();
-  const candidates = new Set<string>();
-  for (const r of rows) {
-    if (path.isAbsolute(r.repo)) candidates.add(path.resolve(r.repo));
-    if (path.isAbsolute(r.path)) candidates.add(path.resolve(r.path));
-  }
-  for (const c of candidates) {
-    if (!path.isAbsolute(c)) continue;
-    let cur = fs.existsSync(c) && fs.statSync(c).isDirectory() ? c : path.dirname(c);
-    while (true) {
-      if (fs.existsSync(path.join(cur, "seats"))) { out.add(cur); break; }
-      const next = path.dirname(cur);
-      if (next === cur) break;
-      cur = next;
-    }
-  }
-  return [...out];
-}
-function rootsWithSeatState(rows: Row[]): string[] {
-  const out = new Set<string>();
-  const candidates = new Set<string>();
-  for (const r of rows) {
-    if (path.isAbsolute(r.repo)) candidates.add(path.resolve(r.repo));
-  }
-  for (const c of candidates) {
-    if (!path.isAbsolute(c)) continue;
-    let cur = fs.existsSync(c) && fs.statSync(c).isDirectory() ? c : path.dirname(c);
-    while (true) {
-      if (fs.existsSync(path.join(cur, "seats", "state.json"))) { out.add(cur); break; }
-      const next = path.dirname(cur);
-      if (next === cur) break;
-      cur = next;
-    }
-  }
-  return [...out];
-}
-function assertNoMidTurnSeats(rows: Row[]): void {
-  for (const root of rootsWithSeatState(rows)) {
-    let state: any;
-    try { state = JSON.parse(fs.readFileSync(path.join(root, "seats", "state.json"), "utf8")); } catch { continue; }
-    for (const [name, rec] of Object.entries<any>(state.seats ?? {})) {
-      if (!pidAlive(Number(rec?.pid ?? 0))) continue;
-      const st = getState(rec);
-      if (st?.success && st?.data?.isStreaming) stop(`seat "${name}" is mid-turn per get_state; settle seats before prune --yes`);
-    }
-  }
-}
-function assertNoSelectedSeatAnchors(rows: Row[], cats: Set<string> | null): void {
-  const anchors = new Map<string, string>();
-  for (const root of rootsWithSeatState(rows)) for (const [p, reason] of seatAnchors(root)) anchors.set(path.resolve(p), reason);
-  for (const r of rows) {
-    if (cats && !cats.has(r.category)) continue;
-    if (!r.safe || NEVER.has(r.category)) continue;
-    const reason = anchors.get(path.resolve(r.path));
-    if (reason) stop(`refusing to prune ${r.path}: ${reason}`);
-  }
 }
 function localBranchSha(repo: string, branch: string): string {
   return run("git", ["rev-parse", "--verify", branch], repo).out.trim();
@@ -724,33 +809,117 @@ function normalizeCats(cats: Set<string> | null): Set<string> | null {
   if (!cats) return null;
   return new Set([...cats].map((c) => CATEGORY_ALIASES[c] ?? c));
 }
+/** The cache scanner's exceptions to the three owned containers. */
+function explicitCacheTarget(r: Row): boolean {
+  const p = path.resolve(r.path);
+  if (r.category === "bead-tmp") {
+    const tmpRoots = [os.tmpdir(), "/private/tmp"].map((d) => realpathOr(d)).filter(Boolean);
+    const bead = beadPrefix(path.basename(p), beadStatuses(ROOT), "-");
+    return tmpRoots.includes(path.dirname(p)) && bead?.[1] === "closed";
+  }
+  if (!insideOf(p, ROOT) || p === ROOT || !isDir(p)) return false;
+  if (r.category === "bench-junk") return path.dirname(p) === ROOT && path.basename(p).startsWith(".wheelhouse-bench.lock.stale.");
+  const parts = path.relative(ROOT, p).split(path.sep);
+  const parents = parts.slice(0, -1);
+  if (parts.length > 4 || parents.some((s) => isDependencySegment(s) || [".git", ".beads", "seats", FLEET_CONTAINER, RUNS_DIRNAME, ".worktrees"].includes(s))) return false;
+  if (r.category === "node-modules") return path.basename(p) === "node_modules";
+  return r.category === "build-cache" && CACHE_NAMES.includes(path.basename(p));
+}
+interface TargetIdentity { dev: number; ino: number }
+function targetIdentity(p: string): TargetIdentity | null {
+  try { const st = fs.lstatSync(p); return { dev: st.dev, ino: st.ino }; } catch { return null; }
+}
+/** Fresh probes, not the reviewed row's old assertion of safety. */
+function reviewedTargetReason(r: Row, identity?: TargetIdentity): string | null {
+  if (!repositories(ROOT).some((repo) => realpathOr(repo) === realpathOr(r.repo))) return "repository is not part of this install";
+  const busy = midTurnSeatReason();
+  if (busy) return busy;
+  if (r.action === "simctl") {
+    if (!/^simctl:[0-9A-F-]{36}$/.test(r.path)) return "invalid simulator UDID";
+    const current = scanSimulators(ROOT, beadStatuses(ROOT)).find((s) => s.path === r.path);
+    return current?.safe === 1 ? null : "simulator is no longer a closed-bead scan target";
+  }
+  if (r.action === "branch") {
+    if (path.resolve(r.path) !== path.resolve(r.repo) || !isFleetBranch(r.branch) || !run("git", ["check-ref-format", `refs/heads/${r.branch}`]).ok) return "invalid fleet branch target";
+    integrationRefCache.clear(); patchIdCache.clear();
+    const current = scanBranches(r.repo, ROOT, beadStatuses(ROOT), new Set(worktrees(r.repo).map((w) => w.branch).filter(Boolean)), extraIntegrationRefs([ROOT])).find((s) => s.branch === r.branch);
+    return current?.safe === 1 ? null : `branch is no longer safe: ${current?.reason ?? "not found"}`;
+  }
+  const p = path.resolve(r.path);
+  if (!fs.existsSync(p)) return "path no longer exists";
+  // Act using the same spelling we checked; lexical '..' normalization must
+  // not hide a symlink that the filesystem would traverse in the original path.
+  if (r.path !== p || realpathOr(r.path) !== p) return "path mismatch: noncanonical spelling or symlink component";
+  const before = targetIdentity(p);
+  if (!before) return "path no longer exists";
+  if (identity && (identity.dev !== before.dev || identity.ino !== before.ino)) return "target changed during validation";
+  if (r.action === "xctest-devices") {
+    const devicesRoot = path.join(os.homedir(), "Library", "Developer", "XCTestDevices");
+    if (!isDir(p) || !insideOf(p, devicesRoot)) return "outside XCTestDevices directory root";
+    if (xcodebuildRunning() || !run("xcrun", ["simctl", "help"]).ok) return "XCTestDevices set is busy or unverifiable";
+    const devices = simctlJson(["--set", p, "list", "devices", "--json"]);
+    if (!devices || Object.values<any>(devices.devices ?? {}).some((ds) => Array.isArray(ds) && ds.some((d) => String(d?.state ?? "") === "Booted"))) return "XCTestDevices set is busy or unverifiable";
+  } else if (!underAllowed(ROOT, p) && !explicitCacheTarget(r)) return "outside allowed containers and scanner cache paths";
+  seatAnchorCache.delete(ROOT);
+  const anchor = seatAnchorWithin(p, seatAnchors(ROOT));
+  if (anchor) return `refusing to prune: ${anchor}`;
+  if (r.action === "worktree") {
+    const wt = worktrees(r.repo).find((w) => path.resolve(w.path) === p);
+    if (!wt || wt.branch !== r.branch) return "worktree registration or branch changed";
+    const state = treeState(r.repo, p);
+    if (!state.clean) return `uncommitted changes: ${state.detail}`;
+    if (isaAnchors(ROOT).has(path.basename(p))) return "named by wheelhouse/ISA.md";
+    const push = pushInProgress(ROOT, p, null);
+    if (push) return `deferred: push in progress (${push})`;
+  } else if (r.action === "rm") {
+    if (fs.existsSync(path.join(p, ".git"))) return "rm target is a Git checkout; use a worktree row";
+    if (["build-cache", "node-modules"].includes(r.category) && fs.existsSync(path.join(ROOT, ".wheelhouse-bench.lock"))) return "bench lock present";
+  }
+  const live = liveCwds(true);
+  if (!live) return "cannot verify: lsof unavailable";
+  const cwd = liveCwdInside(p, live);
+  if (cwd) return `live process has its cwd in ${cwd}`;
+  // Outside probes can swap an ancestor. Check again after the last probe.
+  if (realpathOr(r.path) !== p) return "path mismatch after validation: symlink component or missing target";
+  const after = targetIdentity(p);
+  if (!after || after.dev !== before.dev || after.ino !== before.ino) return "target changed during validation";
+  return null;
+}
 function prune(rows: Row[], yes: boolean, cats: Set<string> | null): void {
-  if (yes) { assertNoMidTurnSeats(rows); assertNoSelectedSeatAnchors(rows, cats); }
   let touched = 0, skipped = 0, reclaimed = 0;
+  const skip = (r: Row, reason: string) => { skipped++; console.log(`SKIPPED ${r.category} ${r.path} reason=${reason}`); };
   for (const r of rows) {
-    r.category = CATEGORY_ALIASES[r.category] ?? r.category;
     if (cats && !cats.has(r.category)) { skipped++; continue; }
-    if (!r.safe || NEVER.has(r.category)) { skipped++; continue; }
+    if (r.safe !== 1 || NEVER.has(r.category)) { skip(r, r.reason || "not a safe scan category"); continue; }
     if (!yes) { reclaimed += r.size_bytes; console.log(`DRY-RUN ${r.action} ${r.category} ${r.path}`); continue; }
+    const reason = reviewedTargetReason(r);
+    if (reason) { skip(r, reason); continue; }
+    const identity = r.action === "rm" || r.action === "worktree" ? targetIdentity(r.path)! : undefined;
     if (r.action === "rm") { makeWritable(r.path); fs.rmSync(r.path, { recursive: true, force: true }); }
     else if (r.action === "worktree") {
-      const branch = r.branch;
       const sha = run("git", ["rev-parse", "HEAD"], r.path).out;
       const tag = archiveTag(r.repo, r.path, sha);
       if (tag) console.log(`TAGGED ${tag} ${sha.slice(0, 12)} before removing ${r.path}`);
-      run("git", ["worktree", "remove", "--force", r.path], r.repo);
+      const changed = reviewedTargetReason(r, identity);
+      if (changed) { skip(r, changed); continue; }
+      const del = run("git", ["worktree", "remove", "--force", r.path], r.repo);
+      if (!del.ok) { skip(r, `worktree remove failed: ${del.err || del.out}`); continue; }
     }
     else if (r.action === "branch") {
       const sha = localBranchSha(r.repo, r.branch);
       const tagName = r.branch.replace(/^fleet\//, "");
       const tag = archiveTag(r.repo, tagName, sha, true);
-      if (!tag) { skipped++; continue; }
+      if (!tag) { skip(r, "could not preserve branch tip"); continue; }
       console.log(`TAGGED ${tag} ${sha.slice(0, 12)} before deleting ${r.branch}`);
+      const changed = reviewedTargetReason(r);
+      if (changed || localBranchSha(r.repo, r.branch) !== sha) { skip(r, changed ?? "branch tip changed"); continue; }
       const del = run("git", ["branch", "-d", r.branch], r.repo);
-      if (!del.ok) { skipped++; continue; }
+      if (!del.ok) { skip(r, `branch delete failed: ${del.err || del.out}`); continue; }
     }
-    else if (r.action === "simctl") run("xcrun", ["simctl", "delete", r.path.replace(/^simctl:/, "")]);
-    else if (r.action === "xctest-devices") run("xcrun", ["simctl", "--set", r.path, "delete", "all"]);
+    else if (r.action === "simctl" || r.action === "xctest-devices") {
+      const del = r.action === "simctl" ? run("xcrun", ["simctl", "delete", r.path.slice(7)]) : run("xcrun", ["simctl", "--set", r.path, "delete", "all"]);
+      if (!del.ok) { skip(r, `simctl delete failed: ${del.err || del.out}`); continue; }
+    }
     reclaimed += r.size_bytes;
     touched++;
     console.log(`PRUNED ${r.action} ${r.category} ${r.path}`);
@@ -766,30 +935,61 @@ const CLEANUP_CATEGORIES = new Set(["merged-worktree", "zero-commit-worktree", "
 
 interface CleanupOptions { root: string; dryRun: boolean; deadline: number | null; log: string; bead: string | null; wait: number }
 
-function nowIso(): string { return new Date().toISOString().replace(/\.\d{3}Z$/, "Z"); }
-function acquireCleanupLock(root: string, waitSeconds: number): (() => void) | null {
-  const dir = path.join(root, "seats", "run", "cleanup.lock");
-  fs.mkdirSync(path.dirname(dir), { recursive: true });
-  const until = Date.now() + waitSeconds * 1000;
-  while (true) {
-    try {
-      fs.mkdirSync(dir);
-      fs.writeFileSync(path.join(dir, "pid"), `${process.pid}\n`);
-      return () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} };
-    } catch (e: any) {
-      if (e?.code !== "EEXIST") throw e;
-      let owner = 0;
-      try { owner = Number(fs.readFileSync(path.join(dir, "pid"), "utf8").trim()); } catch {}
-      if (owner && !pidAlive(owner)) { try { fs.rmSync(dir, { recursive: true, force: true }); continue; } catch {} }
-      if (!owner) {
-        // a lock dir with no pid yet: give the taker a moment; treat as stale after 10 s
-        try { if (Date.now() - fs.statSync(dir).mtimeMs > 10000) { fs.rmSync(dir, { recursive: true, force: true }); continue; } } catch {}
-      }
-      if (Date.now() >= until) return null;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
-    }
-  }
+/** Only the exact seat/.wheelhouse-runs/<task> shape, never an arbitrary descendant. */
+function seatScratchLocation(root: string, p: string): { seatRoot: string; scratch: string } | null {
+  const parts = path.relative(root, path.resolve(p)).split(path.sep);
+  if (parts.length < 4 || parts[0] !== FLEET_CONTAINER || parts[2] !== RUNS_DIRNAME) return null;
+  const seatRoot = path.join(root, FLEET_CONTAINER, parts[1]);
+  return { seatRoot, scratch: path.join(seatRoot, RUNS_DIRNAME, parts[3]) };
 }
+
+/** Automatic cleanup only: aggregate controls under their explicitly owned run. */
+function scanSeatBeadRuns(root: string): Row[] {
+  const rows: Row[] = [], seats = seatAnchors(root), beads = beadStatuses(root);
+  const seatRoots = new Set(repositories(root).flatMap(repo => worktrees(repo, true))
+    .map(w => path.resolve(w.path)).filter(p => isFleetContainerPath(root, p)));
+  for (const seatRoot of seatRoots) {
+    const runs = path.join(seatRoot, RUNS_DIRNAME);
+    if (!fs.existsSync(runs)) continue;
+    // Refuse a linked seat or runs container before traversing/sizing its children.
+    try { cleanupPathIdentity(root, runs); }
+    catch (e: any) { rows.push(row("needs-review", false, root, runs, "", "none", `path mismatch: ${e.message}`, 0)); continue; }
+    rows.push(...scanBeadRuns(root, beads, seats, liveCwds(), [runs]));
+  }
+  return rows;
+}
+
+function registeredScratchWorktrees(root: string, target: string) {
+  return repositories(root).flatMap(repo => worktrees(repo, true)
+    .filter(w => insideOf(path.resolve(w.path), target))
+    .map(w => ({ ...w, path: path.resolve(w.path), repo })))
+    .sort((a, b) => b.path.length - a.path.length);
+}
+
+/** Same worktree refusal rules as the fleet scanner; no zero-commit open exception. */
+function checkedScratchWorktrees(root: string, target: string) {
+  const beads = beadStatuses(root), extra = extraIntegrationRefs([root]), isa = isaAnchors(root);
+  return registeredScratchWorktrees(root, target).map(w => {
+    const identity = cleanupPathIdentity(root, w.path);
+    const refuse = (reason: string): never => { throw new Error(`registered control ${w.path}: ${reason}`); };
+    if (isa.has(path.basename(w.path))) refuse("named by wheelhouse/ISA.md");
+    if (fs.existsSync(path.join(w.path, PLACEHOLDER_MARKER))) refuse(`${PLACEHOLDER_MARKER} left for the adapter`);
+    const tree = treeState(w.repo, w.path);
+    if (!tree.clean) refuse(`uncommitted changes (${tree.detail})`);
+    const pushing = pushInProgress(root, w.path, null);
+    if (pushing) refuse(`deferred: push in progress (${pushing})`);
+    const bead = beadFor(w.branch || path.basename(w.path), beads);
+    if (bead && bead[1] !== "closed") refuse(`bead ${bead[0]} is ${bead[1]}`);
+    if (w.branch) {
+      if (!isFleetBranch(w.branch) || !bead || bead[1] !== "closed") refuse("branch has no closed bead");
+      if (listedIntegrationRef(w.branch, extra)) refuse("listed integration ref in seats/integration-refs.txt");
+      if (!integratedRef(w.repo, w.sha, extra)) refuse("branch is not merged to an integration ref");
+    } else if (!onRemote(w.repo, w.sha)) refuse("detached snapshot not found on a remote ref");
+    return { ...w, identity };
+  });
+}
+
+function nowIso(): string { return new Date().toISOString().replace(/\.\d{3}Z$/, "Z"); }
 function rowIsForBead(r: Row, bead: string): boolean {
   const base = path.basename(r.path);
   return r.branch === `fleet/${bead}` || base === bead || base.startsWith(`${bead}-`) || base.startsWith(`${bead}_`);
@@ -801,6 +1001,7 @@ function underAllowed(root: string, p: string): boolean {
 function makeWritable(p: string): void {
   try {
     const st = fs.lstatSync(p);
+    if (st.isSymbolicLink()) return;
     fs.chmodSync(p, st.mode | 0o200);
     if (st.isDirectory() && !st.isSymbolicLink()) for (const child of fs.readdirSync(p)) makeWritable(path.join(p, child));
   } catch {}
@@ -824,8 +1025,11 @@ function cleanupPolicy(root: string): CleanupPolicy {
 
 function cleanup(o: CleanupOptions): number {
   const root = realpathOr(path.resolve(o.root)) ?? path.resolve(o.root);
+  // Validate/create runtime components by descriptor before even opening logs.
+  prepareCleanupRuntime(root);
   fs.mkdirSync(path.dirname(o.log), { recursive: true });
   const emit = (line: string) => { const l = `${nowIso()} ${line}`; console.log(l); fs.appendFileSync(o.log, l + "\n"); };
+  assertSeatIdentities(root); // no scan/removal may treat unknown identity as vacancy
   const policy = cleanupPolicy(root);
   if (policy === "off") { emit("cleanup skipped cleanup=off in wheelhouse/.template-source"); return 0; }
   if (policy === "report") o = { ...o, dryRun: true };
@@ -834,14 +1038,20 @@ function cleanup(o: CleanupOptions): number {
   let removed = 0, kept = 0, freed = 0, failed = 0;
   const pastDeadline = () => o.deadline !== null && Date.now() / 1000 >= o.deadline;
   try {
-    let rows = scan([root], false).filter((r) => CLEANUP_CATEGORIES.has(r.category) || NEVER.has(r.category));
+    let rows = scan([root], false);
+    const nested = scanSeatBeadRuns(root);
+    // A control is evaluated as part of its owned scratch, not as an unrelated
+    // interactive checkout (nor independently of the parent's marker).
+    rows = rows.filter(r => !nested.some(n => r.path !== n.path && insideOf(r.path, n.path)));
+    rows.push(...nested);
+    rows = rows.filter((r) => CLEANUP_CATEGORIES.has(r.category) || NEVER.has(r.category));
     if (o.bead) rows = rows.filter((r) => rowIsForBead(r, o.bead!));
     const dry = o.dryRun ? "dry-run " : "";
     const inContainer = (p: string) => underAllowed(root, p) || DEFAULT_CONTAINERS.some((d) => insideOf(path.resolve(p), path.join(root, d)));
-    for (const r of rows) {
+    rowsLoop: for (const r of rows) {
       if (NEVER.has(r.category)) {
         // kept lines only for what cleanup could otherwise have touched: worktrees and bead scratch
-        if (inContainer(r.path)) { emit(`${dry}kept ${r.category} ${r.path} reason=${r.category === "seat-anchor" ? `seat-anchor: ${r.reason}` : r.reason}`); kept++; }
+        if (inContainer(r.path) || r.reason.startsWith(MISPLACED_SCRATCH)) { emit(`${dry}kept ${r.category} ${r.path} reason=${r.category === "seat-anchor" ? `seat-anchor: ${r.reason}` : r.reason}`); kept++; }
         continue;
       }
       if (!underAllowed(root, r.path)) { emit(`${dry}kept ${r.category} ${r.path} reason=outside ${FLEET_CONTAINER}/ and ${RUNS_DIRNAME}/; never touched by cleanup`); kept++; continue; }
@@ -850,9 +1060,38 @@ function cleanup(o: CleanupOptions): number {
       if (pastDeadline()) { emit(`${dry}cleanup deadline reached removed=${removed} kept=${kept} bytes=${freed}`); return failed ? 1 : 0; }
       // verify again right before acting: the world may have moved since the scan
       if (!fs.existsSync(r.path)) { emit(`${dry}already removed ${r.path}`); continue; }
+      let identity: CleanupPathIdentity;
+      try { identity = cleanupPathIdentity(root, path.resolve(r.path)); }
+      catch (e: any) { emit(`${dry}kept ${r.category} ${r.path} reason=path mismatch: ${e.message}`); kept++; continue; }
+      // Git registration records worktree ownership; plain scratch needs an
+      // explicit creation record, not merely a closed-bead-looking name.
+      const expectedBead = r.category === "run-scratch" ? /^scratch belongs to closed bead (.+)$/.exec(r.reason)?.[1] : undefined;
+      const nestedScratch = seatScratchLocation(root, r.path);
+      const ownershipRoot = nestedScratch?.seatRoot ?? root;
+      assertSeatIdentities(root);
+      if (ownershipRoot !== root) assertSeatIdentities(ownershipRoot);
+      let ownership: ReturnType<typeof scratchOwnership> | null = null;
+      if (r.action === "rm") {
+        try {
+          if (r.category === "run-scratch" && !expectedBead) throw new Error("cannot bind scratch to a closed bead");
+          ownership = scratchOwnership(ownershipRoot, identity.real, expectedBead);
+        }
+        catch (e: any) { emit(`${dry}kept ${r.category} ${r.path} reason=unproven scratch ownership: ${e.message}`); kept++; continue; }
+      }
+      const changed = () => {
+        if (!cleanupPathUnchanged(root, identity.real, identity)) return true;
+        try { return ownership !== null && JSON.stringify(scratchOwnership(ownershipRoot, identity.real, expectedBead)) !== JSON.stringify(ownership); }
+        catch { return true; }
+      };
+      const keepChanged = () => {
+        if (!changed()) return false;
+        emit(`${dry}kept ${r.category} ${r.path} reason=path changed during check`); kept++; return true;
+      };
       const live = liveCwds(true);
       if (live === null) { emit(`${dry}kept ${r.category} ${r.path} reason=cannot verify: lsof unavailable`); kept++; continue; }
-      const cwd = liveCwdInside(r.path, live);
+      if (!fs.existsSync(r.path)) { emit(`${dry}already removed ${r.path}`); continue; }
+      if (keepChanged()) continue;
+      const cwd = liveCwdInside(identity.real, live);
       if (cwd) { emit(`${dry}kept ${r.category} ${r.path} reason=${liveCwdReason(r.path, cwd)}`); kept++; continue; }
       const anchor = seatAnchorWithin(r.path, seatAnchors(root));
       if (anchor) { emit(`${dry}kept ${r.category} ${r.path} reason=seat-anchor: ${anchor}`); kept++; continue; }
@@ -862,23 +1101,48 @@ function cleanup(o: CleanupOptions): number {
         const tree = treeState(r.repo, r.path);
         if (!tree.clean) { emit(`${dry}kept ${r.category} ${r.path} reason=uncommitted changes (${tree.detail})`); kept++; continue; }
       }
+      let controls: ReturnType<typeof checkedScratchWorktrees> = [];
+      if (nestedScratch && r.action === "rm") {
+        try { controls = checkedScratchWorktrees(root, identity.real); }
+        catch (e: any) { emit(`${dry}kept ${r.category} ${r.path} reason=${e.message}`); kept++; continue; }
+      }
       if (o.dryRun) { emit(`dry-run would remove ${r.category} ${r.path} bytes=${r.size_bytes} reason=${r.reason}`); removed++; freed += r.size_bytes; continue; }
       try {
-        makeWritable(r.path);
+        if (keepChanged()) continue;
+        const target = identity.real; // Re-derived from the pinned realpath, never the row spelling.
+        makeWritable(target);
         let tagged = "";
         if (r.action === "worktree") {
-          const sha = run("git", ["rev-parse", "HEAD"], r.path).out;
-          const tag = archiveTag(r.repo, r.path, sha);
+          const sha = run("git", ["rev-parse", "HEAD"], target).out;
+          const tag = archiveTag(r.repo, target, sha);
           if (tag) tagged = `; archived as ${tag}`;
-          const rm = run("git", ["worktree", "remove", "--force", r.path], r.repo);
+          if (keepChanged()) continue;
+          const rm = run("git", ["worktree", "remove", "--force", target], r.repo);
           if (!rm.ok) {
             if (!fs.existsSync(r.path)) { emit(`already removed ${r.path}`); continue; }
             throw new Error(rm.err || rm.out || `git worktree remove exited ${rm.code}`);
           }
-          if (fs.existsSync(r.path)) fs.rmSync(r.path, { recursive: true, force: true });
+          if (fs.existsSync(target)) {
+            if (keepChanged()) continue;
+            fs.rmSync(target, { recursive: true, force: true });
+          }
         } else {
-          if (!fs.existsSync(r.path)) { emit(`already removed ${r.path}`); continue; }
-          fs.rmSync(r.path, { recursive: true, force: true });
+          for (const control of controls) {
+            if (keepChanged()) continue rowsLoop;
+            if (!cleanupPathUnchanged(root, control.path, control.identity)) throw new Error(`registered control path changed during check: ${control.path}`);
+            // Re-read status/refs/registration just before Git acts, not only at scan time.
+            const current = checkedScratchWorktrees(root, target).find(w => w.path === control.path && w.repo === control.repo);
+            if (!current || current.sha !== control.sha || current.branch !== control.branch) throw new Error(`registered control changed during check: ${control.path}`);
+            archiveTag(control.repo, control.path, control.sha);
+            if (keepChanged()) continue rowsLoop;
+            if (!cleanupPathUnchanged(root, control.path, control.identity)) throw new Error(`registered control path changed during check: ${control.path}`);
+            const rm = run("git", ["worktree", "remove", "--force", control.path], control.repo);
+            if (!rm.ok) throw new Error(`registered control removal failed: ${rm.err || rm.out}`);
+            emit(`removed registered control ${control.path}`);
+          }
+          if (nestedScratch && registeredScratchWorktrees(root, target).length) throw new Error("registered controls remain; scratch kept");
+          if (keepChanged()) continue;
+          fs.rmSync(target, { recursive: true, force: true });
         }
         emit(`removed ${r.category} ${r.path} bytes=${r.size_bytes} reason=${r.reason}${tagged}`);
         removed++; freed += r.size_bytes;
@@ -919,18 +1183,22 @@ function main() {
     else { console.error(`unknown argument: ${a}`); process.exit(2); }
   }
   if (cmd === "scan") {
-    const rows = scan(roots.length ? roots : [ROOT], includeOptional);
-    if (format === "json") process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
-    else if (format === "jsonl") process.stdout.write(rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
-    else process.stdout.write(toTsv(rows));
+    const scope = roots.length ? roots : [ROOT];
+    const rows = scan(scope, includeOptional);
+    if (format === "json") process.stdout.write(JSON.stringify([scanMetadata(scope), ...rows.map(reviewedRow)], null, 2) + "\n");
+    else if (format === "jsonl") process.stdout.write([scanMetadata(scope), ...rows.map(reviewedRow)].map((r) => JSON.stringify(r)).join("\n") + "\n");
+    else process.stdout.write(toTsv(rows, scope));
   } else if (cmd === "cleanup") {
     if (roots.length > 1) { console.error("cleanup takes at most one --root"); process.exit(2); }
     const root = roots[0] ? path.resolve(roots[0]) : ROOT;
-    const code = cleanup({ root, dryRun, deadline: Number.isFinite(deadline as number) ? deadline : null, log: log || path.join(root, "seats", "logs", "cleanup.log"), bead, wait });
-    process.exit(code);
+    try {
+      const code = cleanup({ root, dryRun, deadline: Number.isFinite(deadline as number) ? deadline : null, log: log || path.join(root, "seats", "logs", "cleanup.log"), bead, wait });
+      process.exit(code);
+    } catch (e: any) { console.error(`REFUSED cleanup ${root}: ${e.message}`); process.exit(2); }
   } else {
     if (!from) { console.error("prune requires --from-file <reviewed scan>"); process.exit(2); }
-    prune(parseScan(from), yes, cats);
+    try { prune(parseScan(from), yes, cats); }
+    catch(e) { if(e instanceof ScanValidationError) { console.error(`REFUSED ${e.message}`); process.exit(2); } throw e; }
   }
 }
 

@@ -4,11 +4,12 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-host-build-shim.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 PASS=0; FAIL=0
 pass(){ PASS=$((PASS+1)); echo "ok $PASS - $*"; }
 fail(){ FAIL=$((FAIL+1)); echo "not ok $((PASS+FAIL)) - $*" >&2; }
 cleanup(){ selftest_remove_fixture_dir "$FIX"; }
-trap cleanup EXIT INT TERM
+selftest_install_cleanup_traps cleanup
 
 PROJ="$FIX/project"; mkdir -p "$PROJ/seats/bin" "$PROJ/scripts" "$FIX/realbin" "$FIX/home"
 cp "$HERE/bin/host-build-shim" "$PROJ/seats/bin/host-build-shim" || exit 2
@@ -58,12 +59,12 @@ overlap_status(){
 
 if run_pair "$FIX/realbin" "$FIX/no-shim.log"; then
   status="$(overlap_status "$FIX/no-shim.log")"
-  if printf '%s\n' "$status" | grep -q 'started=2 overlap=1'; then pass "canary: repo script with bare cargo and no shim overlaps outside the lock"; else fail "no-shim canary did not overlap status=$status log=$(cat "$FIX/no-shim.log" 2>/dev/null)"; fi
+  if printf '%s\n' "$status" | grep >/dev/null 'started=2 overlap=1'; then pass "canary: repo script with bare cargo and no shim overlaps outside the lock"; else fail "no-shim canary did not overlap status=$status log=$(cat "$FIX/no-shim.log" 2>/dev/null)"; fi
 else fail "no-shim repo script failed unexpectedly"; fi
 
 if run_pair "$PROJ/seats/bin" "$FIX/with-shim.log"; then
   status="$(overlap_status "$FIX/with-shim.log")"
-  if printf '%s\n' "$status" | grep -q 'started=2 overlap=0 badguard=0'; then pass "repo script bare cargo goes through seats/bin shim and serializes on the build lock"; else fail "shim did not serialize or set reentry guard status=$status log=$(cat "$FIX/with-shim.log" 2>/dev/null)"; fi
+  if printf '%s\n' "$status" | grep >/dev/null 'started=2 overlap=0 badguard=0'; then pass "repo script bare cargo goes through seats/bin shim and serializes on the build lock"; else fail "shim did not serialize or set reentry guard status=$status log=$(cat "$FIX/with-shim.log" 2>/dev/null)"; fi
 else fail "with-shim repo script failed out=$(cat "$FIX/with-shim.log.a.err" "$FIX/with-shim.log.b.err" 2>/dev/null)"; fi
 
 if [ -L "$HERE/bin/cargo" ] && [ "$(readlink "$HERE/bin/cargo")" = "host-build-shim" ]; then pass "template ships seats/bin/cargo as the host-build shim"; else fail "seats/bin/cargo is not a symlink to host-build-shim"; fi

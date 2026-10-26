@@ -45,31 +45,72 @@ exec > >("$SCRUB") 2> >("$SCRUB" >&2)
 FAILED=0
 FIX=""
 SOCK=""
+FLOOR_SOCKET_CLAIMED=0
+FLOOR_SOCKET_PATH=""
+FLOOR_SOCKET_ID=""
 
 pass() { printf '  ok    %s\n' "$*"; }
 fail() { printf '  FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 skip() { printf '  SKIP  %s\n' "$*"; }
 phase(){ printf '\n%s\n' "$*"; }
 
-cleanup() {
-  selftest_cleanup_fixture_processes "${FIX:-}" "${SOCK:-}"
-  if [ -n "$SOCK" ]; then tmux -L "$SOCK" kill-server 2>/dev/null; fi
-  [ -n "$FIX" ] && selftest_remove_fixture_dir "$FIX"
-  return 0
+floor_pin_socket() {
+  [ -z "$FLOOR_SOCKET_ID" ] || return 0
+  local actual pane_root
+  # A catchable signal may arrive while the first cockpit command returns.
+  # Pin the immutable creation path, with a fully qualified native pane target.
+  pane_root="$(tmux -L "$SOCK" display-message -p -t '=wh-tfix:bridge.0' '#{pane_start_path}')" || return 2
+  [ "$pane_root" = "$PROJ" ] || { echo 'STOP: floor socket pane is not this fixture' >&2; return 2; }
+  actual="$(tmux -L "$SOCK" display-message -p '#{socket_path}')" || return 2
+  case "${actual##*/}" in "$SOCK"|"$SOCK.sock") ;; *) echo 'STOP: unexpected floor socket address' >&2; return 2 ;; esac
+  FLOOR_SOCKET_ID="$(bun "$HERE/selftest-floor-socket.ts" pin "$actual")" || return 2
+  FLOOR_SOCKET_PATH="$actual"
 }
-trap cleanup EXIT INT TERM
+cleanup() {
+  local cleanup_rc=0 socket_stopped=0
+  if [ "$FLOOR_SOCKET_CLAIMED" = 1 ]; then
+    floor_pin_socket || cleanup_rc=2
+    if [ -n "$FLOOR_SOCKET_ID" ] && bun "$HERE/selftest-floor-socket.ts" check "$FLOOR_SOCKET_PATH" "$FLOOR_SOCKET_ID"; then
+      if tmux -S "$FLOOR_SOCKET_PATH" kill-server > "$FIX/floor-stop.stdout" 2> "$FIX/floor-stop.stderr"; then
+        socket_stopped=1
+      else
+        cat "$FIX/floor-stop.stderr" >&2
+        cleanup_rc=2
+      fi
+    else
+      cleanup_rc=2
+    fi
+  fi
+  # Never hand an unclaimed/replaced address to shared socket-based cleanup.
+  selftest_cleanup_fixture_processes "${FIX:-}" || cleanup_rc=1
+  if [ "$socket_stopped" = 1 ]; then
+    bun "$HERE/selftest-floor-socket.ts" unlink "$FLOOR_SOCKET_PATH" "$FLOOR_SOCKET_ID" || cleanup_rc=2
+  fi
+  [ -z "$FIX" ] || selftest_remove_fixture_dir "$FIX" || cleanup_rc=1
+  return "$cleanup_rc"
+}
+selftest_install_cleanup_traps cleanup
+
+# Keep the complete runtime, then select the caller's floor for every fixture.
+# Render, repaint, PTY, derived copies and cockpit all use this installed file.
+install_floor_runtime() {
+  selftest_copy_seat_runtime "$1" "$HERE" || return 2
+  cp -f -- "$FLOOR" "$1/seats/floor.ts" || return 2
+}
 
 # --- fixture -----------------------------------------------------------------
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-floor-selftest.$$.XXXXXX")" || exit 2
+selftest_isolate_git "$FIX" || exit 2
 FIX="$(cd "$FIX" && pwd -P)"   # macOS: /var/... is really /private/var/...
 PROJ="$FIX/proj"
 mkdir -p "$PROJ/seats/logs" "$FIX/bin"
-selftest_copy_seat_runtime "$PROJ" "$HERE"
+install_floor_runtime "$PROJ" || exit 2
 
 # Stub bd: two ready beads, so idle-with-ready-work has work to point at.
 cat > "$FIX/bin/bd" <<'EOF'
 #!/bin/sh
 [ "$1" = "ready" ] || exit 1
+case " $* " in *" --json "*) printf '[{"id":"wh-001","title":"first waiting bead","status":"open"},{"id":"wh-002","title":"second waiting bead","status":"open"}]\n'; exit 0 ;; esac
 echo "wh-001  P2  ready  first waiting bead"
 echo "wh-002  P2  ready  second waiting bead"
 EOF
@@ -178,9 +219,19 @@ cat > "$PROJ/seats/seats.json" <<EOF
 }
 EOF
 
+# The floor now checks seat identity, not just kill(0). Seed actual native birth
+# for our live holder rather than the historical display-only timestamp.
+STARTED_AT="$(bun - "$ME" <<'JS'
+import { spawnSync } from 'node:child_process';
+const r=spawnSync('ps',['-p',process.argv[2],'-o','lstart='],{encoding:'utf8'});
+console.error('CAPTURE floor fixture ps '+JSON.stringify({status:r.status,signal:r.signal,stdout:r.stdout,stderr:r.stderr}));
+if(r.status!==0||r.error||r.signal)process.exit(2);
+console.log(new Date(Date.parse(r.stdout.trim())).toISOString());
+JS
+)" || exit 2
 seat_rec() { # name pid extra-json
-  printf '"%s":{"pid":%s,"startedAt":"2026-08-29T00:00:00Z","accountDir":"%s","role":"worker","roleBrief":"x","fifo":"%s","log":"%s","sessionId":"s-%s","sessionFile":null%s}' \
-    "$1" "$2" "$FIX/acct/$1" "$PROJ/seats/run/$1.stdin" "$LOGS/$1.jsonl" "$1" "${3:-}"
+  printf '"%s":{"pid":%s,"startedAt":"%s","accountDir":"%s","role":"worker","roleBrief":"x","fifo":"%s","log":"%s","sessionId":"s-%s","sessionFile":null%s}' \
+    "$1" "$2" "$STARTED_AT" "$FIX/acct/$1" "$PROJ/seats/run/$1.stdin" "$LOGS/$1.jsonl" "$1" "${3:-}"
 }
 {
   printf '{"seats":{'
@@ -217,7 +268,7 @@ cat > "$LOGS/transcript.jsonl" <<'EOF'
 {"type":"tool_execution_end","toolCallId":"tc-1","toolName":"read","result":{"content":[{"type":"text","text":"# Fixture title\nbody"}],"isError":false}}
 {"type":"agent_end","messages":[1]}
 EOF
-node -e 'const fs=require("fs"); const [rosterFile,stateFile,fix,log]=process.argv.slice(1); const roster=JSON.parse(fs.readFileSync(rosterFile,"utf8")); roster.seats.transcript={role:"worker",provider:"openai-codex",model:"gpt-5.5",account:{dir:`${fix}/acct/transcript`}}; fs.writeFileSync(rosterFile, JSON.stringify(roster,null,2)+"\n"); const state=JSON.parse(fs.readFileSync(stateFile,"utf8")); state.seats.transcript={pid:Number(process.pid),startedAt:"2026-08-29T00:00:00Z",accountDir:`${fix}/acct/transcript`,role:"worker",roleBrief:"x",fifo:`${fix}/proj/seats/run/transcript.stdin`,log,sessionId:"s-transcript",sessionFile:null}; fs.writeFileSync(stateFile, JSON.stringify(state,null,2)+"\n");' "$PROJ/seats/seats.json" "$PROJ/seats/state.json" "$FIX" "$LOGS/transcript.jsonl"
+node -e 'const fs=require("fs"); const [rosterFile,stateFile,fix,log,pid,startedAt]=process.argv.slice(1); const roster=JSON.parse(fs.readFileSync(rosterFile,"utf8")); roster.seats.transcript={role:"worker",provider:"openai-codex",model:"gpt-5.5",account:{dir:`${fix}/acct/transcript`}}; fs.writeFileSync(rosterFile, JSON.stringify(roster,null,2)+"\n"); const state=JSON.parse(fs.readFileSync(stateFile,"utf8")); state.seats.transcript={pid:Number(pid),startedAt,accountDir:`${fix}/acct/transcript`,role:"worker",roleBrief:"x",fifo:`${fix}/proj/seats/run/transcript.stdin`,log,sessionId:"s-transcript",sessionFile:null}; fs.writeFileSync(stateFile, JSON.stringify(state,null,2)+"\n");' "$PROJ/seats/seats.json" "$PROJ/seats/state.json" "$FIX" "$LOGS/transcript.jsonl" "$ME" "$STARTED_AT"
 
 RUN_PATH="$FIX/bin:$(dirname "$(command -v bun)"):/usr/bin:/bin"
 render() { # floor-file args...
@@ -266,20 +317,31 @@ for s in busy quiet idle gone authless quota reviewer bounced unsat nolog verifi
 done
 has 'busy.*worker.*openai-codex/gpt-5.5.*busy@example.*wh-busy-1.*12s ago' \
   && pass "row shape includes role, provider/model, account label, active bead, and humanized age" \
-  || fail "busy row is missing one-glance columns: $(printf '%s\n' "$OUT" | grep busy | head -1)"
+  || fail "busy row is missing one-glance columns: $(printf '%s\n' "$OUT" | grep busy | sed -n '1p')"
 has 'idle.*anthropic/claude-fable-5.*| - |' \
   && pass "missing account.label renders as dash" \
-  || fail "idle row did not render a dash for absent account.label: $(printf '%s\n' "$OUT" | grep idle | head -1)"
+  || fail "idle row did not render a dash for absent account.label: $(printf '%s\n' "$OUT" | grep idle | sed -n '1p')"
 has 'quiet.*QUIET.*wh-quiet-1.*11m ago' \
   && pass "old running seat is flagged QUIET with humanized age" \
-  || fail "quiet row missing QUIET/11m age: $(printf '%s\n' "$OUT" | grep quiet | head -1)"
+  || fail "quiet row missing QUIET/11m age: $(printf '%s\n' "$OUT" | grep quiet | sed -n '1p')"
 has 'verifier.*verifier.*anthropic/claude-fable-5.*verify-account.*| .*off.* - | - | -' \
   && pass "rostered verifier absent from state renders as a seat row with state dash" \
-  || fail "absent verifier row wrong: $(printf '%s\n' "$OUT" | grep verifier | head -1)"
+  || fail "absent verifier row wrong: $(printf '%s\n' "$OUT" | grep verifier | sed -n '1p')"
 has "PROCESS GONE"        && pass "gone: PROCESS GONE line (red)"     || fail "no PROCESS GONE line"
 has "AUTH DEAD"           && pass "authless: AUTH DEAD line (red)"    || fail "no AUTH DEAD line"
 has "PARKED/QUOTA"        && has "bun seats/adapter.ts probe quota" && pass "quota: PARKED/QUOTA line names the re-probe command" || fail "no PARKED/QUOTA line with re-probe command"
 has "IDLE with ready work.*2 bead" && pass "idle: IDLE-with-ready-work counts bd ready" || fail "no idle-with-ready-work line"
+has 'busy.*RUNNING.*working' && pass 'mid-tool seat is visibly RUNNING' || fail 'busy seat lost RUNNING activity field'
+for terminal in agent_end turn_end agent_settled; do
+  printf '{"type":"agent_start"}\n{"type":"%s"}\n{"type":"response","command":"get_state","success":true}\n' "$terminal" > "$LOGS/idle.jsonl"
+  render "$PROJ/seats/floor.ts" --pin 0
+  has 'idle.*SETTLED.*IDLE with ready work' && pass "$terminal plus transport metadata remains SETTLED in STATUS/rail" || fail "$terminal settlement missing: $OUT"
+done
+printf '{"type":"agent_settled"}\n{"type":"agent_start"}\n{"type":"tool_execution_start"}\n' > "$LOGS/idle.jsonl"
+render "$PROJ/seats/floor.ts" --pin idle
+has 'idle.*RUNNING.*working' && pass 'next turn leaves SETTLED display immediately on work evidence' || fail "next turn still settled: $OUT"
+printf '{"type":"agent_end"}\n' > "$LOGS/idle.jsonl"
+render "$PROJ/seats/floor.ts" --pin 1
 has "VERDICT LANDED — APPROVE" && pass "reviewer: VERDICT LANDED (green)" || fail "no VERDICT LANDED line"
 has "REVIEW BLOCKED.*BOUNCE"   && pass "bounced: REVIEW BLOCKED line"     || fail "no REVIEW BLOCKED line"
 has "EVIDENCE UNSATISFIED.*wh-unsat-1" && pass "unsat: BOUNCE with failed evidence-floor renders EVIDENCE UNSATISFIED" || fail "no EVIDENCE UNSATISFIED line"
@@ -324,7 +386,7 @@ has " RED"   && has " AMBER" && has " GREEN" \
   && pass "cue words RED/AMBER/GREEN all present" || fail "cue words missing"
 has '\[0\] STATUS' && pass "rail has the [0] STATUS cell" || fail "no [0] STATUS row"
 if grep -Eq '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' <<< "$OUT"; then
-  fail "rail exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | head -1)"
+  fail "rail exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | sed -n '1p')"
 else
   pass "rail exposes humanized ages, not raw epoch/ISO timestamps"
 fi
@@ -337,7 +399,7 @@ has "bd ready: 2"   && pass "STATUS shows bd ready count"       || fail "no bd r
 has "last bead wh-rev-9" && pass "STATUS shows per-seat detail" || fail "no per-seat detail in STATUS"
 has "last activity 12s ago" && pass "STATUS uses humanized last-activity age" || fail "STATUS did not show humanized last activity"
 if grep -Eq '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' <<< "$OUT"; then
-  fail "STATUS exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | head -1)"
+  fail "STATUS exposed raw epoch or ISO timestamps: $(printf '%s\n' "$OUT" | grep -E '[0-9]{10,}|20[0-9]{2}-[0-9]{2}-[0-9]{2}T' | sed -n '1p')"
 else
   pass "STATUS exposes humanized ages, not raw epoch/ISO timestamps"
 fi
@@ -350,25 +412,29 @@ phase "phase 4: missing pieces degrade with named lines"
 render "$PROJ/seats/floor.ts" --pin nolog   # nolog seat in the spotlight
 [ $RC -eq 0 ] && pass "spotlight on log-less seat exits 0" || fail "crashed on missing log: $OUT"
 has "no event log yet for nolog" && pass "spotlight names the missing log" || fail "no named missing-log line"
-EMPTY="$FIX/empty"; mkdir -p "$EMPTY/seats"; selftest_copy_seat_runtime "$EMPTY" "$HERE"
+EMPTY="$FIX/empty"; mkdir -p "$EMPTY/seats"; install_floor_runtime "$EMPTY" || exit 2
 render "$EMPTY/seats/floor.ts"
 [ $RC -eq 0 ] && has "no seats" && pass "no roster/state degrades to a named line" || fail "empty project: rc=${RC}: $OUT"
 
 # --- phase 5: interactive repaint is in-place, not append-only ---------------
 phase "phase 5: repaint — repeated frames return home and clear to end"
 CAPTURE_FILE="$FIX/repaint.capture"
-env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun "$PROJ/seats/floor.ts" > "$CAPTURE_FILE" 2>&1 &
+env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun "$PROJ/seats/floor.ts" > "$CAPTURE_FILE" 2> "$FIX/repaint.stderr" &
 FLOOR_PID=$!
-sleep 2
+# Observe the actual second repaint; the admitted suite owns named3600s
+# containment, with the helper's last count/file/producer printed before wait.
+if ! bun "$HERE/fixtures/adapter-selftest-signals.ts" count "$CAPTURE_FILE" $'\033[H\033[J' 0 "$FLOOR_PID" 2; then
+  fail 'floor producer exited before its second repaint'
+fi
 kill "$FLOOR_PID" 2>/dev/null
 wait "$FLOOR_PID" 2>/dev/null
 CAPTURE="$(cat "$CAPTURE_FILE")"
 if [ -s "$CAPTURE_FILE" ]; then pass "multi-frame capture produced output before the scripted stop"
 else fail "multi-frame capture produced no output"; fi
-HOME_CLEAR_COUNT="$(printf '%s' "$CAPTURE" | python3 -c 'import sys; s=sys.stdin.read(); print(s.count("\x1b[H\x1b[J"))')"
+HOME_CLEAR_COUNT="$(printf '%s' "$CAPTURE" | bun -e 'console.log((await import("node:fs")).default.readFileSync(0,"utf8").split("\x1b[H\x1b[J").length-1)')"
 if [ "$HOME_CLEAR_COUNT" -ge 2 ]; then pass "multi-frame capture contains repeated cursor-home + clear-to-end repaint sequences"
 else fail "multi-frame capture did not show repeated in-place repaint sequences (count=$HOME_CLEAR_COUNT)"; fi
-if printf '%s' "$CAPTURE" | python3 -c 'import sys; frames=[f for f in sys.stdin.read().split("\x1b[H\x1b[J") if f]; raise SystemExit(0 if frames and max(x.count("\n") for x in frames) <= 24 else 1)'; then
+if printf '%s' "$CAPTURE" | bun -e 'const frames=(await import("node:fs")).default.readFileSync(0,"utf8").replace(/\r\n?/g,"\n").split("\x1b[H\x1b[J").filter(Boolean); process.exit(frames.length&&Math.max(...frames.map(f=>f.split("\n").length-1))<=24?0:1);'; then
   pass "multi-frame capture stays within the terminal height per frame — no scroll drift"
 else
   fail "multi-frame capture grew past the terminal height, indicating scroll drift"
@@ -379,17 +445,46 @@ phase "phase 6: interactive keys — q keeps the pane alive by returning to over
 if ! command -v expect >/dev/null 2>&1; then
   skip "expect not on PATH — q key pty leg not run"
 else
-  QCAP="$FIX/q.expect"
-  env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" expect > "$QCAP" 2>&1 <<EOF
-set timeout 5
-spawn bun "$PROJ/seats/floor.ts"
-expect "RAIL"
+  QCAP="$FIX/q.expect"; QSCRIPT="$FIX/q.exp"
+  cat > "$QSCRIPT" <<EOF
+# Named outer PTY resource containment, not a startup/repaint SLA.
+set timeout 1800
+fconfigure stdout -buffering none
+spawn bun "$PROJ/seats/floor.ts" --pin 1
+# Bind the timeout to the spawned PTY, not the caller's closed stdin.
+expect_before timeout { puts stderr "INCOMPLETE floor PTY outer30min bound; last_seen=\$expect_out(buffer)"; exit 124 }
+puts stderr "WAIT floor PTY SPOTLIGHT"
+# Expect's multiline pattern list is significant: a one-line brace block
+# is a single literal glob, not separate pattern/action pairs.
+expect {
+  "SPOTLIGHT" {}
+  eof { puts stderr "FAIL floor exited before SPOTLIGHT"; exit 1 }
+}
 send "q"
-expect "OVERVIEW"
+puts stderr "WAIT floor PTY OVERVIEW after q"
+expect {
+  "OVERVIEW" {}
+  eof { puts stderr "FAIL floor exited before OVERVIEW"; exit 1 }
+}
+send "1"
+puts stderr "WAIT floor PTY SPOTLIGHT after return key (q must not exit)"
+expect {
+  "SPOTLIGHT" {}
+  eof { puts stderr "FAIL q exited instead of keeping floor alive"; exit 1 }
+}
 send "\003"
 expect eof
 EOF
-  QRC=$?
+  QRC=0
+  env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun - "$HERE/completed-command.ts" "$QSCRIPT" "$QCAP" <<'JS' || QRC=$?
+import fs from 'node:fs';
+const [module,script,capture]=process.argv.slice(2),{completedCommand}=await import(module);
+const native=completedCommand('expect',[script]);
+fs.writeFileSync(capture,native.stdout);fs.writeFileSync(capture+'.stderr',native.stderr);
+console.log('CAPTURE floor PTY native '+JSON.stringify(native));
+process.exit(native.error||native.signal||native.status===null?1:native.status);
+JS
+  printf 'CAPTURE floor PTY harness exit=%s\n' "$QRC"
   if [ $QRC -eq 0 ]; then pass "q changes the live floor to OVERVIEW before Ctrl-C exits"
   else fail "q did not reach OVERVIEW in the live floor: $(cat "$QCAP")"; fi
 fi
@@ -423,10 +518,37 @@ elif [ ! -f "$PROJ/seats/cockpit.sh" ]; then
   skip "cockpit.sh not found beside floor.ts — leg not run"
 else
   SOCK="whfloor$$"
+  . "$HERE/fixtures/readiness.sh"
+  floor_pane_frame() {
+    local pane="$1" label="$2"
+    # A pane exists before its shell/Bun/imports run. Its own first frame, not
+    # pane count or a sleep, proves the producer ran before we destroy it.
+    if ! tmux -L "$SOCK" capture-pane -p -t "$pane" > "$FIX/floor-$label.capture" 2> "$FIX/floor-$label.stderr"; then
+      cat "$FIX/floor-$label.stderr" >&2
+      return 2
+    fi
+    # Narrow tmux panes can wrap the rail header into history; the final
+    # status row remains in the viewport and witnesses the same real frame.
+    grep -Fq '[0] STATUS' "$FIX/floor-$label.capture"
+  }
+  floor_pane_ready() {
+    local label="$1" pane
+    pane="$(tmux -L "$SOCK" display-message -p -t wh-tfix:bridge.1 '#{pane_id}')" || return 2
+    case "$pane" in %*) ;; *) echo "STOP: no native floor pane for $label" >&2; return 2 ;; esac
+    printf 'WAIT floor %s frame pane=%s\n' "$label" "$pane"
+    # Use the existing enclosing suite containment, not a new startup SLA.
+    fixture_wait "floor $label frame pane=$pane" "" floor_pane_frame "$pane" "$label"
+  }
+  SOCKET_BASE="$(cd "${TMUX_TMPDIR:-/tmp}" && pwd -P)" || exit 2
+  FLOOR_SOCKET_UID="$(id -u)" || exit 2
+  FLOOR_SOCKET_PATH="$SOCKET_BASE/tmux-$FLOOR_SOCKET_UID/$SOCK"
+  bun "$HERE/selftest-floor-socket.ts" absent "$FLOOR_SOCKET_PATH" || exit 2
+  FLOOR_SOCKET_CLAIMED=1
   crun() {
     RC=0
     out_file="$FIX/cockpit-crun.out"
     env PATH="${RUN_PATH}:$(dirname "$(command -v tmux)")" WHEELHOUSE_TMUX_SOCKET="$SOCK" WHEELHOUSE_COCKPIT_DAEMONS=0 WHEELHOUSE_COCKPIT_RECOVERY=0 TMUX= "$PROJ/seats/cockpit.sh" tfix < /dev/null > "$out_file" 2>&1 || RC=$?
+    floor_pin_socket || exit 2
     OUT="$(cat "$out_file" 2>/dev/null || true)"
   }
   crun
@@ -437,6 +559,7 @@ else
   [ "$WN" = "bridge" ] && pass "single window named bridge" || fail "windows: $WN"
   PANES="$(tmux -L "$SOCK" list-panes -t wh-tfix:bridge 2>/dev/null | wc -l | tr -d ' ')"
   [ "$PANES" = "2" ] && pass "bridge has exactly 2 panes (commander + floor)" || fail "pane count: $PANES"
+  floor_pane_ready initial || fail "initial floor pane exited before its first frame"
   crun
   [ $RC -eq 0 ] && has "already built" && pass "re-run attaches, never duplicates" || fail "re-run: rc=${RC}: $OUT"
   SESSN="$(tmux -L "$SOCK" list-sessions 2>/dev/null | wc -l | tr -d ' ')"
@@ -448,10 +571,10 @@ else
   [ $RC -eq 0 ] && has "floor pane missing" && pass "re-run notices the missing floor pane" || fail "missing-floor re-run did not say it repaired the pane: rc=${RC}: $OUT"
   PANES="$(tmux -L "$SOCK" list-panes -t wh-tfix:bridge 2>/dev/null | wc -l | tr -d ' ')"
   [ "$PANES" = "2" ] && pass "re-run respawns the floor pane after pane death" || fail "pane count after missing-floor repair: $PANES"
+  floor_pane_ready repaired || fail "repaired floor pane exited before its first frame"
   SESSN="$(tmux -L "$SOCK" list-sessions 2>/dev/null | wc -l | tr -d ' ')"
   [ "$SESSN" = "1" ] && pass "still exactly 1 session after pane repair" || fail "session count after pane repair: $SESSN"
-  tmux -L "$SOCK" kill-server 2>/dev/null
-  SOCK=""
+  # EXIT owns server retirement and exact-inode unlink on every exit path.
 fi
 
 printf '\n'

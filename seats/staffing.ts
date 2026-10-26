@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { completedSpawnSync as spawnSync } from "./native-command";
 import { hasPool, loadPool, seatEntryFor, staffedSeatName, type Pool } from "./pool";
 import { effectiveRoster, staffingPath, type StaffingFile } from "./roster";
 import { fleetSnapshot, freeWorkers, freeReviewers, readyWorkNobodyOnIt, type Snapshot } from "./fleet-snapshot";
 import { pidAlive } from "./seat-activity";
-import { removeSeatWorktree } from "./seat-worktree";
+import { removeSeatWorktree, validateSegment } from "./seat-worktree";
 import { QUOTA_RE } from "./quota";
 import { askChoice, jevConfig } from "./jev";
 import { acquirePidLock, releasePidLock } from "./lock";
@@ -15,6 +15,7 @@ const ROOT = path.resolve(import.meta.dir, "..");
 const RUN_DIR = path.join(ROOT, "seats", "run");
 const LOG_FILE = path.join(ROOT, "seats", "logs", "staffing.log");
 const LOCK_FILE = path.join(RUN_DIR, "staffing.lock");
+const STAFFING_STOP_OBSERVE_LIMIT_MS = Number(process.env.WHEELHOUSE_STAFFING_STOP_MS ?? 30000);
 type Role = "workers" | "reviewers";
 type DecisionKind = "add-worker" | "add-reviewer" | "drop-seat" | "nothing";
 export interface Decision { kind: DecisionKind; role?: Role; seat?: string; entry?: string; reason: string; decider: string; confidence?: number }
@@ -170,7 +171,7 @@ function statusObject(root: string, pool: Pool, staffing: StaffingFile, snap: Sn
   const roster = effectiveRoster(root) as Record<string, any>;
   const live = [
     ...snap.workers.live.map((s) => ({ ...s, roleKey: "workers" as Role, role: "worker", idleSince: s.lastActivityAt })),
-    ...snap.reviewers.live.map((s) => ({ ...s, roleKey: "reviewers" as Role, role: "verifier", idleSince: null })),
+    ...snap.reviewers.live.map((s) => ({ ...s, roleKey: "reviewers" as Role, role: "reviewer", idleSince: null })),
   ].filter((s) => (s.entry && staffing.seats?.[s.name]) || !pool.roles[s.roleKey]);
   const seats = live.sort((a, b) => a.name.localeCompare(b.name)).map((s) => {
     const staffed = s.entry && staffing.seats?.[s.name];
@@ -203,10 +204,17 @@ function printStatus(root: string, pool: Pool, staffing: StaffingFile, snap: Sna
   console.log(`jev: ${status.jev}`);
 }
 function runAdapter(args: string[]): { status: number; text: string } { const r = spawnSync("bun", ["seats/adapter.ts", ...args], { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); return { status: r.status ?? 1, text: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() }; }
-function registerSeat(root: string, staffing: StaffingFile, role: Role, seat: string, entry: string) { staffing.seats[seat] = { role: role === "workers" ? "worker" : "verifier", entry, addedAt: new Date().toISOString() }; writeStaffing(root, staffing); }
+function registerSeat(root: string, staffing: StaffingFile, role: Role, seat: string, entry: string) { staffing.seats[seat] = { role: role === "workers" ? "worker" : "reviewer", entry, addedAt: new Date().toISOString() }; writeStaffing(root, staffing); }
 function unregisterSeat(root: string, staffing: StaffingFile, seat: string) { delete staffing.seats[seat]; writeStaffing(root, staffing); }
+function invalidSeatDecision(d: Decision): Decision | null {
+  try { validateSegment("seat name", d.seat as string); return null; }
+  catch (e: any) { return { ...d, kind: "nothing", reason: e.message }; }
+}
 function applyAdd(root: string, pool: Pool, staffing: StaffingFile, d: Decision): Decision {
+  const invalid = invalidSeatDecision(d); if (invalid) return invalid;
   if (!d.role || !d.seat || !d.entry) return d;
+  const existing = readJson(statePath(root))?.seats?.[d.seat];
+  if (existing?.pid) pidAlive(existing.pid, existing.fifo, existing.startedAt);
   registerSeat(root, staffing, d.role, d.seat, d.entry);
   if (d.role === "reviewers") return d;
   const r = runAdapter(["spawn", d.seat]);
@@ -218,19 +226,47 @@ function applyAdd(root: string, pool: Pool, staffing: StaffingFile, d: Decision)
   return d;
 }
 function statePath(root: string): string { return path.join(root, "seats", "state.json"); }
-function removeState(root: string, seat: string) { const st = readJson(statePath(root)) ?? { seats: {} }; if (st.seats) delete st.seats[seat]; writeJsonAtomic(statePath(root), st); try { fs.rmSync(path.join(root, "seats", "run", `${seat}.stdin`), { force: true }); } catch {} }
+function stateRunFile(root: string, seat: string): string {
+  const run = path.resolve(root, "seats", "run"), file = path.resolve(run, `${seat}.stdin`);
+  const refuse = (): never => { throw new Error(`state file ${file} is outside the owned seats/run directory; refusing removal`); };
+  if (path.dirname(file) !== run) refuse();
+  // Inspect parents and the final entry with metadata, never realpath a FIFO.
+  if (!fs.statSync(root).isDirectory()) refuse();
+  const expected = path.join(fs.realpathSync(root), "seats", "run");
+  for (const dir of [path.resolve(root, "seats"), run]) {
+    try { const st = fs.lstatSync(dir); if (st.isSymbolicLink() || !st.isDirectory()) refuse(); }
+    catch (e: any) { if (e.code === "ENOENT") return file; throw e; }
+  }
+  if (fs.realpathSync(run) !== expected) refuse();
+  try { if (fs.lstatSync(file).isSymbolicLink()) refuse(); }
+  catch (e: any) { if (e.code !== "ENOENT") throw e; }
+  return file;
+}
+function removeState(root: string, seat: string) {
+  const file = stateRunFile(root, seat); // preflight before even writing state
+  const st = readJson(statePath(root)) ?? { seats: {} };
+  if (st.seats) delete st.seats[seat];
+  writeJsonAtomic(statePath(root), st);
+  try { fs.rmSync(file, { force: true }); } catch {}
+}
 function applyDrop(root: string, staffing: StaffingFile, d: Decision, snap: Snapshot): Decision {
+  const invalid = invalidSeatDecision(d); if (invalid) return invalid;
   if (!d.seat) return d;
   const live = [...snap.workers.live, ...snap.reviewers.live].find((s) => s.name === d.seat);
   if (live?.busy) return { ...d, kind: "nothing", reason: `drop refused: ${d.seat} is busy` };
+  // Snapshot reporting must not abort for uncertainty, but lifecycle must
+  // still recheck this exact record before freeing even a reviewer entry.
+  const before = readJson(statePath(root))?.seats?.[d.seat];
+  if (before?.pid) pidAlive(before.pid, before.fifo, before.startedAt);
   if (d.role === "reviewers") { unregisterSeat(root, staffing, d.seat); return d; }
+  try { stateRunFile(root, d.seat); } catch (e: any) { return { ...d, kind: "nothing", reason: `drop refused: ${e.message}` }; }
   const r = runAdapter(["stop", d.seat]);
-  const deadline = Date.now() + Number(process.env.WHEELHOUSE_STAFFING_STOP_MS ?? 30000);
-  while (Date.now() < deadline) { const rec = readJson(statePath(root))?.seats?.[d.seat]; if (!rec?.pid || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) break; sleep(50); }
+  const deadline = performance.now() + STAFFING_STOP_OBSERVE_LIMIT_MS;
+  while (performance.now() < deadline) { const rec = readJson(statePath(root))?.seats?.[d.seat]; if (!rec?.pid || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) break; sleep(50); }
   const rec = readJson(statePath(root))?.seats?.[d.seat];
-  if (rec?.pid && pidAlive(rec.pid, rec.fifo, rec.startedAt)) return { ...d, kind: "nothing", reason: `drop deferred: ${d.seat} still exiting` };
-  try { removeSeatWorktree(root, d.seat); } catch (e: any) { return { ...d, kind: "nothing", reason: `drop refused: ${e.message}` }; }
-  removeState(root, d.seat); unregisterSeat(root, staffing, d.seat);
+  if (rec?.pid && pidAlive(rec.pid, rec.fifo, rec.startedAt)) return { ...d, kind: "nothing", reason: `drop deferred: ${d.seat} still exiting; last observation=${JSON.stringify({pid:rec.pid,startedAt:rec.startedAt,stoppedAt:rec.stoppedAt??null})}; registration retained` };
+  try { removeSeatWorktree(root, d.seat); removeState(root, d.seat); } catch (e: any) { return { ...d, kind: "nothing", reason: `drop refused: ${e.message}` }; }
+  unregisterSeat(root, staffing, d.seat);
   return r.status === 0 ? d : { ...d, reason: `dropped after stop report: ${r.text || r.status}` };
 }
 function usage(): never { stop("usage: staffing.ts check [--dry-run] [--json] | add <workers|reviewers> | drop <seat> | probe <entry> | flag <entry> --reason <text> | status"); }
@@ -248,7 +284,7 @@ export async function main(argv = process.argv.slice(2), root = ROOT): Promise<v
     const snap = fleetSnapshot(root, { since: { isaHead: staffing.lastCheck?.isaHead ?? null, at: staffing.lastCheck?.at } });
     let d: Decision;
     if (cmd === "add") { const role = argv[1] as Role; d = clamp({ kind: role === "reviewers" ? "add-reviewer" : "add-worker", role, reason: "manual add", decider: "rule" }, snap, pool, staffing); }
-    else if (cmd === "drop") { const role = (staffing.seats?.[argv[1]]?.role === "verifier" ? "reviewers" : "workers") as Role; d = clamp({ kind: "drop-seat", role, seat: argv[1], reason: "manual drop", decider: "rule" }, snap, pool, staffing); }
+    else if (cmd === "drop") { const role = (staffing.seats?.[argv[1]]?.role === "reviewer" ? "reviewers" : "workers") as Role; d = clamp({ kind: "drop-seat", role, seat: argv[1], reason: "manual drop", decider: "rule" }, snap, pool, staffing); }
     else if (cmd === "check") d = clamp(await decideWithJev(snap, pool, staffing, argv.includes("--decision") ? argv[argv.indexOf("--decision") + 1] as DecisionKind : undefined), snap, pool, staffing);
     else usage();
     if (!dry) {

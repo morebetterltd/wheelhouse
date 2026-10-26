@@ -2,12 +2,13 @@
 # evidence-scrub.sh — redact machine-local paths as evidence is written.
 #
 # Usage:
-#   command 2>&1 | seats/evidence-scrub.sh > evidence/<bead>/run.txt
-#   seats/evidence-scrub.sh -o evidence/<bead>/run.txt -- command args...
+#   command 2>&1 | seats/evidence-scrub.sh > .wheelhouse-runs/<bead>/run.txt
+#   seats/evidence-scrub.sh -o .wheelhouse-runs/<bead>/run.txt -- command args...
 #   . seats/evidence-scrub.sh; scrub_evidence < raw.txt > scrubbed.txt
 #
 # Redacts $TMPDIR, /var/folders paths, $HOME, and the local username to the
-# placeholders GRAPH.md requires before committed evidence enters the repo.
+# placeholders GRAPH.md requires before output is posted on the task.
+# Local captures are ignored working copies, never files to commit.
 
 scrub_evidence() {
   local home tmp user home_base tmp_phys home_phys
@@ -39,18 +40,32 @@ scrub_evidence() {
       our @literal = sort { length($b->[0]) <=> length($a->[0]) }
         grep { !$seen{$_->[0]}++ }
         ((map { [$_, "[tmpdir]"] } @tmp), (map { [$_, "[home]"] } @home));
-      our $user = $ENV{USER_RAW} // "";
-      our $home_base = $ENV{HOME_BASE} // "";
+      our %path_replacement;
+      for my $entry (@literal) {
+        my ($p, $token) = @$entry;
+        $path_replacement{$p} //= $token if $p ne "/";
+      }
+      my @paths = map { quotemeta($_) }
+        sort { length($b) <=> length($a) || $a cmp $b } keys %path_replacement;
+      push @paths, q{/(?:private/)?var/folders/[^[:space:]"'"'"'`)>,;]+};
+      our $paths = join("|", @paths);
+      my %names;
+      $names{$_} = 1 for grep { length($_) } ($ENV{USER_RAW} // "", $ENV{HOME_BASE} // "");
+      my @name_parts = map { quotemeta($_) }
+        sort { length($b) <=> length($a) || $a cmp $b } keys %names;
+      our $names = @name_parts ? join("|", @name_parts) : "(?!)";
     }
-    our (@literal, $user, $home_base);
-    for my $entry (@literal) {
-      my ($p, $replacement) = @$entry;
-      next if $p eq "/";
-      s/\Q$p\E/$replacement/g;
+    our (%path_replacement, $paths, $names);
+    # Redact complete paths atomically BEFORE token splitting: an actual HOME
+    # may itself contain [home]. Never rescan emitted path replacements.
+    s{($paths)}{exists($path_replacement{$1}) ? $path_replacement{$1} : "[tmpdir]"}ge;
+    # Names cannot match across an existing/emitted token boundary (x[ho
+    # versus x[home]), and replacements are not rescanned inside each span.
+    my @spans = split(/(\[(?:tmpdir|home|user)\])/, $_, -1);
+    for (my $i = 0; $i < @spans; $i += 2) {
+      $spans[$i] =~ s{(?:$names)}{[user]}g;
     }
-    s{/(?:private/)?var/folders/[^[:space:]"'"'"'`)>,;]+}{[tmpdir]}g;
-    s{\Q$user\E}{[user]}g if length($user);
-    s{\Q$home_base\E}{[user]}g if length($home_base) && $home_base ne $user;
+    $_ = join("", @spans);
   '
 }
 

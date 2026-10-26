@@ -6,8 +6,10 @@ JSON=0
 [ "${1:-}" = "--json" ] && { JSON=1; ROOT="${2:-$(pwd -P)}"; }
 [ "${2:-}" = "--json" ] && JSON=1
 SRC_FILE="$ROOT/wheelhouse/.template-source"
+FORKS_FILE="$ROOT/wheelhouse/.template-forks"
 
-json_escape() { python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().rstrip("\n")))'; }
+# Keep the original JSON wire format, including ASCII escapes for Unicode.
+json_escape() { bun -e 'const fs=(await import("node:fs")).default; const s=JSON.stringify(fs.readFileSync(0,"utf8").replace(/\n+$/, "")); process.stdout.write(s.replace(/[\u007f-\uffff]/g,c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0"))+"\n");'; }
 fail_compare() {
   msg="$1"
   if [ "$JSON" = 1 ]; then printf '{"error":%s,"modified":[],"localOnly":[],"missing":[],"aheadBy":null,"comparedAgainst":null}\n' "$(printf '%s' "$msg" | json_escape)"; else printf 'DRIFT: cannot compare (%s)\n' "$msg"; fi
@@ -46,7 +48,26 @@ is_wanted() {
   return 1
 }
 is_contract_half() { case "$1" in wheelhouse/crew/*.md) case "${1#wheelhouse/crew/}" in */*) return 1;; *) return 0;; esac;; wheelhouse/fleet/*.md) case "${1#wheelhouse/fleet/}" in */*) return 1;; *) return 0;; esac;; wheelhouse/*.md) case "${1#wheelhouse/}" in */*) return 1;; *) return 0;; esac;; *) return 1;; esac; }
+is_install_owned() { case "$1" in wheelhouse/*.md|wheelhouse/crew/*.md|wheelhouse/fleet/*.md) return 0;; *) return 1;; esac; }
 split_contract() { awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}' "$1"; }
+fork_reason() {
+  [ -f "$FORKS_FILE" ] || return 1
+  awk -v want="$1" '
+    /^[[:space:]]*($|#)/ { next }
+    {
+      line=$0
+      sub(/^[[:space:]]+/, "", line)
+      split(line, parts, /[[:space:]]+#|[[:space:]]+-[[:space:]]+|[[:space:]]+because[[:space:]]+/)
+      path=parts[1]
+      sub(/[[:space:]]+$/, "", path)
+      reason=line
+      sub("^" path, "", reason)
+      sub(/^[[:space:]]*(#|-|because)?[[:space:]]*/, "", reason)
+      if (path == want && reason != "") found=1
+    }
+    END { exit found ? 0 : 1 }
+  ' "$FORKS_FILE"
+}
 template_content() {
   p="$1"
   if is_contract_half "$p"; then git -C "$REPO" show "$commit:$p" 2>/dev/null | awk 'BEGIN{p=1} /^## This project$/{p=0} p{print}'
@@ -55,7 +76,7 @@ template_content() {
 }
 install_content() { if is_contract_half "$1"; then split_contract "$ROOT/$1"; else cat "$ROOT/$1"; fi; }
 
-TMP="${TMPDIR:-/tmp}/wheelhouse-template-drift.$$"; mkdir -p "$TMP" || exit 2
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/wheelhouse-template-drift.XXXXXX")" || exit 2
 trap 'rm -rf "$TMP"' EXIT INT TERM
 : > "$TMP/install"; : > "$TMP/template"
 ( cd "$ROOT" && find seats runbooks wheelhouse -type f 2>/dev/null | while read -r p; do is_wanted "$p" && printf '%s\n' "$p"; done ) | sort > "$TMP/install"
@@ -64,16 +85,19 @@ git -C "$REPO" ls-tree -r --name-only "$commit" -- seats runbooks wheelhouse 2>/
 modified=""; local_only=""; missing=""
 while IFS= read -r p; do
   [ -n "$p" ] || continue
-  if ! grep -qxF "$p" "$TMP/template"; then local_only="${local_only}${p}
-"; continue; fi
+  if ! grep -qxF "$p" "$TMP/template"; then
+    if is_install_owned "$p" || fork_reason "$p"; then continue; fi
+    local_only="${local_only}${p}
+"; continue
+  fi
   template_content "$p" > "$TMP/t"; install_content "$p" > "$TMP/i"
-  cmp -s "$TMP/t" "$TMP/i" || modified="${modified}${p}
-"
+  cmp -s "$TMP/t" "$TMP/i" || { fork_reason "$p" || modified="${modified}${p}
+"; }
 done < "$TMP/install"
 while IFS= read -r p; do
   [ -n "$p" ] || continue
-  grep -qxF "$p" "$TMP/install" || missing="${missing}${p}
-"
+  grep -qxF "$p" "$TMP/install" || { fork_reason "$p" || missing="${missing}${p}
+"; }
 done < "$TMP/template"
 
 ahead="null"; headref=""
@@ -83,12 +107,15 @@ done
 if [ -n "$headref" ]; then ahead="$(git -C "$REPO" rev-list --count "$commit..$headref" 2>/dev/null || printf null)"; [ -n "$ahead" ] || ahead=null; fi
 
 if [ "$JSON" = 1 ]; then
-  python3 - "$commit" "$ahead" "$modified" "$local_only" "$missing" <<'PY'
-import json,sys
-commit,ahead,mod,loc,mis=sys.argv[1:6]
-def lines(s): return [x for x in s.split('\n') if x]
-print(json.dumps({"modified":lines(mod),"localOnly":lines(loc),"missing":lines(mis),"aheadBy":(None if ahead=='null' else int(ahead)),"comparedAgainst":commit}, indent=2))
-PY
+  bun -e '
+const [commit,ahead,mod,loc,mis]=process.argv.slice(1);
+const lines=s=>s.split("\n").filter(Boolean);
+if(ahead!=="null"&&!/^[+-]?\d+$/.test(ahead)) throw new Error("invalid ahead count");
+const count=ahead==="null"?"null":BigInt(ahead).toString();
+const json=JSON.stringify({modified:lines(mod),localOnly:lines(loc),missing:lines(mis),aheadBy:null,comparedAgainst:commit},null,2)
+  .replace(/^  "aheadBy": null,$/m,`  "aheadBy": ${count},`);
+process.stdout.write(json.replace(/[\u007f-\uffff]/g,c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0"))+"\n");
+' "$commit" "$ahead" "$modified" "$local_only" "$missing"
 else
   printf '%s' "$modified" | while IFS= read -r p; do [ -n "$p" ] && printf 'MODIFIED %s\n' "$p"; done
   printf '%s' "$local_only" | while IFS= read -r p; do [ -n "$p" ] && printf 'LOCAL-ONLY %s\n' "$p"; done

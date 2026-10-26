@@ -2,11 +2,13 @@
 
 A standing agent fleet, over a shared work graph, installable on any project.
 
-The shape: a **commander** session where you argue direction, a **designer** that turns direction into implementable work, **workers** that implement one unit at a time on isolated branches, a **reviewer** that gates every diff with evidence and never reviews what it wrote, and an ephemeral **verifier** that turns a finished branch into a single verdict — never on the author's account. Work lives in a graph, not in chat. Nothing merges on a claim.
+The shape: a **commander** session where you argue direction, a required **producer** that judges every signal and writes the work's intent and outcomes (it may be a commander subagent), **workers** that implement one unit at a time on isolated branches, a **reviewer** that gates every diff with evidence and never reviews what it wrote, and an ephemeral **verifier** that walks consumer surfaces with zero bead-review context. Review seats (`reviewer-1`, `reviewer-2`, role `reviewer`) turn finished branches into verdicts via `seats/verify.ts` — never on the author's account. The walk seat (`verifier`, role `verifier`) gates claims via `seats/walk.ts`, not diffs. Work lives in a graph, not in chat. Nothing merges on a claim.
 
-The commander is a Claude Code session — yours. Every other seat is a persistent harness process the commander owns: each pinned to one account of its own and rostered to run on Pi, Claude Code, or Codex. That means subscription seats can sit beside API-key seats in the same fleet — for example a Claude Code worker, a Codex reviewer, and a Pi verifier — with the same adapter, graph, cockpit, review, and walk contracts. The roster recording who runs on what is a JSON file; the roles are briefs injected at spawn.
+The commander is a Claude Code session — yours. The producer may be its subagent; other standing seats are persistent harness processes the commander owns: each pinned to one account of its own and rostered to run on Pi, Claude Code, or Codex. That means subscription seats can sit beside API-key seats in the same fleet — for example a Claude Code worker, a Codex reviewer, and a Pi verifier — with the same adapter, graph, cockpit, review, and walk contracts. The roster recording who runs on what is a JSON file; the roles are briefs injected at spawn.
 
 This repo is the template. It ships the contracts those roles share, the seat machinery they run on, worked examples, and a bootstrap procedure that installs the whole thing into a project by interviewing you about that project.
+
+The intent and outcomes skills ship with the template and install at the root under `.agents/skills/`, with relative compatibility links under `.claude/skills/`.
 
 Two paths:
 
@@ -58,7 +60,7 @@ Two things before you start:
   me. Do not work around it, and do not overwrite anything I already have.
 ```
 
-It will survey your repo, then interview you about the things it cannot derive: which repos the fleet changes, what proves a build actually works (that one is several questions), what is true when the first iteration is done, which actions stay yours alone, what authorizes a merge, and what your priorities mean. Then it walks your seat roster one seat at a time, and walks the seats you took a second time for their models — each seat taken gets a role and an account directory of its own, then its own harness, provider, auth route, and model pinned from that harness's live listing/probe rather than from anyone's memory, recorded in `seats/seats.json` (names and paths only; never a secret) — and declining every seat is a legitimate answer. Then it provisions the seats, writes the tree, verifies it, tells you what is stubbed, and closes the loop with a smoke dispatch through a real seat.
+It will survey your repo, then interview you about the things it cannot derive: which repos the fleet changes, what proves a build actually works (that one is several questions), what is true when the first iteration is done, which actions stay yours alone, what authorizes a merge, and what your priorities mean. Then it walks your seat roster one seat at a time, and walks the seats you took a second time for their models — each seat taken gets a role and an account directory of its own, then its own harness, provider, auth route, and model pinned from that harness's live listing/probe rather than from anyone's memory, recorded in `seats/seats.json` (names and paths only; never a secret) — and declining every optional standing session is legitimate, but the producer role is required and must still be recorded as a commander subagent or a standing seat. The commander never writes intent or outcomes. Then it provisions the seats, writes the tree, verifies it, tells you what is stubbed, and closes the loop with a smoke dispatch through a real seat.
 
 If you would rather read the template before installing anything, this is safe to paste into a terminal — it clones a copy you can browse and installs nothing:
 
@@ -72,6 +74,13 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
 <project root>/
 ├── CLAUDE.md                    generated — makes this folder's sessions the commander
 ├── .beads/                      the work graph
+├── .agents/skills/
+│   ├── intent/                  signal to plain-words what-and-why; SKILL.md and worked examples
+│   ├── outcomes/                intent to consumer/surface/check outcomes; SKILL.md and worked contracts
+│   ├── create-verification/     write and prove a project manual and complete feature map
+│   ├── maintain-verification/   findings-only source and live audit; no product/manual edits
+│   └── NOTICE-pstack.md         Lauren Tan's MIT notice and pinned source for the adapted skills
+├── .claude/skills/              symlinks for Claude Code, pointing to .agents/skills/
 ├── seats/                       the seat machinery, at the root because every path it prints is root-relative
 │   ├── seats.json               generated — the roster: role, harness, provider, model, auth route, account dir per seat; never a secret
 │   ├── seat-env.sh              provisions one seat's isolated account directory, once
@@ -81,6 +90,8 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
 │   ├── prune.ts                 scans/prunes safe worktrees and regenerable caches from reviewed scan files
 │   ├── needs.ts, desk.ts        durable human requests plus the local needs/board web desk
 │   ├── channels.ts, comms.ts    declared stakeholder channels; commander is the fleet's one voice
+│   ├── inbox-hook.sh            Claude Code lifecycle hook: identity-guarded inbox context
+│   ├── inbox-hook.selftest.sh   proves delivery, bookkeeping and seat/subagent refusals
 │   ├── principal-sentinel.sh    Claude Code Stop hook: final @principal: blocks become needs
 │   ├── courier.ts               optional transport daemon for a declared principal channel
 │   ├── cockpit.sh, floor.ts     the bridge: one tmux window — commander pane left, read-only floor right
@@ -93,9 +104,9 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
     ├── GRAPH.md                 contract
     ├── INTEGRATOR.md            contract + your push authority
     ├── crew/
-    │   ├── DESIGNER.md          contract + your project's territory
+    │   ├── PRODUCER.md          contract + your project's territory
     │   ├── REVIEWER.md          contract + your branch conventions
-    │   ├── VERIFIER.md          contract — the one-shot verdict pass, never on the author's account
+    │   ├── VERIFIER.md          contract — the zero-context consumer-surface walk for ISA claims
     │   ├── RESEARCHER.md        contract — sourced decision-grade research reports, no product edits
     │   ├── BENCH.md             contract + what proves YOUR build works
     │   └── bench.sh             stub — exits non-zero until you implement it
@@ -105,7 +116,7 @@ git clone --depth 1 https://github.com/morebetterltd/wheelhouse.git
     └── runbooks/                running the loop, upgrading, and the graduations to take later
 ```
 
-The seats are commander-owned processes, not terminals you keep open. `seats/seat-env.sh` gives each seat its own account directory — one seat, one login — for its rostered harness (`PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME`), and from then on the adapter does everything: `bun seats/adapter.ts spawn` starts a seat with its role brief injected, `dispatch` hands it a bead, and its session survives a stop, so `resume` brings the context back warm. There is nothing to paste into a seat. To watch the fleet, `seats/cockpit.sh` builds one tmux window per project: your commander session in the left pane, and on the right the floor — a read-only view that spotlights one seat's stream and shows every seat's attention cues in a rail. Cockpit turns tmux mouse scrolling on and keeps 50,000 lines of pane history; opt out with `WHEELHOUSE_COCKPIT_MOUSE=0 seats/cockpit.sh` if you prefer native terminal selection. Scroll with the wheel, or press tmux prefix then `[` and use arrows/PageUp (`q` leaves copy mode); with mouse on, hold Option/Shift on macOS terminals to select text. Cockpit records the commander pane for herald self-aim and starts/verifies the supervisor; the supervisor keeps the Dispatch Office herald, the local desk (`seats/desk.ts` for `/needs` and `/board`), and the optional courier alive. `seats/principal-sentinel.sh` is the Claude Code Stop hook that turns a final `@principal:` block into a need. Stakeholder channels are declared at install in `seats/channels.json`, and the commander is the fleet's one voice on them through `seats/comms.ts`. A no-cockpit `spawn`/`status` path starts seats, not those wake/desk/transport daemons. `seats/README.md` documents all of it.
+The seats are commander-owned processes, not terminals you keep open. `seats/seat-env.sh` gives each seat its own account directory — one seat, one login — for its rostered harness (`PI_CODING_AGENT_DIR`, `CLAUDE_CONFIG_DIR`, or `CODEX_HOME`), and from then on the adapter does everything: `bun seats/adapter.ts spawn` starts a seat with its role brief injected, `dispatch` hands it a bead, and its session survives a stop, so `resume` brings the context back warm. There is nothing to paste into a seat. To watch the fleet, `seats/cockpit.sh` builds one tmux window per project: your commander session in the left pane, and on the right the floor — a read-only view that spotlights one seat's stream and shows every seat's attention cues in a rail. Cockpit turns tmux mouse scrolling on and keeps 50,000 lines of pane history; opt out with `WHEELHOUSE_COCKPIT_MOUSE=0 seats/cockpit.sh` if you prefer native terminal selection. Scroll with the wheel, or press tmux prefix then `[` and use arrows/PageUp (`q` leaves copy mode); with mouse on, hold Option/Shift on macOS terminals to select text. Cockpit records the commander pane for herald self-aim and starts/verifies the supervisor; the supervisor keeps the Dispatch Office herald, the local desk (`seats/desk.ts` for `/needs` and `/board`), and the optional courier alive. Wire `seats/inbox-hook.sh` as the SessionStart, UserPromptSubmit and PostToolUse (Bash) hooks: unread Dispatch Office records then arrive at session start, with each prompt and after each shell command. The herald's poke is the prompt that carries them. The guard rejects subagents and rostered seat processes and validates the claimed commander pane; no live settings are changed by copying the scripts. Read every delivered record before the turn ends, using needs `show`, intake or comms as appropriate; inbound is information, not authority. `seats/principal-sentinel.sh` remains the separate Stop hook that turns a final `@principal:` block into a need. Stakeholder channels are declared at install in `seats/channels.json`, and the commander is the fleet's one voice on them through `seats/comms.ts`. A no-cockpit `spawn`/`status` path starts seats, not those wake/desk/transport daemons. `seats/README.md` documents all of it.
 
 ## Contract, and this project
 
@@ -120,6 +131,10 @@ That split is the whole design. It means a project's specifics never get tangled
 | | |
 |---|---|
 | `contracts/` | the briefs, copied verbatim at install |
+| `.agents/skills/` | one real copy of each contract-writing and verification skill; `.claude/skills/` holds relative symlinks |
+| `.agents/skills/create-verification/` | generate a project-local five-section verification manual and map every discovered consumer feature |
+| `.agents/skills/maintain-verification/` | one reader loop and live pass, reporting findings without product or manual edits |
+| `.agents/skills/NOTICE-pstack.md` | Lauren Tan's MIT license text, pinned upstream source and dated adaptations for the verification skills |
 | `seats/` | the seat machinery, copied verbatim to the install root: provisioning, the adapter, the bead-verdict dispatcher, the consumer-surface walk dispatcher, human needs (`needs.ts`), the local desk (`desk.ts`), the optional courier (`courier.ts`), the principal Stop hook (`principal-sentinel.sh`), pruning, the bridge, recovery, and a selftest for each |
 | `generated/` | specimens of what the interview writes — never copied, and drawn from an invented project so they cannot be mistaken for a starting point |
 | `runbooks/` | how to run the loop, the upgrade procedure, and the graduations to take once the loop has proven itself |
@@ -214,7 +229,7 @@ Your install records its baseline in `wheelhouse/.template-source`: the template
 
 ## Pairs well with an intent layer
 
-The commander seat is a plain Claude Code session, and it works fine as exactly that. It also pairs well with personal-AI-infrastructure tooling on the commander's side — a layer that holds your goals and context above any one task graph. [`INTENT.md`](INTENT.md) specifies the ISA grammar any such layer must speak: goal, claims, decisions, anti-claims, evidence stubs, and claim updates on merge. Daniel Miessler's [LifeOS](https://github.com/danielmiessler/LifeOS) is one example of an intent layer; a PAI-style setup is another. The fleet executes; a layer like that helps decide which hill is worth climbing, and keeps verification discipline on the human side of the loop. Nothing in this template requires it.
+The commander seat is a plain Claude Code session, and it works fine as exactly that. It also pairs well with personal-AI-infrastructure tooling on the commander's side — a layer that holds your goals and context above any one task graph. [`INTENT.md`](INTENT.md) specifies the ISA grammar any such layer must speak: goal, claims, decisions, anti-claims, evidence stubs, and claim updates on merge. A PAI-style setup is one example of an intent layer. The fleet executes; a layer like that helps decide which hill is worth climbing, and keeps verification discipline on the human side of the loop. Nothing in this template requires it.
 
 ## Credit
 

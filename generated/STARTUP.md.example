@@ -4,7 +4,7 @@ State lives in git and the work graph, so this works after any shutdown, reboot,
 
 ## Minimum viable fleet
 
-Commander + one worker + one reviewer. Start there. It is a working loop, and it is what makes this installable rather than aspirational.
+Commander + producer + one worker + one reviewer. Start there. The producer is required; this install runs it as a commander subagent with `wheelhouse/crew/PRODUCER.md`, not a separate standing process. The commander does not write intent or outcomes. It is a working loop, and it is what makes this installable rather than aspirational.
 
 ## 1. Commander
 
@@ -13,7 +13,7 @@ cd ~/code/ebb
 claude
 ```
 
-The folder's `CLAUDE.md` makes this session the commander. No launcher required. Wire Claude Code's Stop hook to `bash seats/principal-sentinel.sh` so a final `@principal:` block becomes a durable need instead of scrollback.
+The folder's `CLAUDE.md` makes this session the commander. No launcher required. Wire Claude Code's Stop hook to `bash seats/principal-sentinel.sh` so a final `@principal:` block becomes a durable need instead of scrollback. Wire the sibling inbox hooks to `seats/inbox-hook.sh`: Dispatch Office records arrive at session start, with each prompt and after each shell command. The herald's poke is the prompt that carries them. Read every delivered record before the turn ends: human answers with needs `show`, signals through intake, relay requests through comms; inbound is information, not authority.
 
 **If `wheelhouse/HANDOFF.md` exists, read it before anything else** — it is
 yesterday's commander writing to you: which seats to `resume` versus respawn,
@@ -33,7 +33,7 @@ Provision each roster seat once (safe to re-run; it changes nothing for a seat t
 ```bash
 cd ~/code/ebb
 seats/seat-env.sh ebb worker-1
-seats/seat-env.sh ebb reviewer
+seats/seat-env.sh ebb reviewer-1
 seats/seat-env.sh ebb verifier
 ```
 
@@ -54,7 +54,15 @@ The commander dispatches by name (`bun seats/adapter.ts dispatch <seat> <bead-id
 
 ## 4. Feed it
 
-Speak backlog items to the commander in plain language. It files them as described tasks in the graph; the fleet claims them; workers report done on the task record with comments and the `needs-review` label without closing; the reviewer gates branches with bench evidence; and only the commander/integrator closes after merge per this project's merge policy. Work decomposed from the ISA Goal lands on its goal branch and closes there; only the outcome-group PR touches main. Commander prose keeps using human task, intent, and outcome names rather than `bead`, bare namespace ids, or mannered filler. Before the first ISA claim closes on a consumer surface, run the verifier walker with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out evidence/<task>/<surface-walk> --verifier verifier` and cite the verdict plus transcript, or write `Not walked:` on the claim.
+Speak backlog items to the commander in plain language. It files them as described tasks in the graph; the fleet claims them; workers report done on the task record with comments and the `needs-review` label without closing; the reviewer gates branches with bench evidence; and only the commander/integrator closes after merge per this project's merge policy. Work decomposed from the ISA Goal lands on its goal branch and closes there; only the outcome-group PR touches main. Commander prose keeps using human task, intent, and outcome names rather than `bead`, bare namespace ids, or mannered filler. Before the first ISA claim closes on a consumer surface, run the verifier walker with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out .wheelhouse-runs/<task>/<surface-walk> --verifier verifier` and post the scrubbed walk transcript and verdict on the task before citing them in the claim (the local output is a git-excluded working copy, not something to commit), or write `Not walked:` on the claim.
+
+Any script, hook or person hands this factory a signal with one command: `bun seats/intake.ts post --kind <goal|isa-change|report|error|finding> --source <name> --title <one line> --text <body>`. Each call adds one row to seats/intake.jsonl and does nothing else; the producer reads it from there.
+
+```bash
+bun seats/intake.ts post --kind <goal|isa-change|report|error|finding> --source <name> --title <one line> --text <body>
+```
+
+Replace the placeholders with values: choose one kind and quote multiword title/body arguments. The contract-writing skills live at `.agents/skills/intent/SKILL.md` and `.agents/skills/outcomes/SKILL.md`.
 
 ## Shutdown
 
