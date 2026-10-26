@@ -141,7 +141,10 @@ import assert from 'node:assert';
 import * as nativeCP from 'node:child_process';
 const cp={...nativeCP,...await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE)};
 const {CONTRACT,HERE,FIX}=process.env,root=path.join(FIX,'graph'),ledger=path.join(root,'seats/intake.jsonl');
-const valid=fs.readFileSync(path.join(HERE,'fixtures/contracts/valid.md'),'utf8');
+const {readContractSkill}=await import(path.join(HERE,'briefs.ts'));
+const installedStamp=['intent','outcomes'].map(name=>`${name}@${readContractSkill(path.join(HERE,'..'),name).version}`).join(' ');
+// This Signal/trace input is synthetic; committed historical stamps stay put.
+const valid=fs.readFileSync(path.join(HERE,'fixtures/contracts/valid.md'),'utf8').replace(/^Skills:.*$/m,`Skills: ${installedStamp}`);
 const env={...process.env,WHEELHOUSE_CONTRACT_ROOT:root};delete env.WHEELHOUSE_SKIP_BD;delete env.WHEELHOUSE_CONTRACT_FIXTURE;delete env.WHEELHOUSE_INTAKE_FIXTURE;
 let failed=0,passed=0;
 function test(name,fn){try{fn();passed++;console.log('PASS '+name);}catch(e){failed++;console.log('FAIL '+name+': '+e.message);}}
