@@ -23,6 +23,7 @@ function fence(file: string, marker: string) {
 const refresh = fence(upgrade, "# Template skills upgrade");
 const install = fence(bootstrap, "# Template skills install");
 const integrity = fence(bootstrap, "# Template skills integrity");
+const readback = fence(upgrade, "# Template skills readback");
 const commands: object[] = [], results: object[] = [];
 let failures = 0;
 function test(name: string, fn: () => void) {
@@ -47,8 +48,8 @@ function command(file: string, args: string[], cwd: string) {
   assert(!r.error && r.signal === null, `native completion: ${file}`);
   return r;
 }
-function script(shell: string, code: string, cwd: string) {
-  return command(shell, ["-e", "-c", `TEMPLATE=$1\n${code}`, shell, template], cwd);
+function script(shell: string, code: string, cwd: string, sourceTemplate = template) {
+  return command(shell, ["-e", "-c", `TEMPLATE=$1\n${code}`, shell, sourceTemplate], cwd);
 }
 function project(name: string) {
   const dir = path.join(scratch, name);
@@ -68,9 +69,11 @@ function keep(dir: string) {
 function identical(dir: string) {
   assert(fs.existsSync(path.join(dir, ".agents/skills/intent/SKILL.md")), "copied intent skill absent");
   assert(fs.existsSync(path.join(dir, ".agents/skills/outcomes/SKILL.md")), "copied outcomes skill absent");
-  const diff = command("diff", ["-r", source, ".agents/skills"], dir);
-  console.log(`diff -r "$TEMPLATE/.agents/skills" .agents/skills [cwd=${dir}] exit=${diff.status} stdout=${JSON.stringify(diff.stdout)} stderr=${JSON.stringify(diff.stderr)}`);
-  assert.equal(diff.status, 0, diff.stdout + diff.stderr); assert.equal(diff.stdout, ""); assert.equal(diff.stderr, "");
+  for (const name of fs.readdirSync(source).sort()) {
+    const diff = command("diff", ["-r", path.join(source, name), path.join(".agents/skills", name)], dir);
+    console.log(`shipped entry ${name}: diff exit=${diff.status} stdout=${JSON.stringify(diff.stdout)} stderr=${JSON.stringify(diff.stderr)}`);
+    assert.equal(diff.status, 0, diff.stdout + diff.stderr); assert.equal(diff.stdout, ""); assert.equal(diff.stderr, "");
+  }
   assert(!fs.existsSync(path.join(dir, ".agents/skills/skills")), "nested copy");
   for (const name of ["intent", "outcomes"]) {
     const link = path.join(dir, ".claude/skills", name);
@@ -83,6 +86,21 @@ function identical(dir: string) {
 function seed(dir: string) {
   fs.cpSync(source, path.join(dir, ".agents/skills"), { recursive: true });
   for (const name of ["intent", "outcomes"]) fs.symlinkSync(`../../.agents/skills/${name}`, path.join(dir, ".claude/skills", name));
+}
+function productSkills(dir: string) {
+  const root = path.join(dir, ".agents/skills");
+  for (const name of ["verify-demo", "local-maintenance", "retired-but-product-owned"]) {
+    fs.mkdirSync(path.join(root, name, "features"), { recursive: true });
+    fs.writeFileSync(path.join(root, name, "SKILL.md"), `KEEP ${name} manual\n`);
+    fs.writeFileSync(path.join(root, name, "features/counter.md"), `KEEP ${name} feature\n`);
+    fs.chmodSync(path.join(root, name, "features/counter.md"), 0o640);
+    fs.symlinkSync("features/counter.md", path.join(root, name, "counter-link"));
+  }
+  return () => ["verify-demo", "local-maintenance", "retired-but-product-owned"].map(name => {
+    const dir = path.join(root, name);
+    assert(fs.existsSync(dir), `SKILLS_PRODUCT_MANUAL_LOST: ${name}`);
+    return snapshot(dir);
+  });
 }
 for (const shell of ["bash", "zsh"]) {
   // FIRST leg: removing the UPGRADE recipe must leave this old install skill-less.
@@ -98,6 +116,23 @@ for (const shell of ["bash", "zsh"]) {
     assert.equal(script(shell, refresh, dir).status, 0); identical(dir);
     assert.equal(snapshot(dir), before, "second run changes bytes, modes or symlink targets");
   });
+  test(`${shell}/upgrade-product-manual`, () => {
+    const dir = project(`${shell}-upgrade-product-manual`); seed(dir);
+    const readProduct = productSkills(dir), before = readProduct();
+    fs.writeFileSync(path.join(dir, ".agents/skills/intent/retired-template-file"), "REMOVE owned stale file\n");
+    fs.appendFileSync(path.join(dir, ".agents/skills/intent/SKILL.md"), "\nstale template bytes\n");
+    assert.equal(script(shell, refresh, dir).status, 0, "refresh completed before preservation verdict");
+    // Record the old recipe's apparently clean readback even when it deleted the manual.
+    const rootDiff = command("diff", ["-r", source, ".agents/skills"], dir);
+    console.log(`product manual: refresh=0 whole-root-diff=${rootDiff.status} verify-demo-exists=${fs.existsSync(path.join(dir, ".agents/skills/verify-demo/SKILL.md"))}`);
+    assert.deepEqual(readProduct(), before, "product bytes, modes and link targets changed");
+    assert(readback.trim(), "printed shipped-only upgrade readback required");
+    assert.equal(script(shell, readback, dir).status, 0, "SKILLS_UPGRADE_READBACK_INCLUDES_PRODUCT");
+    identical(dir);
+    assert(!fs.existsSync(path.join(dir, ".agents/skills/intent/retired-template-file")), "owned retired file retained");
+    assert.equal(script(shell, refresh, dir).status, 0); identical(dir);
+    assert.deepEqual(readProduct(), before, "repeat refresh changed product skills");
+  });
   test(`${shell}/upgrade-stale-directory`, () => {
     const dir = project(`${shell}-upgrade-stale-directory`);
     fs.mkdirSync(path.join(dir, ".claude/skills/intent"));
@@ -111,7 +146,7 @@ for (const shell of ["bash", "zsh"]) {
     assert.equal(script(shell, install, dir).status, 0); identical(dir);
   });
   test(`${shell}/install-existing`, () => {
-    const dir = project(`${shell}-install-existing`); seed(dir);
+    const dir = project(`${shell}-install-existing`); seed(dir); productSkills(dir);
     const before = snapshot(dir), r = script(shell, install, dir);
     assert.equal(r.status, 1); assert(r.stderr.includes("STOP: .agents/skills already exists"));
     assert.equal(snapshot(dir), before);
@@ -126,6 +161,34 @@ for (const shell of ["bash", "zsh"]) {
       assert.equal(snapshot(dir), before, `${p} refusal must not write through or replace link`);
     }
   });
+  test(`${shell}/integrity-product-manual`, () => {
+    const dir = project(`${shell}-integrity-product-manual`); seed(dir);
+    const readProduct = productSkills(dir), before = readProduct();
+    assert.equal(script(shell, integrity, dir).status, 0, "SKILLS_READBACK_INCLUDES_PRODUCT: shipped-only integrity must allow project manuals");
+    assert.deepEqual(readProduct(), before);
+  });
+  test(`${shell}/upgrade-source-is-destination`, () => {
+    const dir = project(`${shell}-upgrade-source-is-destination`); seed(dir); productSkills(dir);
+    const before = snapshot(dir), r = script(shell, refresh, dir, dir);
+    assert.equal(r.status, 1);
+    assert(r.stderr.includes("STOP: template skills source is the destination"));
+    assert.equal(snapshot(dir), before);
+  });
+  for (const [name, kind] of [["intent", "file"], ["outcomes", "link"], ["NOTICE-pstack.md", "directory"]]) {
+    test(`${shell}/upgrade-shipped-destination-${kind}`, () => {
+      assert(fs.existsSync(path.join(source, name)), "shipped refusal subject exists");
+      const dir = project(`${shell}-shipped-${kind}`); seed(dir); productSkills(dir);
+      const dest = path.join(dir, ".agents/skills", name);
+      fs.rmSync(dest, { recursive: true, force: true });
+      if (kind === "file") fs.writeFileSync(dest, "KEEP conflicting product file\n");
+      else if (kind === "directory") { fs.mkdirSync(dest); fs.writeFileSync(path.join(dest, "KEEP"), "KEEP conflicting directory\n"); }
+      else { fs.mkdirSync(path.join(dir, "victim")); fs.writeFileSync(path.join(dir, "victim/KEEP"), "KEEP outside target\n"); fs.symlinkSync(path.join(dir, "victim"), dest); }
+      const before = snapshot(dir), r = script(shell, refresh, dir);
+      assert.equal(r.status, 1, `${kind} collision must refuse`);
+      assert(r.stderr.includes(`STOP: template skill destination has wrong type: .agents/skills/${name}`));
+      assert.equal(snapshot(dir), before, "all destination preflights must precede refresh writes");
+    });
+  }
   test(`${shell}/install-integrity`, () => {
     const dir = project(`${shell}-install-integrity`); seed(dir);
     assert.equal(script(shell, integrity, dir).status, 0, "healthy integrity subject");

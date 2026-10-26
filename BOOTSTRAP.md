@@ -170,7 +170,7 @@ Everything in this list is copied whole and unedited. The interview-derived cont
   - the whole `runbooks/` directory into `wheelhouse/runbooks/`. `SEATS.md` and `STARTUP.md` both point at these by path, and a runbook that is only in the template is a broken link in the project.
   - `bench.sh.stub` to `wheelhouse/crew/bench.sh`, executable, unchanged — **it exits non-zero on purpose.** A stub that exits 0 lets the first APPROVE through on nothing.
 - Copy the whole `seats/` directory from the template to `seats/` at the install root, scripts kept executable (`cp -R "$TEMPLATE/seats" seats`). This is the machinery every seat runs on — `seat-env.sh` (provisioning), `adapter.ts` (spawn/dispatch/status/stop/resume), `verify.ts` (the reviewer bead-verdict dispatcher), `walk.ts` (the consumer-surface verifier walk), `needs.ts` (durable human requests), `intake.ts` (durable signal intake), `desk.ts` (the local needs/board web desk), `principal-sentinel.sh` (Claude Code Stop hook for `@principal:`), `courier.ts`, `channels.ts`, `comms.ts`, `seats/channels.json.example` plus `transports/` (optional off-machine replies through a declared principal channel and stakeholder channels across Telegram, Slack and Teams), `pool.ts`/`roster.ts` plus `pool.json.example` (optional dynamic-staffing pool support; inert until `seats/pool.json` exists), `prune.ts` (safe worktree/cache pruning), `floor.ts` and `cockpit.sh` (the bridge), `recover.ts` (post-interruption triage), their selftests, and `seats/README.md`, which documents every command. It lands at the ROOT rather than under `wheelhouse/` because every path the contracts and runbooks print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative, and a copy that lands anywhere else breaks each of them. `seats/seats.json.example` arrives with it as the roster format's reference; the real `seats.json` is written by step 3's interview.
-- Copy the canonical skills tree to the install root and recreate the two contract-writing compatibility links. The install owns **only `.agents/skills/`**, not `.agents/` wholesale. If that tree already exists, stop and reconcile it with the owner before installing; never nest a copy into existing product skills. A real directory or file at either compatibility-link path is also a named refusal, not permission to delete it. Other `.agents/` and `.claude/` contents stay untouched.
+- Copy the shipped skills to the install root and recreate the two contract-writing compatibility links. `.agents/skills/` is a **shared namespace**: only the template's shipped skill directories and top-level metadata files are template-owned, never the whole parent. Project verification manuals such as `verify-<project>/` remain product-owned, including when the product repository is the install root. This fresh-install recipe conservatively refuses any existing skills root: stop and reconcile it with the owner (or use the upgrade recipe to preserve unshipped skills); never delete it or nest a copy into existing product skills. A real directory or file at either compatibility-link path is also a named refusal, not permission to delete it. Other `.agents/` and `.claude/` contents stay untouched.
 
   ```bash
   # Template skills install — run at the install root, with TEMPLATE from above.
@@ -450,7 +450,7 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
 
   The single pre-push installer call protects the container and the distinct `product-repo=` recorded in `wheelhouse/.template-source`, respecting each repository's own `core.hooksPath` (including a shared `.beads/hooks`). It prints each installed hook and the existing guard script it invokes from the install's `seats/`; a product with no `seats/` is supported. Existing pre-push hooks are preserved and receive the same arguments and stdin after the fleet guard allows a push. Check that both repositories appear when they are distinct; a missing/invalid product path is a stop, not a successful container-only install. This is a bypassable tripwire, not separate write credentials.
 
-  `bd setup claude` is the explicit replacement for the SessionStart hook that `bd init --skip-agents` deliberately skipped. It may create or update `CLAUDE.md`; the next steps write the commander content into that same file, keeping bd's managed block. Do not run a setup command that writes root `AGENTS.md`, and do not let `bd init` claim `.agents/` wholesale. Step 2 explicitly installs the template-owned `.agents/skills/`; that is the only wheelhouse-owned path under `.agents/`, and bd must not write there or anywhere else under `.agents/`.
+  `bd setup claude` is the explicit replacement for the SessionStart hook that `bd init --skip-agents` deliberately skipped. It may create or update `CLAUDE.md`; the next steps write the commander content into that same file, keeping bd's managed block. Do not run a setup command that writes root `AGENTS.md`, and do not let `bd init` claim `.agents/` wholesale. Step 2 explicitly installs the shipped entries inside `.agents/skills/`, a shared namespace whose other entries remain product-owned. bd must not write there or anywhere else under `.agents/`.
 
 - **Set the graph's role explicitly, immediately after `bd init`:**
 
@@ -650,11 +650,17 @@ Run each of these and paste what it prints:
 
   A `FAIL` means the installed contract differs from your template source — it does not say why. Two causes exist: the install damaged the contract, or your template clone is newer than the install (contracts do change). Compare the `commit=` in `wheelhouse/.template-source` against the template's HEAD to tell which: same commit → damaged, stop and repair; older commit → you are behind, and the README's upgrade note applies. Every other check in this list can pass on a file whose contract you deleted — this is the only one that looks.
 
-- **Skills integrity.** Compare the whole canonical tree, not just the two entry files; expect empty diff output and resolving relative compatibility links. Stop on any nonzero exit:
+- **Skills integrity.** Compare every shipped skill directory recursively and each shipped metadata file, not the shared parent: product verification manuals and feature maps are allowed beside them. Expect empty diff output and resolving relative compatibility links. Stop on any nonzero exit:
 
   ```bash
   # Template skills integrity
-  diff -r "$TEMPLATE/.agents/skills" .agents/skills || { echo "FAIL skills differ from template" >&2; exit 1; }
+  for skill in intent outcomes; do
+    test -f "$TEMPLATE/.agents/skills/$skill/SKILL.md" || { echo "FAIL template skill missing: $skill" >&2; exit 1; }
+  done
+  for src in "$TEMPLATE"/.agents/skills/*; do
+    p=".agents/skills/${src##*/}"
+    [ ! -L "$p" ] && diff -r "$src" "$p" || { echo "FAIL template skill differs: $p" >&2; exit 1; }
+  done
   test -L .claude/skills/intent && test "$(readlink .claude/skills/intent)" = ../../.agents/skills/intent && test -f .claude/skills/intent/SKILL.md || { echo "FAIL intent skill link" >&2; exit 1; }
   test -L .claude/skills/outcomes && test "$(readlink .claude/skills/outcomes)" = ../../.agents/skills/outcomes && test -f .claude/skills/outcomes/SKILL.md || { echo "FAIL outcomes skill link" >&2; exit 1; }
   ```
@@ -806,9 +812,15 @@ Commit the install so the principal can see exactly what was added and revert it
 git status --short          # look first: bd init may have added files AND a commit you did not expect
 # Stage each install path ONLY if that status output actually shows it. bd may commit some of
 # them itself (.beads/ routinely); root AGENTS.md and .codex/ remain product-owned.
-# Only .agents/skills/ is a wheelhouse install path under .agents/. An install kept out of the tree with
-# .git/info/exclude shows none of the wheelhouse paths.
-for p in CLAUDE.md .claude/ .agents/skills/ wheelhouse/ .beads/; do
+# Reuse the checked TEMPLATE from skills integrity; if it is not in this shell, re-run that
+# source-recovery/integrity step first. Never stage the shared .agents/skills/ parent.
+[ -n "${TEMPLATE:-}" ] && [ -d "$TEMPLATE/.agents/skills" ] || { echo "STOP: checked TEMPLATE required for shipped skill staging" >&2; exit 1; }
+# An install kept out of the tree with .git/info/exclude shows none of these install paths.
+for p in CLAUDE.md .claude/ wheelhouse/ .beads/; do
+  if [ -n "$(git status --short -- "$p")" ]; then git add -- "$p"; fi
+done
+for src in "$TEMPLATE"/.agents/skills/*; do
+  p=".agents/skills/${src##*/}"
   if [ -n "$(git status --short -- "$p")" ]; then git add -- "$p"; fi
 done
 git status --short          # read what is staged; if nothing is, there is no commit to make
@@ -827,7 +839,7 @@ git check-ignore -v .wheelhouse-worktrees/x .wheelhouse-runs/x   # both lines mu
 
 Measured: in a fresh install, `git status --short` at the install root reports nothing for either directory once they exist, and `git check-ignore` names the tracked `.gitignore` line for each. If the check prints nothing for one of them, the install's `.gitignore` drifted from the template's; restore those two lines from `$TEMPLATE/.gitignore` before staging. If this checkout sits inside some other repository, that outer repository is not this install's to edit; say so to the principal rather than leaving dirt they will find later and attribute to their own working copy.
 
-Stage what `git status` actually shows, not a remembered list. What bd writes varies by build: some versions add `.gitattributes` (graph merge behaviour — include it if present, or the next clone loses that behaviour silently), and the explicit Claude setup adds `.claude/`; include those when status shows them. Root `AGENTS.md`, `.agents/` beyond the explicitly installed `.agents/skills/`, and `.codex/` remain product/tool namespaces: do not stage them unless the principal explicitly identified a product-owned file. Never `git add` a path you have not seen in the status output — `git add` is atomic, and one nonexistent pathspec fails the whole command having staged **nothing**, which leaves you believing the commit is prepared when it is empty.
+Stage what `git status` actually shows, not a remembered list. What bd writes varies by build: some versions add `.gitattributes` (graph merge behaviour — include it if present, or the next clone loses that behaviour silently), and the explicit Claude setup adds `.claude/`; include those when status shows them. Root `AGENTS.md`, `.agents/` beyond the explicitly installed shipped skill entries, and `.codex/` remain product/tool namespaces: do not stage them unless the principal explicitly identified a product-owned file. Never `git add` a path you have not seen in the status output — `git add` is atomic, and one nonexistent pathspec fails the whole command having staged **nothing**, which leaves you believing the commit is prepared when it is empty.
 
 One file inside `.beads/` is worth naming rather than leaving to that sweep, because it reads as runtime debris and is not: `.beads/interactions.jsonl`, an append-only log of what agents did to the graph and why. **Commit it.** Measured on bd 1.2.2: the `.beads/.gitignore` that bd writes itself does not exclude it — `git check-ignore .beads/interactions.jsonl` exits 1 — and `bd audit --help` says in as many words that the file "is intended to be versioned in git", for auditing why an agent did something and for dataset generation. It is only ever appended to, so it grows slowly and nothing rewrites what is already in it.
 

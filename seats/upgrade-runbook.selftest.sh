@@ -335,7 +335,7 @@ producer_migration_tests() (
 skills_tests() {
   mkdir -p "$TMP/skills fixture"
   bun "$TEMPLATE/seats/fixtures/upgrade-skills.ts" "$TEMPLATE" "$TMP/skills fixture" || fail "printed skills recipes or owner signal command failed"
-  pass "skills recipes: fresh upgrade, repeat, refusal, install, integrity and owner command (bash/zsh)"
+  pass "skills recipes: fresh upgrade, repeat, preserved product manuals, refusal, install, scoped readback and owner command (bash/zsh)"
 }
 if [ "${WHEELHOUSE_UPGRADE_SKILLS_ONLY:-0}" = 1 ]; then
   skills_tests
