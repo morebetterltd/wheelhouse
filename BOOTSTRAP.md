@@ -203,7 +203,7 @@ Everything in this list is copied whole and unedited. The interview-derived cont
 
 ## 3. Read, then interview
 
-Survey the repository so your questions are informed: build and dependency files, language and framework, test setup, CI config, existing docs, whether there are multiple product repos beneath this root, and how the project is built and run.
+Survey the repository so your questions are informed: build and dependency files, language and framework, test setup, CI config, existing docs, whether there are multiple product repos beneath this root, and how the project is built and run. For each product repo, also scan its user-facing features — routes, commands, screens, menus and documented workflows — as the create-verification skill's first section describes. Form a complete proposed list in user words before the interview, with a stable feature slug and observable entry points for each item; distinguish the real product from examples and note inaccessible areas. This is the found list for question 2e, not yet a claim that the scan found everything.
 
 Read the branch that merges target out of each repository rather than assuming it, once per product repo, because they need not agree. This is the one survey answer that gets written into several installed files at once, so a guess here is a guess repeated: an install that assumed `master` wrote it into three files, and it surfaced only when a worker ran a dispatch's read path and got `fatal: ambiguous argument 'master'`.
 
@@ -231,7 +231,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    Say which shape you are installing, and record it in the worker's `## This project` section along with where worktrees go. An install that records this wrong puts the seat worktrees inside the repo and pollutes the very diff the workers are meant to produce.
 
-2. **What "it runs" means.** Four questions, because `crew/BENCH.md` has five sections to fill and (b) fills two of them:
+2. **What "it runs" means.** The bench questions (a–d) fill `crew/BENCH.md`'s five sections, with (b) filling two; (e) confirms the feature inventory the verification manual will cover:
 
    a. "For a \<project type\>, I would prove a build works by \<your proposal: a server answers a health check; a CLI executes a real command against real input; an app installs and reaches its first screen\>. What is the observation that would convince you a build actually works?"
 
@@ -241,7 +241,9 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    d. "What does someone need installed or running before they can execute this bench at all?"
 
-   `crew/BENCH.md` has five project sections and these four questions fill them; the fifth, the artifact, comes from (b). Do not fill a section the principal did not answer. The template's own rule is no invention: an unanswered section says so, and the stub keeps the reviewer honest until it is filled. If the principal cannot answer yet, record it as unanswered and continue — the bench ships as an explicit stub.
+   `crew/BENCH.md` has five project sections and these four bench questions fill them; the fifth, the artifact, comes from (b). Do not fill a section the principal did not answer. The template's own rule is no invention: an unanswered section says so, and the stub keeps the reviewer honest until it is filled. If the principal cannot answer yet, record it as unanswered and continue — the bench ships as an explicit stub.
+
+   e. **Features I found.** Show the proposed list for each product repo, numbered with one feature per line in user words, and ask: "Features I found: <the numbered list>. Is this right, and what is missing?" With `AskUserQuestion`, offer `List is right` and `Add or correct features`, with free text for the additions/corrections; without the tool, ask in prose. An empty scan still gets this question, not an assumed empty map. For each addition, ask how a person reaches it in this same interview turn, including any flag, data, login or launch condition the scan could not derive. Record prerequisites, never credentials or secrets. Preserve the owner's words for that reach; never guess a URL or workflow. Read the corrected list back, including every owner-named feature, and record it in `wheelhouse/interview/features.md` below. Step 5 maps every recorded feature, using the owner's words in `## How to get to it` for additions. This question is not skippable: the feature the owner names is the one the scan could not see, and the map without it is the map the verifier will trust. If the owner cannot yet explain a reach, record that gap and stop the manual from passing rather than inventing an entry.
 
 3. **First ideal state.** "What is true when this fleet's first iteration is done?" **DO NOT PROPOSE AN ANSWER.** This is the one thing only the principal knows, and a plausible suggestion gets accepted by default — after which the ISA states your goal rather than theirs.
 
@@ -362,7 +364,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 ### Record what the interview decided — the machine copies, before anything derives from them
 
-Five writes close the interview, in this order, because everything step 4 provisions and step 5 fills is a COPY of these records rather than a recollection of the conversation.
+The following machine records close the interview, in this order, because everything step 4 provisions and step 5 fills is a COPY of these records rather than a recollection of the conversation.
 
 **First, the merge target, into `wheelhouse/.template-source`** — the machine record for the principal-confirmed branch new fleet branches integrate into:
 
@@ -393,6 +395,8 @@ bun seats/channels.ts check --credentials    # require exit 0; names/presence on
 ```
 
 For every declared Slack, Teams or Telegram channel, have the owner provision its credential using question 10's exact locations before this check. A STOP names the missing kind's environment variable and mode-`0600` file; fix it and rerun, rather than completing the step or bypassing the send gate with a raw API call. Paste only the credential-free presence/count lines into the install log. An empty channel record still passes without credentials.
+
+**Then `wheelhouse/interview/features.md`, from question 2e's corrected read-back** — commit this record with the install; do not create `wheelhouse/.install-features.json` or rely on a transcript that step 5 cannot read. Write a Markdown heading, one `Confirmed repo: ` line followed by a JSON-quoted question-1 repo path for each confirmed product repo (even one with no features), and one fenced `jsonl` block, with one JSON object per feature (found or owner-named). Each object has `repo` (the question-1 product path relative to the install root, `.` for a single repo), `slug` (a unique flat lowercase hyphenated name within that repo), `origin` (`[found]` or `[owner]`), `name` (the feature in user words) and `reach` (how a person reaches it). Use JSON string escaping, so punctuation and quoted owner words remain unambiguous; the `[owner]` origin marks every addition the scan missed. Preserve that owner's reach verbatim in the string. If it is unanswered, use `null`, never invented instructions. Include every confirmed feature, not just additions; explicitly record a confirmed empty list for a genuinely surface-less repo. Read the file back to the owner before moving on. In an umbrella install the shared record identifies each repo separately; do not compare one repo's map to another repo's answers. If the factory install is deliberately machine-local and excluded, retain this factory record with those files and report that exception rather than force-adding excluded paths.
 
 ## 4. Provision the seats
 
@@ -560,7 +564,7 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
 
 ### Write the verification manual
 
-For **each product repo from question 1** (the root in the single-repo shape), load the installed `.agents/skills/create-verification/SKILL.md` at the install root and follow it against that repo. Use the repository scan from step 3: enumerate every discovered user-facing route, command, menu and public interface, not a shortlist. Write the five-section manual and complete feature map at that product repo's `.agents/skills/verify-<project>/`, where `<project>` is the repo directory's basename. The manual belongs in the product repo, not under `wheelhouse/`, because it is the project's property and travels with the code.
+For **each product repo from question 1** (the root in the single-repo shape), load the installed `.agents/skills/create-verification/SKILL.md` at the install root and follow it against that repo. Read `wheelhouse/interview/features.md` from step 3 and map every feature recorded for this repo, not just the scan's shortlist. Reconcile it with the source scan so later discoveries are not dropped. First list every recorded slug in the feature index, including owner-named additions. For an addition whose reach the scan cannot derive, use the owner's words in `## How to get to it`; if those words were not collected in question 2e, return to that interview question, not a guessed recipe. Keep an unanswered feature listed in the index but do not invent its file: `manual.ts check` must fail on that missing file until the owner supplies its reach. Write the five-section manual and complete feature map at that product repo's `.agents/skills/verify-<project>/`, where `<project>` is the repo directory's basename. The manual belongs in the product repo, not under `wheelhouse/`, because it is the project's property and travels with the code.
 
 The create skill writes the real copy; the installer writes the compatibility link. From the install root, set `repo` to the actual product repo path from question 1 (`.` for a single repo), then run:
 
@@ -706,10 +710,42 @@ Run each of these and paste what it prints:
   ```bash
   bun seats/manual.ts check --repo "$repo" || { echo "FAIL verification manual — stop" >&2; exit 1; }
   test -L "$repo/.claude/skills/verify-$project" && test -f "$repo/.claude/skills/verify-$project/SKILL.md" || { echo "FAIL verification manual link — stop" >&2; exit 1; }
-  bun seats/manual.ts features --repo "$repo" --json
+  # Compare this repo's interview record with the CLI's actual feature inventory.
+  inventory=$(bun seats/manual.ts features --repo "$repo" --json) || { echo "FAIL feature inventory — stop" >&2; exit 1; }
+  printf '%s\n' "$inventory"
+  bun - "$repo" wheelhouse/interview/features.md "$inventory" <<'JS'
+  import fs from 'node:fs';
+  import path from 'node:path';
+  const [repo, file, inventory] = process.argv.slice(2);
+  const refuse = message => { console.error('FAIL interview features: ' + message); process.exit(1); };
+  let text, mapped, records, confirmed;
+  try {
+    text = fs.readFileSync(file, 'utf8'); mapped = JSON.parse(inventory);
+    confirmed = [...text.matchAll(/^Confirmed repo: (".*")\s*$/gm)].map(match => JSON.parse(match[1]));
+    const blocks = [...text.matchAll(/^```jsonl\r?\n([\s\S]*?)^```\s*$/gm)];
+    if (blocks.length !== 1) refuse(file + ': expected one jsonl feature block');
+    records = blocks[0][1].split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line));
+  } catch (error) { refuse(file + ': ' + error.message); }
+  const target = path.resolve(repo), slugs = new Set();
+  if (!confirmed.some(value => typeof value === 'string' && path.resolve(value) === target)) refuse(file + ': repo not confirmed: ' + repo);
+  const expected = records.filter(row => {
+    if (!row || typeof row.repo !== 'string' || !row.repo || typeof row.slug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(row.slug) || !['[found]', '[owner]'].includes(row.origin) || typeof row.name !== 'string' || !row.name.trim() || !(row.reach === null || typeof row.reach === 'string')) refuse(file + ': malformed feature record');
+    return path.resolve(row.repo) === target;
+  });
+  for (const row of expected) {
+    if (slugs.has(row.slug)) refuse('duplicate feature ' + row.slug + ' for ' + repo);
+    slugs.add(row.slug);
+    const entry = mapped.find(feature => feature.slug === row.slug);
+    if (!entry) refuse(repo + ': missing feature ' + row.slug + ' (' + row.name + ')');
+    if (!row.reach || (row.origin === '[owner]' && !entry.howToGetToIt.includes(row.reach))) refuse(repo + ': feature ' + row.slug + ' is missing the owner-confirmed reach');
+  }
+  for (const entry of mapped) if (!slugs.has(entry.slug)) refuse(repo + ': unrecorded feature ' + entry.slug + ' — return to question 2e');
+  if (expected.length !== mapped.length) refuse(repo + ': count mismatch; interview=' + expected.length + ' mapped=' + mapped.length);
+  console.log('interview features: ' + repo + ' expected=' + expected.length + ' mapped=' + mapped.length);
+  JS
   ```
 
-  Require `manual ok: N features` and the resolving link. A declared `surface: none` currently prints `manual ok: 0 features`; name that declaration, not a successful live journey. Read the feature inventory against the scan and report its count per repo. Any nonzero check or link failure stops this procedure just as a contract-integrity FAIL does; do not hand back a partial install as success.
+  Require matching per-repo counts from `wheelhouse/interview/features.md` and `manual.ts features --json` (equivalently the JSON array's `jq length`), with every recorded slug present; a mismatch is a FAIL naming the missing or unrecorded feature, even when totals happen to agree. An owner-named entry must carry the recorded reach, not invented words. Stop and reconcile the interview and map on any failure. Require `manual ok: N features` and the resolving link. A declared `surface: none` currently prints `manual ok: 0 features`; name that declaration, not a successful live journey. Read the feature inventory against the scan and report its count per repo. Any nonzero check or link failure stops this procedure just as a contract-integrity FAIL does; do not hand back a partial install as success.
 
 - **Check `GRAPH.md`'s version-stamped claims against the CLI you actually have.** It states that this build has no `in_review` status, so the review queue is a `needs-review` label instead.
 

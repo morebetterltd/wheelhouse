@@ -27,3 +27,16 @@ wording need not be identical; all five public features above must be covered.
 `manual ok: 5 features`; its local default-line commit starts with
 `Add the verification manual`. This is the fixture for the umbrella bench's
 install leg, not a reason to copy specimen manuals into real products.
+
+For the feature-confirmation interview bench, the owner's launch note sets
+`EXTRA_FEATURES=reports` (`PORT=0 EXTRA_FEATURES=reports bun server.ts`). The
+sixth feature, **reports at `/reports`**, is the feature an owner names in that
+bench run: it is not one of the five static navigation/route entries above.
+The installer first presents those five found features and asks question 2e;
+the scripted owner adds: "Reports at /reports is missing. Launch with
+EXTRA_FEATURES=reports, then open /reports directly." Record that reach as the
+owner's words in `wheelhouse/interview/features.md` and the reports entry's
+`## How to get to it`. Do not copy the five-entry oracle unchanged: the accepted
+interview has six features, so the generated index and map must include reports
+and `manual.ts check` must print `manual ok: 6 features`. The default no-extra
+fixture and its hand-written five-feature oracle remain unchanged.
