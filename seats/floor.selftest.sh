@@ -172,14 +172,14 @@ EOF
 # Seat "reviewer": a verdict landed.
 cat > "$LOGS/reviewer.jsonl" <<EOF
 {"type":"agent_start"}
-{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"VERDICT: APPROVE - evidence attached"}]}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"SCOPE: OK — scripted frame fixture\nINTEGRITY: OK — scripted frame fixture\nSAFETY: OK — private fixture\nHEALTH: OK — frame protocol checked\nVERDICT: APPROVE - evidence attached\nPUSH: NOT CONSIDERED"}]}}
 {"type":"agent_end","messages":[1]}
 EOF
 
 # Seat "bounced": review blocked on a BOUNCE.
 cat > "$LOGS/bounced.jsonl" <<EOF
 {"type":"agent_start"}
-{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"VERDICT: BOUNCE - two defects listed"}]}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"SCOPE: OK — scripted frame fixture\nINTEGRITY: DEFECT — scripted blocked-review fixture\nSAFETY: OK — private fixture\nHEALTH: OK — frame protocol checked\nVERDICT: BOUNCE - two defects listed\nPUSH: NOT CONSIDERED"}]}}
 {"type":"agent_end","messages":[1]}
 EOF
 
