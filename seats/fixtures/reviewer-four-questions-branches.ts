@@ -44,6 +44,7 @@ fs.writeFileSync(path.join(root, "contract.md"), contract);
 // real bd in the dispatcher's owned scratch graph, never with a production DB.
 fs.writeFileSync(path.join(root, "bin/bd"), `#!/usr/bin/env bash
 set -eu
+if [ "\${1:-}" = --readonly ] && [ "\${2:-}" = show ]; then shift; fi
 case "\${1:-}" in show) case "\${2:-}" in w9-positive|w9-scope-defect) exec /bin/cat ${JSON.stringify(path.join(root, "contract.md"))};; esac;; esac
 case "$PWD/" in ${JSON.stringify(root)}/*) ;; *) echo 'fixture bd refuses a cwd outside its owned packet' >&2; exit 2;; esac
 exec "\${W9_REAL_BD:?set the real bd path before prepending this fixture bin}" "$@"
