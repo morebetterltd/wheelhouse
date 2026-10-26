@@ -5,10 +5,12 @@ const FOUR_OK = ['SCOPE', 'INTEGRITY', 'SAFETY', 'HEALTH']
 function fourQuestions(text) {
   if (/^(?:SCOPE|INTEGRITY|SAFETY|HEALTH):/m.test(text)) return text;
   // Match the final live verdict, not an example inside a Markdown fence.
-  let fenced = false, verdict;
+  let fence, verdict;
   for (const line of text.split(/\r?\n/)) {
-    if (line.trim().startsWith('```')) { fenced = !fenced; continue; }
-    if (!fenced) verdict = line.trim().replace(/^(>\s*)+/, '').match(/^VERDICT:\s*(APPROVE|BOUNCE|DISCOVER)\b/)?.[1] || verdict;
+    const mark = line.trim().match(/^(`{3,}|~{3,})(.*)$/);
+    if (fence) { if (mark && mark[1][0] === fence.marker && mark[1].length >= fence.width && !mark[2].trim()) fence = null; continue; }
+    if (mark) { fence = { marker: mark[1][0], width: mark[1].length }; continue; }
+    verdict = line.trim().replace(/^(>\s*)+/, '').match(/^VERDICT:\s*(APPROVE|BOUNCE|DISCOVER)\b/)?.[1] || verdict;
   }
   if (!verdict) return text;
   return (verdict === 'BOUNCE' ? FOUR_OK.replace('INTEGRITY: OK', 'INTEGRITY: DEFECT') : FOUR_OK) + text;

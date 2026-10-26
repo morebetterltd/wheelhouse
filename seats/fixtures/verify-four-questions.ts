@@ -55,6 +55,7 @@ const cases: Record<string, { reply: string; code: number; reason?: string }> = 
   bounce: { reply: defect + ending("BOUNCE"), code: 2 },
   duplicate: { reply: fourOK + "\nSAFETY: OK — read private fixture safety evidence" + ending("APPROVE"), code: 1, reason: "SAFETY: 2 live lines" },
   fenced: { reply: "```\n" + fourOK + "\n```" + ending("APPROVE"), code: 1, reason: "SCOPE: 0 live lines" },
+  "tilde-fenced": { reply: "~~~text\n" + fourOK + "\n~~~" + ending("APPROVE"), code: 1, reason: "SCOPE: 0 live lines" },
   "bare-ok": { reply: fourOK.replace("HEALTH: OK — read private fixture health evidence", "HEALTH: OK") + ending("APPROVE"), code: 1, reason: "malformed HEALTH line" },
   "bare-defect": { reply: defect.replace(/SCOPE:[^\n]*/, "SCOPE: DEFECT") + ending("BOUNCE"), code: 1, reason: "malformed SCOPE line" },
   "bare-not-judged": { reply: fourOK.replace(/HEALTH:[^\n]*/, "HEALTH: NOT JUDGED") + ending("DISCOVER"), code: 1, reason: "malformed HEALTH line" },
