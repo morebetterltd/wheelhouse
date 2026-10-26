@@ -251,7 +251,7 @@ function contractErrors(root: string, text: string, requireSignal: boolean, labe
   if (requireSignal && /^sig-[a-z0-9]+$/.test(parsed.signal)) {
     try {
       if (!beadId) {
-        errors.push(`refused: signal ${parsed.signal} requires --bead <id> for --file checks`);
+        errors.push(`refused: signal ${parsed.signal} requires --bead <id> for --file checks — fix: pass --bead <id>, and record the produced disposition first if it is still open, using the roster's producer actor (BEADS_ACTOR=<producer-seat> bun seats/intake.ts dispose ${parsed.signal} produced --work <id>); do not rewrite a completed disposition`);
       } else {
         const rows = intakeRows(root, true)!;
         const row = rows.get(parsed.signal);

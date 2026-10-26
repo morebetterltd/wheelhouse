@@ -55,7 +55,10 @@ test("parked refused", () => { for (const mode of ["bead", "file"]) refused(chec
 test("work mismatch refused", () => { for (const mode of ["bead", "file"]) refused(check(wrong, mode), `refused: signal ${signal} produced work other-work, not ${work}`); });
 test("commander refused", () => { for (const mode of ["bead", "file"]) refused(check(commander, mode), `refused: signal ${signal} was produced by commander, not the producer ${producer}`); });
 for (const [name, h] of [["open", open], ["dropped", dropped]] as const) test(name + " refused", () => refused(check(h), `refused: signal ${signal} is not disposed produced`));
-test("file requires explicit bead id", () => refused(check(good, "file-no-id"), `refused: signal ${signal} requires --bead <id>`));
+test("file requires explicit bead id", () => {
+  const r = check(good, "file-no-id"); refused(r, `refused: signal ${signal} requires --bead <id>`);
+  assert(r.stderr.includes("pass --bead <id>") && r.stderr.includes("record the produced disposition first"), "missing-id refusal must teach the recovery sequence");
+});
 test("file uses the supplied id, not filename or disposition work", () => {
   refused(check(good, "bead", {}, "other-work"), `produced work ${work}, not other-work`);
   refused(check(good, "file", {}, "other-work"), `produced work ${work}, not other-work`);
