@@ -737,7 +737,18 @@ seat's account — no session saved, nothing to resume — with
 the resolved REVIEWER brief appended to the system prompt, hands it the bead
 claim (via `bd show` when `bd` is reachable, otherwise the reviewer reads
 the bead itself) and the branch's tip SHA, and parses the single
-`VERDICT:` line out of the reply. With a pool and no explicit reviewer,
+four question lines plus `VERDICT:` and `PUSH:` out of the reply. The reviewer reads the whole diff against the contract for **SCOPE, INTEGRITY, SAFETY, HEALTH**, never re-proving outcomes on their consumer surfaces. Each question occurs exactly once outside fences, with inline evidence/detail (even OK):
+
+```text
+SCOPE: OK — <what was read or run> | DEFECT — <what and where> | NOT JUDGED — <why>
+INTEGRITY: OK — <what was re-run> | DEFECT — <what and where> | NOT JUDGED — <why>
+SAFETY: OK — <what was checked> | DEFECT — <what and where> | NOT JUDGED — <why>
+HEALTH: OK — <what was checked> | DEFECT — <what and where> | NOT JUDGED — <why>
+VERDICT: APPROVE | BOUNCE | DISCOVER
+PUSH: NOT CONSIDERED
+```
+
+APPROVE requires four OK; BOUNCE requires at least one DEFECT; only DISCOVER permits NOT JUDGED. A missing, duplicate, malformed or inconsistent question line is refused (exit 1), not a judgment. The record header includes `- scope:`, `- integrity:`, `- safety:` and `- health:`; the dispatch inbox carries the same question lines after VERDICT/PUSH, including long inline evidence. With a pool and no explicit reviewer,
 `verify.ts` picks the first free non-external reviewer identity whose
 canonical `account.dir` differs from the author; staffed reviewer identities
 are named `reviewer-<entry>` and are never spawned by staffing.
@@ -815,7 +826,7 @@ to the real `bd` binary behind the shim. Bench code must call
 `${WHEELHOUSE_REAL_BD:-bd}` with its own scratch `BEADS_DIR`; bare `bd`
 through `PATH` remains the read-only shim inside the reviewer process.
 
-When a branch changes `.agents/skills/verify-*/`, the reviewer prompt and verdict header include `Manual files changed by this branch:` and `Contract outcomes that call for manual or map changes:` (ids and surfaces, or `none`). The diff uses the pinned product-repository SHA and merge base of the available contract integration/normal install base, recorded as `manual-diff-base`; dirty live files and earlier goal work are not the branch's edits. Candidate outcomes come from the same contract text accepted by the gate, selecting surfaces under `features/` or naming `verify-*/SKILL.md`, not from rendered `bd show` prose. Paths and outcomes are JSON-escaped on single lines; no manual diff adds no such lines. These lists do not authorize edits: REVIEWER.md's **The manual is not the author's to bend** requires an outcome naming the file or feature; otherwise the reviewer quotes the changed line and emits `VERDICT: BOUNCE — scope: <path> changed without a contract outcome calling for it`. A weakened journey is named as such; an unclear relationship is routed as unverifiable, never silently approved.
+When a branch changes `.agents/skills/verify-*/`, the reviewer prompt and verdict header include `Manual files changed by this branch:` and `Contract outcomes that call for manual or map changes:` (ids and surfaces, or `none`). The diff uses the pinned product-repository SHA and merge base of the available contract integration/normal install base, recorded as `manual-diff-base`; dirty live files and earlier goal work are not the branch's edits. Candidate outcomes come from the same contract text accepted by the gate, selecting surfaces under `features/` or naming `verify-*/SKILL.md`, not from rendered `bd show` prose. Paths and outcomes are JSON-escaped on single lines; no manual diff adds no such lines. These lists do not authorize edits: REVIEWER.md's **The manual is not the author's to bend** requires an outcome naming the file or feature; otherwise the reviewer quotes the changed line and emits `SCOPE: DEFECT — <path> changed without a contract outcome calling for it` with plain `VERDICT: BOUNCE`. A weakened journey is named as such; an unclear relationship is routed as unverifiable, never silently approved.
 
 ### Required review tier
 

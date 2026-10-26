@@ -5,7 +5,7 @@
  * One invocation = one verdict. It spawns a one-shot `pi -p --no-session`
  * on the REVIEWER seat's own agent directory, with the REVIEWER crew brief
  * appended to the system prompt, hands it the bead claim and the branch's
- * tip SHA, and parses the single `VERDICT:` and `PUSH:` lines out of what comes back.
+ * tip SHA, and parses four question lines plus `VERDICT:` and `PUSH:`.
  * A refused answer is kept as diagnostic JSON, never as a verdict. One
  * corrective attempt may replay that answer and the refusal within this
  * invocation, on the same identity/scratch and without rerunning the sweep.
@@ -1342,7 +1342,7 @@ function manualScopePrompt(context: ManualReviewContext): string[] {
   if (!context.files.length) return [];
   return ["", ...manualScopeLists(context),
     `Manual comparison base: ${context.base} (${JSON.stringify(context.baseRef)}).`,
-    `A changed file no outcome calls for is a scope defect; see REVIEWER.md "The manual is not the author's to bend". These lists are context, not permission: judge the file/feature relationship against the contract and inspect the base-to-tip changed lines.`,
+    `A changed file no outcome calls for is a scope defect; see REVIEWER.md "The manual is not the author's to bend". Put it on the SCOPE line as DEFECT, naming the path and quoting the changed line, with VERDICT: BOUNCE. These lists are context, not permission: judge the file/feature relationship against the contract and inspect the base-to-tip changed lines.`,
   ];
 }
 function tierInventory(root: string, tip: string): string[] {
@@ -1937,7 +1937,7 @@ async function main(): Promise<void> {
     ...sweepPrompt,
     ...pushAuthorityPromptLines(ROOT),
     ``,
-    `Verify whether the bead's stated done holds at that SHA, per your brief.`,
+    `Read the whole diff ${manualScope.base}..${tip} against the contract above (its Intent and Outcomes) and answer the four questions in your brief: SCOPE, INTEGRITY, SAFETY, HEALTH. Do not walk a consumer surface or prove an outcome; the verifier does that after your APPROVE.`,
     `Your process cwd is a detached scratch worktree for the branch repository. Prefer relative searches from this cwd.`,
     `Do not recursively grep the live Branch repository path's seats/logs or seats/verdicts runtime dirs; if you must search that path, exclude seats/logs and seats/verdicts/*.partial*.`,
     `Confirm the branch still resolves to the SHA above before relying on your reading.`,
@@ -1946,7 +1946,12 @@ async function main(): Promise<void> {
     `VERDICT: APPROVE — at pinned tip ${tip}; branch has since moved to <new-tip> (<N> commits appended, history unrewritten)`,
     `PUSH: NOT CONSIDERED — branch moved; re-verify at <new-tip> before publish`,
     `DISCOVER is reserved for a discovery that displaces the judgment, not for an appended branch tip; the integrator/publisher refuses any tip other than the verdict's pinned SHA until the new tip is re-verified.`,
-    `End with exactly one plain-text VERDICT line and exactly one plain-text PUSH line, never inside a Markdown code fence:`,
+    `End with exactly one plain-text line for each question, then exactly one VERDICT and one PUSH line, never inside a Markdown code fence:`,
+    `SCOPE: OK — <what you read or ran> | DEFECT — <what and where> | NOT JUDGED — <why>`,
+    `INTEGRITY: OK — <what you re-ran> | DEFECT — <what and where> | NOT JUDGED — <why>`,
+    `SAFETY: OK — <what you checked> | DEFECT — <what and where> | NOT JUDGED — <why>`,
+    `HEALTH: OK — <what you checked> | DEFECT — <what and where> | NOT JUDGED — <why>`,
+    `Every question line, including OK, needs inline evidence/detail. APPROVE requires four OK; BOUNCE requires at least one DEFECT; NOT JUDGED is allowed only with DISCOVER. Missing, duplicate, malformed or inconsistent lines are refused, not judgments.`,
     `VERDICT: APPROVE | BOUNCE | DISCOVER`,
     `PUSH: APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED [<why>]`,
     `Evidence goes above those two closing lines. Fenced VERDICT: or PUSH: lines are ignored and make the gate STOP.`,
@@ -2091,6 +2096,22 @@ async function main(): Promise<void> {
       const annotatedVerdictShown = verdictLines[0].normalized.replace(/^VERDICT:\s*/, "");
       const verdictShown = movedVerdictShown || (ordinaryMatch?.[2] ? annotatedVerdictShown : verdict);
       const benchGapNotes = benchGapNotices(notBenched);
+      const questionLines: { tag: string; normalized: string; status: string; detail: string }[] = [];
+      // four-question-parse:start — mutation canary removes only this gate.
+      for (const tag of ["SCOPE", "INTEGRITY", "SAFETY", "HEALTH"]) {
+        // Count actual lines, including identical duplicates. Stream-event
+        // retransmission is already resolved by finalAssistantText.
+        const lines = liveLineCandidates(stdout, reviewerHarness, tag, false);
+        if (lines.length !== 1) refuse(`${tag}: ${lines.length} live lines — expected exactly one plain-text ${tag} line outside fences`); // question-count
+        const line = lines[0].normalized;
+        const match = line.match(/^(SCOPE|INTEGRITY|SAFETY|HEALTH):\s*(OK|DEFECT|NOT JUDGED)\s*[—-]{1,2}\s*(\S.*)$/);
+        if (!match) refuse(`malformed ${tag} line: "${line}" — expected OK | DEFECT | NOT JUDGED with inline evidence/detail`); // question-shape
+        questionLines.push({ tag, normalized: line, status: match![2], detail: match![3] });
+      }
+      if (verdict === "APPROVE" && questionLines.some(q => q.status !== "OK")) refuse("APPROVE requires four OK question lines; DEFECT or NOT JUDGED is malformed"); // question-approve
+      if (verdict === "BOUNCE" && !questionLines.some(q => q.status === "DEFECT")) refuse("BOUNCE names no DEFECT"); // question-bounce
+      if (verdict !== "DISCOVER" && questionLines.some(q => q.status === "NOT JUDGED")) refuse("NOT JUDGED requires DISCOVER"); // question-not-judged
+      // four-question-parse:end
 
       // An APPROVE over a missing, empty, or mistyped artifact the bead requires
       // is a defect in the verdict, not a judgment — same family as the NOT
@@ -2160,6 +2181,7 @@ async function main(): Promise<void> {
           `- fallback-distinct-account-basis: ${promotion.distinctAccountBasis}`,
         ] : []),
         `- at: ${new Date().toISOString()}`,
+        ...questionLines.map(q => `- ${q.tag.toLowerCase()}: ${q.normalized.slice(q.tag.length + 1).trimStart()}`),
         `- verdict: ${verdictShown}`,
         `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,
         ...benchGapNotes.map((note) => `- ${note}`),
@@ -2214,11 +2236,15 @@ async function main(): Promise<void> {
         ``,
       ].join("\n");
       fs.writeFileSync(verdictFile, record); // verdict-write
+      const inboxDetail = [
+        `VERDICT: ${verdictShown}`,
+        pushLines[0].normalized,
+        ...questionLines.map(q => q.normalized),
+        `branch: ${branch}`, `tip: ${tip}`, `verdict file: ${path.relative(ROOT, verdictFile)}`,
+      ].join("\n");
       appendVerifierGateInbox(
-        beadId,
-        "settle",
-        `verifier gate verdict — ${beadId}`,
-        `VERDICT: ${verdictShown}\nPUSH: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}\nbranch: ${branch}\ntip: ${tip}\nverdict file: ${path.relative(ROOT, verdictFile)}`
+        beadId, "settle", `verifier gate verdict — ${beadId}`, inboxDetail,
+        "verifier-gate", "seats/verify.ts", Math.max(1200, inboxDetail.length)
       );
       gateInboxWrote = true;
 

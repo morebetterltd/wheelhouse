@@ -68,7 +68,7 @@ A goal-branch merge moves claims too, but it names the line honestly. A claim mo
 
 ### What a verdict authorises
 
-A verdict authorises what it states and nothing adjacent to it. Before anything leaves this machine, read its PUSH line rather than its VERDICT line.
+A verdict authorises what it states and nothing adjacent to it. Read the SCOPE, INTEGRITY, SAFETY and HEALTH lines before merging on APPROVE; on BOUNCE, hand those lines to the worker as the actionable defects. Before anything leaves this machine, read its PUSH line rather than its VERDICT line.
 
 - **An APPROVE is not an approval to push.** Two decisions with two blast radii, and the reviewer may have weighed only one of them. Merge on the VERDICT line; publish only on the PUSH line, and only to the remote that line names.
 - **A missing PUSH line is unanswered, which is neither permission nor refusal.** Go and ask. The temptation is to read a run of previous rounds as this round's answer, and that inference is the one this contract warns about elsewhere: evidence of a pattern is not evidence of an instance.

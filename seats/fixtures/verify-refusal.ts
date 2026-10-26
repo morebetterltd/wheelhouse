@@ -11,6 +11,7 @@ type Harness = "pi" | "claude-code" | "codex";
 const read = (file: string) => fs.readFileSync(file, "utf8");
 const rows = (file: string): any[] => fs.existsSync(file) ? read(file).trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
 function wire(harness: Harness, text: string): string {
+  text = require("./reviewer-reply.cjs").fourQuestions(text);
   // Envelopes from the checked-in verify-real captures, not tool-call text.
   return JSON.stringify(harness === "pi"
     ? { type: "message_end", message: { role: "assistant", content: [{ type: "text", text }] } }
@@ -18,7 +19,7 @@ function wire(harness: Harness, text: string): string {
       ? { type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } }
       : { type: "item.completed", item: { type: "agent_message", text } }) + "\n";
 }
-const refusedText = (attempt: number) => `retained answer ${attempt}: checked the pinned tree, but omitted sweep evidence\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED\n`;
+const refusedText = (attempt: number) => require("./reviewer-reply.cjs").fourQuestions(`retained answer ${attempt}: checked the pinned tree, but omitted sweep evidence\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED\n`);
 // Large diagnostic fixture: preserve all bytes without unnecessarily putting
 // the entire tool/stderr stream in the retry's command-line prompt.
 const errText = (attempt: number) => `retained stderr ${attempt}\n${attempt === 1 ? "x".repeat(300_000) + "\n" : ""}`;
