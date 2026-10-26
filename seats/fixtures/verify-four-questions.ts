@@ -61,7 +61,8 @@ const cases: Record<string, { reply: string; code: number; reason?: string }> = 
   "bare-not-judged": { reply: fourOK.replace(/HEALTH:[^\n]*/, "HEALTH: NOT JUDGED") + ending("DISCOVER"), code: 1, reason: "malformed HEALTH line" },
   "invalid-status": { reply: fourOK.replace("HEALTH: OK", "HEALTH: MAYBE") + ending("DISCOVER"), code: 1, reason: "malformed HEALTH line" },
   "approve-not-judged": { reply: fourOK.replace("HEALTH: OK", "HEALTH: NOT JUDGED") + ending("APPROVE"), code: 1, reason: "APPROVE requires four OK" },
-  "bounce-not-judged": { reply: defect.replace("HEALTH: OK", "HEALTH: NOT JUDGED") + ending("BOUNCE"), code: 1, reason: "NOT JUDGED requires DISCOVER" },
+  "bounce-not-judged": { reply: fourOK.replace("HEALTH: OK", "HEALTH: NOT JUDGED") + ending("BOUNCE"), code: 1, reason: "BOUNCE names no DEFECT" },
+  "bounce-scope-defect-health-not-judged": { reply: defect.replace("HEALTH: OK — read private fixture health evidence", "HEALTH: NOT JUDGED — health check not run after the scope defect") + ending("BOUNCE"), code: 2 },
   discover: { reply: fourOK.replace("HEALTH: OK", "HEALTH: NOT JUDGED") + ending("DISCOVER"), code: 3 },
   "long-evidence": { reply: fourOK.replace("scope evidence", "scope evidence " + "x".repeat(1300)) + ending("APPROVE"), code: 0 },
 };
@@ -83,6 +84,18 @@ if (selected === "controls") {
     assert(r.stderr.includes("FOUR_QUESTIONS_ORACLE"), `canary ${name} must reach its oracle, not fail setup: ${r.stderr}`);
     console.log(`PASS four questions canary ${name}: parse-cut copy rejected by intended oracle (native fixture 1)`);
   }
+  // Commander ruling: a concrete DEFECT permits other questions NOT JUDGED.
+  // Restore the retired restriction in actual copied source, not the reply.
+  const restored = source.replace(endMark, '      if (verdict !== "DISCOVER" && questionLines.some(q => q.status === "NOT JUDGED")) refuse("NOT JUDGED requires DISCOVER"); // ruling-restored\n' + endMark);
+  assert.notEqual(restored, source); fs.writeFileSync(path.join(root, "seats/verify.ts"), restored);
+  const restoredCmp = completedCommand("cmp", ["-s", implementation, path.join(root, "seats/verify.ts")], { cwd: root });
+  commands.push({ file: "cmp", control: "ruling-restored", status: restoredCmp.status, signal: restoredCmp.signal, error: restoredCmp.error?.message }); save();
+  assert.equal(restoredCmp.status, 1); assert.equal(restoredCmp.signal, null); assert(!restoredCmp.error);
+  const ruling = completedCommand("bun", [import.meta.filename, path.join(root, "seats/verify.ts"), path.join(root, "control-ruling-restored"), "bounce-scope-defect-health-not-judged"], { cwd: root });
+  records.push({ control: "ruling-restored", ...ruling, error: ruling.error?.message }); save();
+  assert.equal(ruling.status, 1); assert.equal(ruling.signal, null); assert(!ruling.error);
+  assert(ruling.stderr.includes("FOUR_QUESTIONS_ORACLE bounce-scope-defect-health-not-judged") && ruling.stderr.includes("NOT JUDGED requires DISCOVER"), "restored policy must fail at its intended oracle after valid setup");
+  console.log("PASS four questions ruling restored: actual retired guard rejects the valid BOUNCE (native fixture 1)");
   process.exit(0);
 }
 try {
@@ -108,6 +121,7 @@ try {
       }
       const prompt = fs.readFileSync(path.join(root, "prompt.txt"), "utf8"); record.prompt = prompt; save();
       assert(prompt.includes("Read the whole diff") && prompt.includes("Do not walk a consumer surface or prove an outcome"), "FOUR_QUESTIONS_ORACLE role prompt");
+      if (name === "bounce-scope-defect-health-not-judged") assert(prompt.includes("DISCOVER, and BOUNCE beside at least one DEFECT, may carry NOT JUDGED"), "FOUR_QUESTIONS_ORACLE ruling prompt");
     }
     console.log(`PASS four questions ${name}: native ${c.code}${c.reason ? "; " + c.reason : "; header and inbox carry four lines"}`);
   }

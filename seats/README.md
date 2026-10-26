@@ -748,7 +748,7 @@ VERDICT: APPROVE | BOUNCE | DISCOVER
 PUSH: NOT CONSIDERED
 ```
 
-APPROVE requires four OK; BOUNCE requires at least one DEFECT; only DISCOVER permits NOT JUDGED. A missing, duplicate, malformed or inconsistent question line is refused (exit 1), not a judgment. The record header includes `- scope:`, `- integrity:`, `- safety:` and `- health:`; the dispatch inbox carries the same question lines after VERDICT/PUSH, including long inline evidence. With a pool and no explicit reviewer,
+APPROVE requires four OK; BOUNCE requires at least one DEFECT. DISCOVER, and BOUNCE beside at least one DEFECT, may carry NOT JUDGED on any question. A missing, duplicate, malformed or inconsistent question line is refused (exit 1), not a judgment. The record header includes `- scope:`, `- integrity:`, `- safety:` and `- health:`; the dispatch inbox carries the same question lines after VERDICT/PUSH, including long inline evidence. With a pool and no explicit reviewer,
 `verify.ts` picks the first free non-external reviewer identity whose
 canonical `account.dir` differs from the author; staffed reviewer identities
 are named `reviewer-<entry>` and are never spawned by staffing.

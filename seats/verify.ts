@@ -1951,7 +1951,7 @@ async function main(): Promise<void> {
     `INTEGRITY: OK — <what you re-ran> | DEFECT — <what and where> | NOT JUDGED — <why>`,
     `SAFETY: OK — <what you checked> | DEFECT — <what and where> | NOT JUDGED — <why>`,
     `HEALTH: OK — <what you checked> | DEFECT — <what and where> | NOT JUDGED — <why>`,
-    `Every question line, including OK, needs inline evidence/detail. APPROVE requires four OK; BOUNCE requires at least one DEFECT; NOT JUDGED is allowed only with DISCOVER. Missing, duplicate, malformed or inconsistent lines are refused, not judgments.`,
+    `Every question line, including OK, needs inline evidence/detail. APPROVE requires four OK; BOUNCE requires at least one DEFECT. DISCOVER, and BOUNCE beside at least one DEFECT, may carry NOT JUDGED on any question. Missing, duplicate, malformed or inconsistent lines are refused, not judgments.`,
     `VERDICT: APPROVE | BOUNCE | DISCOVER`,
     `PUSH: APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED [<why>]`,
     `Evidence goes above those two closing lines. Fenced VERDICT: or PUSH: lines are ignored and make the gate STOP.`,
@@ -2110,7 +2110,6 @@ async function main(): Promise<void> {
       }
       if (verdict === "APPROVE" && questionLines.some(q => q.status !== "OK")) refuse("APPROVE requires four OK question lines; DEFECT or NOT JUDGED is malformed"); // question-approve
       if (verdict === "BOUNCE" && !questionLines.some(q => q.status === "DEFECT")) refuse("BOUNCE names no DEFECT"); // question-bounce
-      if (verdict !== "DISCOVER" && questionLines.some(q => q.status === "NOT JUDGED")) refuse("NOT JUDGED requires DISCOVER"); // question-not-judged
       // four-question-parse:end
 
       // An APPROVE over a missing, empty, or mistyped artifact the bead requires
