@@ -29,6 +29,7 @@ stop-all.selftest.sh
 template-drift.selftest.sh
 transports.selftest.sh
 upgrade-runbook.selftest.sh
+verify-batch.selftest.sh
 verify-cancellation.selftest.sh
 verify-no-verdict.selftest.sh
 verify-readiness.selftest.sh

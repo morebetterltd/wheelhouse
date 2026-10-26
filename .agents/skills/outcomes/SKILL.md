@@ -1,7 +1,7 @@
 ---
 name: outcomes
 description: 'Turn an intent into consumer-checkable outcomes when asked to "write the outcomes", "definition of done", "what does done look like", or "acceptance criteria".'
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Outcomes
@@ -69,6 +69,53 @@ check the claim:
 - `machine` requires `run` — name the literal command, request or read
   and the output expected, including the value that would disprove it.
 
+## The feature map
+
+Before writing outcomes, read the project's existing map with
+`bun seats/manual.ts features --repo <repo> --json`. Read the reach
+(`howToGetToIt`) and end state (`whatProvesItWorks`), not only the slugs.
+If that read fails, ask for the missing map/input; never call an unreadable
+map empty or invent routes. The verifier drives from the map, so an outcome
+on an unmapped product surface cannot be proven from it.
+
+For each ordinary outcome, compare its product surface with those entries:
+
+- If no entry covers the page, route, screen, command or endpoint, add one
+  outcome: "The feature map has an entry for <feature>."
+- If an entry covers it but the work changes how a person reaches it or
+  what proves it works, add one outcome: "The feature map entry <slug> is
+  updated for <specific changed reach or end state>."
+- Otherwise add nothing. A fix on an unchanged surface owes no map edit.
+  A runbook, README or the factory's own source files are artifacts, not
+  product journeys; a chore naming only those owes no map outcome. Judge
+  by the surface and proposed change, never by the words "feature", "fix"
+  or "chore". Deduplicate: several consumers of one changed feature owe
+  one map outcome, not one per consumer.
+
+Every map outcome uses `consumer: machine — the verifier reading the map`,
+`surface: .agents/skills/verify-<project>/features/<slug>.md`, and a `run`
+check naming `bun seats/manual.ts features --repo <repo> --json`: it must
+list that slug with its reach and end state. For an update, name the new
+reach/proof text that must appear. This is a claim about the finished work,
+not an assertion that an entry for an unbuilt feature already exists.
+
+Make the proposed locator explicit in the ordinary outcome's `surface:`.
+For example, moving Increment into Counter's Actions toolbar can name
+`/counter#actions` instead of merely `/counter`; its existing map slug is
+`counter`. If only the end state changes, keep the locator and append
+`; proof: <new literal end state>`. An unchanged proof can be named the
+same way and owes nothing when the map already contains it. New path
+slugs use path segments joined by hyphens (`/reports` becomes `reports`);
+`screen:` and `command:` locators use their names in the same form.
+
+The drafting lint compares literal reach/proof text, not intent prose or
+work categories. It cannot infer a move hidden only in a claim or guess
+that two differently written locators mean the same journey. Your reading
+of the map and signal is the semantic check; encode the changed locator
+or proof so the mechanical self-check can see it. Do not add an unrelated
+map outcome to make a count match. See the four `examples/map-*.md`
+contracts for new reach, changed reach, unchanged reach and artifact work.
+
 ## Refusals
 
 Refuse an outcome without a surface. Refuse a check that says only "code
@@ -82,7 +129,6 @@ over many small ones; do not combine unrelated claims to reduce the count.
 
 W8-W12 bind builders to these outcomes: the worker self-checks each one,
 and the verifier records one row per outcome. Each must be checkable alone.
-V7 adds the feature-map rule; that rule is not part of this skill.
 
 ## Self-check
 
@@ -96,5 +142,9 @@ supplied header lines (`Trace:`, optional `Integration:`, `Signal:` and
 `Skills:`), the unchanged `Intent:` section and these `Outcomes:`. Use the
 actual signal reference and skill versions, not invented identifiers.
 Run `bun seats/contract.ts check --file <contract>` until it exits 0;
-fix each named error and repeat the consumer check. Return the outcomes,
+fix each named error and repeat the consumer check. Then run
+`bun seats/manual.ts lint-contract --file <contract> --repo <repo>`;
+require `map outcomes: expected <n>, found <n>` and exit 0. A missing,
+duplicate, unrelated or wrong-project map outcome must be corrected;
+a format/count match is not proof of the unbuilt feature. Return the outcomes,
 not build steps or a claim that the unbuilt result has already been proven.

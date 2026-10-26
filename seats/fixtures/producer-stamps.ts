@@ -2,9 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { run, retain, copyRuntime, changed } from "./producer-test-support";
+import { readContractSkill } from "../briefs";
 const [implementation, scratch, graph, repo] = process.argv.slice(2);
 fs.mkdirSync(scratch, { recursive: true }); const root = fs.realpathSync(scratch), original = fs.readFileSync(implementation, "utf8"), records: any[] = [];
-const tag = "PRODUCER_STAMP_ASSERTION", valid = fs.readFileSync(path.join(repo, "seats/fixtures/contracts/valid.md"), "utf8");
+const tag = "PRODUCER_STAMP_ASSERTION";
+const installed = { intent: readContractSkill(repo, "intent").version, outcomes: readContractSkill(repo, "outcomes").version };
+// Synthetic current-version input, not a rewrite of the historical fixture.
+const valid = fs.readFileSync(path.join(repo, "seats/fixtures/contracts/valid.md"), "utf8")
+  .replace(/^Skills:.*$/m, `Skills: intent@${installed.intent} outcomes@${installed.outcomes}`);
 const env = { ...process.env, WHEELHOUSE_CONTRACT_ROOT: graph }; for (const k of ["WHEELHOUSE_SKIP_BD", "WHEELHOUSE_CONTRACT_FIXTURE", "WHEELHOUSE_INTAKE_FIXTURE"]) delete env[k];
 const save = () => retain(root, "producer-stamps", { implementation, original, records });
 async function native(file: string, args: string[], extra: any = {}, cwd = graph) {
@@ -23,7 +28,7 @@ const duplicate = fileCase("duplicate", "Skills: intent@1.0.0 outcomes@1.0.0\n" 
 const quoted = fileCase("quoted", "> Skills: intent@1.0.0 outcomes@1.0.0\n" + body(null), 2, "Skills: missing");
 const fence = String.fromCharCode(96).repeat(3);
 const fenced = fileCase("fenced", fence + "\nSkills: intent@1.0.0 outcomes@1.0.0\n" + fence + "\n" + body(null), 2, "Skills: missing");
-const old = fileCase("older-version", body("intent@0.9.0 outcomes@0.8.0"), 0, "WARN: contract written with intent@0.9.0, installed intent@1.0.0"); old.secondNeedle = "WARN: contract written with outcomes@0.8.0, installed outcomes@1.0.0";
+const old = fileCase("older-version", body("intent@0.9.0 outcomes@0.8.0"), 0, `WARN: contract written with intent@0.9.0, installed intent@${installed.intent}`); old.secondNeedle = `WARN: contract written with outcomes@0.8.0, installed outcomes@${installed.outcomes}`;
 const carve = body("install-procedure carve-out");
 const unlabelled = fileCase("unlabelled", carve, 2, "requires wheelhouse-bootstrap or wheelhouse-smoke label");
 const pseudo = fileCase("pseudo-bootstrap", "labels: wheelhouse-bootstrap\n" + carve, 0, "", { WHEELHOUSE_SKIP_BD: "1" });
