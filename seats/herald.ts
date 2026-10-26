@@ -27,6 +27,7 @@ import { completedExecFileSync as execFileSync, completedSpawnSync as spawnSync 
 import { StringDecoder } from "node:string_decoder";
 import { acquirePidLock, releasePidLock } from "./lock";
 import { fixtureOwner, fixtureOwnerAlive } from "./herald-owner";
+import { writeHeraldHeartbeat, scanHealth } from "./scan-health";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_HERALD_ROOT || path.join(import.meta.dir, ".."));
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -625,7 +626,9 @@ function tmuxOutput(args: string[], trim = true): string {
 function logPoke(outcome: string, detail = ""): void {
   fs.mkdirSync(LOG_DIR, { recursive: true });
   const suffix = detail ? ` ${detail.replace(/\s+/g, " ").trim()}` : "";
-  fs.appendFileSync(HERALD_OUT_LOG, `${new Date().toISOString()} poke ${outcome}${suffix}\n`);
+  const at = new Date().toISOString();
+  fs.appendFileSync(HERALD_OUT_LOG, `${at} poke ${outcome}${suffix}\n`);
+  heartbeatLastPoke = { outcome, at };
 }
 
 type TargetStatus = "ok" | "missing" | "wrong-root" | "not-commander" | "no-tmux";
@@ -955,6 +958,14 @@ function pokeCommanderIfSafe(state: HeraldState): void {
   writeState(state);
 }
 
+const heartbeatStartedAt = new Date().toISOString();
+let heartbeatScanCount = 0;
+let heartbeatLastPoke: { outcome: string; at: string } | null = null;
+function heartbeat(state: HeraldState, force: boolean): void {
+  writeHeraldHeartbeat(ROOT, { startedAt: heartbeatStartedAt, scanCount: heartbeatScanCount,
+    lastPoke: heartbeatLastPoke, alertsLastLaunchAt: state.alerts?.lastCheckAt ?? null }, force);
+}
+
 function scanOnce(): number {
   const state = readState();
   const seen = new Set(state.seen);
@@ -1020,6 +1031,8 @@ function scanOnce(): number {
   const clocked = runStaffingClock(state) || runAlertsClock(state);
   if (clocked || stateDirty) writeState(state);
   pokeCommanderIfSafe(state);
+  heartbeatScanCount++;
+  heartbeat(state, args.includes("--once"));
   return appended;
 }
 
@@ -1196,7 +1209,9 @@ function status(): void {
   }
   const pid = Number(fs.readFileSync(PID_FILE, "utf8").trim());
   if (Number.isFinite(pid) && pidAlive(pid)) {
-    console.log(`herald RUNNING pid ${pid}`);
+    const health = scanHealth(ROOT);
+    console.log(health.heraldLine);
+    console.log(health.alertsLine);
     return;
   }
   console.log(`herald DEAD pid ${Number.isFinite(pid) ? pid : "?"}`);
@@ -1227,6 +1242,7 @@ async function daemon(): Promise<void> {
   process.on("exit", cleanup);
   process.on("SIGTERM", () => { cleanup(); process.exit(0); });
   process.on("SIGINT", () => { cleanup(); process.exit(130); });
+  heartbeat(readState(), true);
   for (;;) {
     if (!fixtureOwnerAlive(owner)) {
       console.error(`herald: fixture selftest owner disappeared (${ROOT}); exiting`);

@@ -944,6 +944,12 @@ else
   fi
 fi
 
+if bun "$SCRIPT_DIR/fixtures/herald-heartbeat.ts" "$FIX" "$SCRIPT_DIR"; then
+  pass "completed-scan heartbeat, tmux hold, write budget and real removal controls"
+else
+  fail "heartbeat consumer/controls failed"
+fi
+
 if [ -n "${WHEELHOUSE_QJGW_EVIDENCE:-}" ] && [ -f "$FAKE_TMUX_CALLS_LOG" ]; then
   cp -f "$FAKE_TMUX_CALLS_LOG" "$WHEELHOUSE_QJGW_EVIDENCE/all-fake-tmux-calls.log"
 fi
