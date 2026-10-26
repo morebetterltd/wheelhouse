@@ -227,6 +227,13 @@ run_alert bun seats/alerts.ts check --json
 cp -f "$FIX/quarantine-alerts-source.ts" "$ROOT/seats/alerts.ts"
 rm -f "$ROOT/seats/selftest-quarantine.list" "$ROOT"/seats/quarantine-*.selftest.sh
 clear_runtime
+phase 'claimed commander refusal surface'
+if bun "$HERE/fixtures/commander-alert.ts" "$HERE" "$FIX/commander-alert"; then
+  pass 'not-commander %12 alert/need/remedy, ok clear, and source controls'
+else
+  fail 'claimed commander refusal alert failed'
+fi
+
 phase 'transition table, thresholds, clears'
 clear_runtime; BD_READY=1 run_alert bun seats/alerts.ts check --json
 [ $RC -eq 0 ] && active idle-fleet-ready-work && active cold-seats-ready-work && [ "$(inbox_count)" = 2 ] && pass 'ready work fires idle-fleet and cold-seats once' || fail "ready/cold failed rc=$RC out=$OUT inbox=$(inbox_count)"

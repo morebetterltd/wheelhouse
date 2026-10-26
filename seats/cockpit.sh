@@ -62,12 +62,38 @@ ensure_supervisor() {
   start_supervisor || exit $?
 }
 
+# Pane options are the identity; a directory or a bridge position is not.
+claim_commander() {
+  local target="${1:-${TMUX_PANE:-}}" pane_id pane_session
+  if [ -z "$target" ]; then
+    echo 'STOP: --claim-commander needs a pane argument or TMUX_PANE inside the commander pane' >&2
+    return 1
+  fi
+  pane_id="$(tmx display-message -p -t "$target" '#{pane_id}')" &&
+    pane_session="$(tmx display-message -p -t "$target" '#{session_name}')" || {
+      echo "STOP: cannot resolve commander pane $target (tmux 3.0+ with pane options is required)" >&2
+      return 1
+    }
+  if ! tmx set-option -p -t "$pane_id" @wheelhouse_commander "$ROOT"; then
+    echo 'STOP: cannot mark commander pane; tmux 3.0 or newer with pane user options is required' >&2
+    return 1
+  fi
+  mkdir -p "$HERE/run"
+  bun - "$HERE/run/commander-pane.json" "$pane_id" "$pane_session" "$ROOT" <<'JS'
+import fs from 'node:fs';
+const [file,paneId,session,root]=process.argv.slice(2), tmp=file+'.'+process.pid+'.tmp';
+fs.writeFileSync(tmp,JSON.stringify({paneId,session,root,writtenAt:new Date(Date.now()).toISOString()})+'\n');
+fs.renameSync(tmp,file);
+JS
+}
+
 usage() {
   cat >&2 <<EOF
 usage: seats/cockpit.sh [namespace]
        seats/cockpit.sh --herald [namespace]
        seats/cockpit.sh --desk [namespace]
        seats/cockpit.sh --courier [namespace]
+       seats/cockpit.sh --claim-commander [pane]
        seats/cockpit.sh --pane-commander
        seats/cockpit.sh --pane-floor
 EOF
@@ -93,14 +119,13 @@ case "${1:-}" in
     S="wh-${2:-$(basename "$ROOT")}" ensure_courier
     exit 0
     ;;
+  --claim-commander)
+    [ "$#" -le 2 ] || refuse_arg "$3"
+    claim_commander "${2:-${TMUX_PANE:-}}" || exit 1
+    exit 0
+    ;;
   --pane-commander)
-    mkdir -p "$HERE/run"
-    pane_id="$(tmx display-message -p -t "${TMUX_PANE:-}" '#{pane_id}' 2>/dev/null || printf '%s' "${TMUX_PANE:-}")"
-    pane_session="$(tmx display-message -p -t "${TMUX_PANE:-}" '#{session_name}' 2>/dev/null || true)"
-    ROOT_JSON="$(printf '%s' "$ROOT" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-    PANE_JSON="$(printf '%s' "$pane_id" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-    SESSION_JSON="$(printf '%s' "$pane_session" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-    printf '{ "paneId": "%s", "session": "%s", "root": "%s", "writtenAt": "%s" }\n' "$PANE_JSON" "$SESSION_JSON" "$ROOT_JSON" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$HERE/run/commander-pane.json"
+    claim_commander "${TMUX_PANE:-}" || exit 1
     cat <<EOF
 
   ┌─ COMMANDER PANE ──────────────────────────────────────────────┐
@@ -226,6 +251,7 @@ spawn_floor_pane() {
 
 if tmx has-session -t "=$S" 2>/dev/null; then
   if tmx list-windows -t "$S" -F '#{window_name}' 2>/dev/null | grep -qx 'bridge'; then
+    claim_commander "${S}:bridge.0" || exit 1
     PANES="$(tmx list-panes -t "${S}:bridge" 2>/dev/null | wc -l | tr -d ' ')"
     if [ "$PANES" = "1" ]; then
       echo "bridge floor pane missing in ${S}:bridge; respawning it"
@@ -245,7 +271,8 @@ if tmx has-session -t "=$S" 2>/dev/null; then
 fi
 
 # Window 0:bridge — left pane is the commander seat.
-tmx new-session -d -s "$S" -n bridge -c "$ROOT" "$QSELF --pane-commander"
+tmx new-session -d -s "$S" -n bridge -c "$ROOT" "$QSELF --pane-commander" || exit 1
+claim_commander "${S}:bridge.0" || exit 1
 
 spawn_floor_pane || exit 1
 if [ "${WHEELHOUSE_COCKPIT_DAEMONS:-1}" != "0" ]; then
