@@ -47,6 +47,7 @@ The main files here:
 - `prune.ts` — scan/cleanup/prune: `cleanup` is the automatic never-lose-work reaper the adapter runs on bead close and `seats/supervisor.sh` schedules nightly fleet-wide; `scan` plus `prune --from-file` is the reviewed exceptions path a person drives, dry-run by default. `wheelhouse/.template-source` may set `cleanup=off` or `cleanup=report` for installs whose authority forbids automatic deletion.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
 - `manual.ts` — read-only verification-manual checker and feature/evidence reader; see "Verification manual" below.
+- `install-features.ts` — read-only install gate: `bun seats/manual.ts features --repo <repo> --json | bun seats/install-features.ts <repo> wheelhouse/interview/features.md` compares that repo's confirmed interview features with its map, including owner-provided reach wording; prints expected/mapped counts or a named failure. BOOTSTRAP's Verify step also checks the producer command's exit before piping its captured inventory.
 - `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.

@@ -18,7 +18,7 @@ for (const term of ['wheelhouse/interview/features.md', 'map every feature', "ow
 console.log('PASS survey, non-skippable 2e, machine record and map instructions');
 const section = doc.split('- **Verification manual — repeat per product repo')[1].split('- **Check `GRAPH.md`')[0];
 const script = section.split('```bash\n')[1]?.split('\n  ```')[0]?.replace(/^  /gm, '');
-assert(script?.includes('wheelhouse/interview/features.md') && script.includes('expected.length'), 'FEATURE_VERIFY: missing printed comparison');
+assert(script?.includes('wheelhouse/interview/features.md') && script.includes('seats/install-features.ts'), 'FEATURE_VERIFY: missing printed comparison');
 const printed = path.join(fixture, 'verify.sh');
 fs.writeFileSync(printed, 'set -eu\nrepo=$1\nproject=$(basename "$repo")\n' + script + '\n');
 const install = path.join(fixture, 'install'); fs.mkdirSync(install);
@@ -71,7 +71,7 @@ const cases: [string, () => void, RegExp][] = [
 ];
 // Removing the new comparison must turn every refusal oracle into a false pass.
 const bypass = path.join(fixture, 'without-comparison.sh');
-const comparator = script.indexOf('bun - "$repo" wheelhouse/interview/features.md'); assert(comparator > 0);
+const comparator = script.indexOf("printf '%s\\n' \"$inventory\" | bun seats/install-features.ts"); assert(comparator > 0);
 fs.writeFileSync(bypass, 'set -eu\nrepo=$1\nproject=$(basename "$repo")\n' + script.slice(0, comparator) + '\n');
 for (const [name, setup, diagnostic] of cases) {
   record(rows); setup();
