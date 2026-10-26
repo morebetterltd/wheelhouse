@@ -70,10 +70,11 @@ function replaceOnce(text: string, from: string, to: string) {
 if (mode === 'review') {
   // Run the REAL dispatcher sweep preparation, never a review/model, over a
   // scratch inventory containing exactly one selected adapter suite. The
-  // admitted outer suite holds the default host lock throughout this child.
+  // admitted outer suite holds host admission throughout this child. Never
+  // substitute a fixture lock for that validated inherited resource.
   const [here, adapterSource, root, evidence] = args;
   assert(!fs.existsSync(root)); fs.mkdirSync(root); fs.mkdirSync(evidence, { recursive: true });
-  assert(!process.env.WHEELHOUSE_SELFTEST_SWEEP_LOCK, 'review-context proof requires default host admission');
+  const lock = process.env.WHEELHOUSE_SELFTEST_SWEEP_LOCK || '/tmp/wheelhouse-selftest-sweep.lock';
   const project = path.join(root, 'review-runtime');
   native('bash', ['-c', `. "$1" || exit 2
 selftest_copy_seat_runtime "$2" "$3" || exit 2
@@ -97,8 +98,8 @@ cp -f "$3/adapter.selftest.sh" "$2/seats/adapter.selftest.sh" || exit 2
   native('git', ['-C', project, 'add', 'seats']);
   native('git', ['-C', project, '-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'commit', '-qm', 'one adapter review-context suite']);
   const tip = native('git', ['-C', project, 'rev-parse', 'HEAD']).stdout.trim();
-  const admission = native('bun', [path.join(seats, 'selftest-sweep-lock.ts'), 'inherited', '/tmp/wheelhouse-selftest-sweep.lock']);
-  const holder = fs.readFileSync('/tmp/wheelhouse-selftest-sweep.lock/pid', 'utf8').trim();
+  const admission = native('bun', [path.join(seats, 'selftest-sweep-lock.ts'), 'inherited', lock]);
+  const holder = fs.readFileSync(path.join(lock, 'pid'), 'utf8').trim();
   assert.notEqual(holder, String(process.pid));
   const bd = native('bash', ['-c', 'command -v bd']).stdout.trim();
   process.env.WHEELHOUSE_ADAPTER_LIFETIME_REVIEW_CHILD = '1';
@@ -108,10 +109,10 @@ cp -f "$3/adapter.selftest.sh" "$2/seats/adapter.selftest.sh" || exit 2
   const api = await import(path.join(seats, 'verify.ts'));
   const result = await api.runDispatcherFullSweep(project, tip, bd, process.env.PATH!, { tier: 'full', reason: 'one selected adapter fixture' });
   const log = fs.readFileSync(result.logPath!, 'utf8');
-  fs.writeFileSync(path.join(evidence, 'review-context.json'), JSON.stringify({ tip, result, log, holder, admission, heldAdvisoryCase: 'removal-normal' }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'review-context.json'), JSON.stringify({ tip, result, log, lock, holder, admission, heldAdvisoryCase: 'removal-normal' }, null, 2));
   const records = JSON.parse(fs.readFileSync(path.join(evidence, 'results.json'), 'utf8'));
   for (const r of records) console.log(`REVIEW adapter lifetime ${r.name}: ${r.failure ?? `native${r.result.code}; survivors=${r.survivors.length}; owned IPC=${r.readyCheckpoints}`}`);
-  console.log(`REVIEW_CONTEXT adapter lifetime: sweep${result.rc}, suites=${result.timings?.suites.length}, inherited default holder=${holder}, no reviewer/model`);
+  console.log(`REVIEW_CONTEXT adapter lifetime: sweep${result.rc}, suites=${result.timings?.suites.length}, inherited holder=${holder}, no reviewer/model`);
   assert.equal(result.error, undefined, log); assert.equal(result.rc, 0, log);
   assert.equal(result.timings?.suites.length, 1); assert.equal(records.length, 4);
 } else if (mode === 'gate') {
