@@ -264,5 +264,10 @@ if [ "$(isa_count)" = 7 ]; then pass "failed ISA sync retries without advancing 
 if bun "$HERE/fixtures/supervisor-ordering.ts" "$FIX" "$HERE"; then pass "native holder/recovery ordering and both removal controls"; else fail "supervisor ordering observation/control failed"; fi
 printf 'NATIVE_ONCE_RESULTS\n'; cat "$PROJ/seats/run/fixture-once-results.jsonl"
 printf 'NATIVE_HOLDER_CLAIMS\n'; cat "$PROJ/seats/run/fixture-holder-claims"
+if bun "$HERE/fixtures/supervisor-health.ts" "$FIX" "$HERE"; then
+  pass "completed-work health, injected thresholds, real signals and removal controls"
+else
+  fail "completed-work health consumer/controls failed"
+fi
 if [ "$FAIL" -eq 0 ]; then echo "supervisor.selftest: PASS ($PASS checks)"; exit 0; fi
 echo "supervisor.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1

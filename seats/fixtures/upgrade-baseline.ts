@@ -30,7 +30,7 @@ console.log(`PASS upgrade baseline: ${baseline} exists, is an ancestor, has all 
 const noAllocation = path.join(scratch, "must-not-allocate");
 assert(!fs.existsSync(noAllocation));
 const env = { ...process.env, TMPDIR: noAllocation, WHEELHOUSE_UPGRADE_SELFTEST_BASELINE: absent,
-  WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY: "0", WHEELHOUSE_UPGRADE_CACHE_ONLY: "0" };
+  WHEELHOUSE_UPGRADE_SELFTEST_SOURCE_ONLY: "0", WHEELHOUSE_UPGRADE_CACHE_ONLY: "0", WHEELHOUSE_UPGRADE_SKILLS_ONLY: "0" };
 const admissionTmp = path.join(scratch, "baseline-admission-tmp"); fs.mkdirSync(admissionTmp);
 const admissionReceipt = path.join(scratch, "baseline-admission-tmp.receipt");
 let lastMissingResult: any;
@@ -74,7 +74,7 @@ let caught = false;
 try { checkDefault(source.replace(`:-${baseline}}`, `:-${absent}}`)); } catch { caught = true; }
 assert(caught, "default-availability regression passed with a missing default");
 console.log("PASS negative control: missing default fails the availability/old-shape leg");
-const guard = 'if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" != 1 ] && ! git -C "$TEMPLATE" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1; then';
+const guard = 'if [ "${WHEELHOUSE_UPGRADE_CACHE_ONLY:-0}" != 1 ] && [ "${WHEELHOUSE_UPGRADE_SKILLS_ONLY:-0}" != 1 ] && ! git -C "$TEMPLATE" cat-file -e "${BASELINE}^{commit}" >/dev/null 2>&1; then';
 assert.equal(source.split(guard).length, 2, "preflight mutation anchor must match exactly once");
 caught = false;
 try { checkMissing(source.replace(guard, guard.replace("&& ! git", "&& false && ! git"))); } catch { caught = true; }

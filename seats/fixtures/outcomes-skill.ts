@@ -34,7 +34,7 @@ test("layout and frontmatter", () => {
   const text = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
   const front = text.match(/^---\n([\s\S]+?)\n---\n/); assert(front, "YAML frontmatter missing");
   const fields = Bun.YAML.parse(front[1]) as Record<string, unknown>;
-  assert.equal(fields.name, "outcomes"); assert.equal(fields.version, "1.0.0");
+  assert.equal(fields.name, "outcomes"); assert.equal(fields.version, "1.1.0");
   assert.equal(typeof fields.description, "string");
   for (const trigger of ["write the outcomes", "definition of done", "what does done look like", "acceptance criteria"]) assert(String(fields.description).includes(trigger), "missing trigger " + trigger);
   const link = path.join(root, ".claude/skills/outcomes"); assert(fs.lstatSync(link).isSymbolicLink(), "compatibility path is not a symlink");
@@ -61,6 +61,8 @@ for (const name of names) test("example " + name, () => {
   assert(source.includes("## Intent\nIntent:\n"), "source intent absent");
   const intent = source.split("## Intent\nIntent:\n")[1].trim();
   assert.equal(parsed.intent, intent, "intent differs from shipped source example");
+  // Historical examples keep the versions that wrote them; map-* examples
+  // exercise the new rule/version separately, not by rewriting old provenance.
   assert.equal(parsed.skills, "intent@1.0.0 outcomes@1.0.0"); assert.match(parsed.signal, /^sig-[a-z0-9]+$/);
   const outcomeCount = (text.match(/^- O[0-9]+ /gm) ?? []).length;
   const consumerCount = (text.match(/^  consumer: (person-on-surface|person-reading|machine) — /gm) ?? []).length;
