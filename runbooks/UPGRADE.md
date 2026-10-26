@@ -689,6 +689,14 @@ An upgrade re-copies the contracts and the runbooks and reaches nothing else. If
 - the `template-report` label, if you installed before it existed — `wheelhouse/GRAPH.md` names it as the marker for template-class findings, and nothing back-fills it onto the `Report <tool> issue: ...` beads you already filed or writes its line into a `CLAUDE.md` generated before it.
 - installs predating `github-report=` have no line, which the publisher reads as off; append `github-report=off` and `github-report-routes=` to `wheelhouse/.template-source` so the record is explicit, and point at `BOOTSTRAP.md`'s publishing question if the principal wants it on.
 
+### Existing installs owe a verification manual
+
+For each product repo recorded by this install (the root for a single repo), follow the **Write the verification manual** block in `$TEMPLATE/BOOTSTRAP.md` step 5. Load the installed `.agents/skills/create-verification/SKILL.md` at the install root, scan that product's actual consumer surfaces, and map every discovered feature. Write the real manual and feature map in that repo at `.agents/skills/verify-<project>/`, where `<project>` is its directory basename, with the relative `.claude/skills/verify-<project>` link to `../../.agents/skills/verify-<project>`. It belongs to the project and travels with its code, not under `wheelhouse/`. Preserve an existing valid product manual rather than replacing it with template content; check its coverage against the scan and repair only what is missing.
+
+From the install root, run `bun seats/manual.ts check --repo <repo>` for each product repo and paste its `manual ok: N features` output; also check `test -L <repo>/.claude/skills/verify-<project>` and that the link resolves to the manual. Any nonzero result stops the upgrade. Follow the create skill's proof and cleanup instructions too. For a repo with no runnable surface, use its honest `surface: none` declaration and empty feature map: the current check prints `manual ok: 0 features`, not a live-proof verdict.
+
+Commit a newly written manual and its link locally on that product repo's recorded default line with subject `Add the verification manual for <project>`. Inspect status and stage only those exact paths, never the shared `.agents/skills/` parent or unrelated upgrade changes. If the checkout is not on that line or has unrelated staged changes, stop and resolve it rather than switching or merging the owner's work. Do not push from this step; the integrator's recorded authority governs anything leaving the machine. Report each manual's path and mapped-feature count, naming any `surface: none` declaration. The later container upgrade commit is separate from these product-owned paths.
+
 ### Carry ISA direction changes to the producer
 
 The copied supervisor syncs changed open claims from `wheelhouse/ISA.md` into
