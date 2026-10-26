@@ -190,6 +190,59 @@ cp "$TEMPLATE/contracts/INTEGRATOR.md" wheelhouse/INTEGRATOR.md.new
 
 **Nine `.md` files, named individually.** Not `cp -r contracts/`, which would also copy `bench.sh.stub` over `wheelhouse/crew/bench.sh` — and if you have implemented your bench, that replaces it with a stub that exits 1. `bench.sh.stub` is install-only. It is never part of an upgrade. `RESEARCHER.md` is new in template upgrades that carry researcher seats; copy it whole, then fill only its `## This project` half if this install takes a researcher. Existing `seats/seats.json` rosters do not need a `skills` field; when present it is an optional array of skill directories that the adapter tilde-expands and passes as Pi `--skill`, stopping on a missing path. This list matches `BOOTSTRAP.md` step 2's — nine briefs plus the stub it alone copies — and step 5's integrity check is what catches the two drifting apart.
 
+### Copy the skills
+
+Run at the install root. `.agents/skills/` is a **shared namespace**, not a template-owned tree. Refresh only the skill directories the checked template ships (each has `SKILL.md`) and its top-level metadata files, including `NOTICE-pstack.md`. Replace those exact entries to remove stale files inside shipped skills; never remove the parent or infer that an unshipped directory is retired. Every other directory stays product-owned, especially `.agents/skills/verify-<project>/` and its feature map when the product and install root are the same repository. Other `.agents/` and `.claude/` contents also stay untouched. Conflicting types at shipped paths, symlinked destination parents, or a real file/directory at either compatibility-link path are **named refusals**, before any writes: preserve them and reconcile with the owner.
+
+```bash
+# Template skills upgrade
+test -f "$TEMPLATE/.agents/skills/intent/SKILL.md" && test -f "$TEMPLATE/.agents/skills/outcomes/SKILL.md" || { echo "STOP: template skills missing" >&2; exit 1; }
+for p in .agents .claude .claude/skills; do
+  [ ! -L "$p" ] && { [ ! -e "$p" ] || [ -d "$p" ]; } || { echo "STOP: skill parent is not a real directory: $p" >&2; exit 1; }
+done
+[ ! -L .agents/skills ] && { [ ! -e .agents/skills ] || [ -d .agents/skills ]; } || { echo "STOP: canonical skills path is not a real directory: .agents/skills" >&2; exit 1; }
+for skill in intent outcomes; do
+  p=".claude/skills/$skill"
+  [ ! -e "$p" ] || [ -L "$p" ] || { echo "STOP: $p exists and is not a symlink; preserve it and reconcile with the owner before continuing" >&2; exit 1; }
+done
+[ ! -L "$TEMPLATE/.agents/skills" ] || { echo "STOP: template skills source is a symlink" >&2; exit 1; }
+[ "$(cd "$TEMPLATE/.agents/skills" && pwd -P)" != "$(pwd -P)/.agents/skills" ] || { echo "STOP: template skills source is the destination" >&2; exit 1; }
+# Preflight EVERY shipped entry before refreshing any of them.
+for src in "$TEMPLATE"/.agents/skills/*; do
+  p=".agents/skills/${src##*/}"
+  [ ! -L "$src" ] && { [ -f "$src" ] || { [ -d "$src" ] && [ -f "$src/SKILL.md" ]; }; } || { echo "STOP: unsupported template skill entry: $src" >&2; exit 1; }
+  if [ -d "$src" ]; then
+    [ ! -L "$p" ] && { [ ! -e "$p" ] || [ -d "$p" ]; } || { echo "STOP: template skill destination has wrong type: $p" >&2; exit 1; }
+  else
+    [ ! -L "$p" ] && { [ ! -e "$p" ] || [ -f "$p" ]; } || { echo "STOP: template skill destination has wrong type: $p" >&2; exit 1; }
+  fi
+done
+mkdir -p .agents/skills
+for src in "$TEMPLATE"/.agents/skills/*; do
+  p=".agents/skills/${src##*/}"
+  rm -rf "$p" && cp -R "$src" "$p" || { echo "STOP: template skill refresh failed: $p" >&2; exit 1; }
+done
+mkdir -p .claude/skills
+ln -sfn ../../.agents/skills/intent .claude/skills/intent
+ln -sfn ../../.agents/skills/outcomes .claude/skills/outcomes
+test -f .claude/skills/intent/SKILL.md && test -f .claude/skills/outcomes/SKILL.md
+```
+
+Read back only the shipped entries, not the shared parent: product manuals must neither be deleted to satisfy a diff nor treated as template drift. Expect empty output and exit 0; stop on any failure. The compatibility targets must remain exactly `../../.agents/skills/intent` and `../../.agents/skills/outcomes`. Re-running the refresh replaces the same shipped entries without nesting and preserves all unshipped directories.
+
+```bash
+# Template skills readback
+for skill in intent outcomes; do
+  test -f "$TEMPLATE/.agents/skills/$skill/SKILL.md" || { echo "FAIL template skill missing: $skill" >&2; exit 1; }
+done
+for src in "$TEMPLATE"/.agents/skills/*; do
+  p=".agents/skills/${src##*/}"
+  [ ! -L "$p" ] && diff -r "$src" "$p" || { echo "FAIL template skill differs: $p" >&2; exit 1; }
+done
+test -L .claude/skills/intent && test "$(readlink .claude/skills/intent)" = ../../.agents/skills/intent && test -f .claude/skills/intent/SKILL.md || { echo "FAIL intent skill link" >&2; exit 1; }
+test -L .claude/skills/outcomes && test "$(readlink .claude/skills/outcomes)" = ../../.agents/skills/outcomes && test -f .claude/skills/outcomes/SKILL.md || { echo "FAIL outcomes skill link" >&2; exit 1; }
+```
+
 ### Adopt the host-wide heavy-test admission without replacing your bench
 
 After copying `seats/` below, preserve your implemented bench and add this prologue before any build, fixture or test work in `wheelhouse/crew/bench.sh` (Bash):
@@ -687,6 +740,14 @@ After step 3's runtime copy and step 4's producer-brief splice, before normal di
 
 The audit's exit 1 still lets the upgrade sweep finish; it does not authorize dispatch/review of the listed contracts. An unreadable graph remains exit 3 and must be repaired separately. Upgrading this fleet's own queue is an install operation, not something the template silently does for every consumer.
 
+For **each listed open task**, post a signal after the audit (substitute its title and id; the angle brackets are placeholders, not shell syntax):
+
+```text
+bun seats/intake.ts post --kind finding --source upgrade --title "<bead title>" --ref <bead-id>
+```
+
+Hand the returned signal id to the producer to write the contract. If the owner writes it by hand instead, load `.agents/skills/intent/SKILL.md` first and `.agents/skills/outcomes/SKILL.md` next, then check the resulting contract with `bun seats/contract.ts check <bead-id>` before dispatch. Posting alone does not repair or dispatch a task; it only adds its intake row.
+
 ### Adopt the autonomy mandate in existing installs
 
 Ask the principal the same question current `BOOTSTRAP.md` asks: how far does the fleet take work? The default answer is **all the way** — merge, push, open and merge PRs, and deploy wherever the project has an automated deploy path — stopping only for this install's reserved actions or a genuine fork in product intent. Record the answer in `wheelhouse/INTEGRATOR.md`'s project section along with the explicit reserved list and the date. The mandate line must quote the principal directive verbatim: "the whole point of the Wheelhouse and the mandate is to create work and to do work, not to ask if you can create work, ask if you can start work, and ask if the work can be declared done."
@@ -758,9 +819,16 @@ git status --short
 NEW_COMMIT=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
 [[ "$NEW_COMMIT" =~ ^[0-9a-f]{7,40}$ ]] || { printf "REFUSED template source: invalid commit='%s'; expected 7-40 lowercase hexadecimal characters\n" "$NEW_COMMIT" >&2; exit 1; }
 NEW=$(printf '%s' "$NEW_COMMIT" | cut -c1-12)
+# Reuse the checked TEMPLATE from the copy/readback; re-run source recovery if it is unset.
+[ -n "${TEMPLATE:-}" ] && [ -d "$TEMPLATE/.agents/skills" ] || { echo "STOP: checked TEMPLATE required for shipped skill staging" >&2; exit 1; }
 git add wheelhouse/ seats/ .gitignore CLAUDE.md .beads/
-for p in .claude/settings.json; do
+for p in .claude/settings.json .claude/skills/intent .claude/skills/outcomes; do
   [ ! -e "$p" ] || git add "$p"
+done
+# Never stage the shared parent or an unchanged product manual just because it is beside a skill.
+for src in "$TEMPLATE"/.agents/skills/*; do
+  p=".agents/skills/${src##*/}"
+  if [ -n "$(git status --short -- "$p")" ]; then git add -- "$p"; fi
 done
 # If step 7 made you edit any other project-owned file, add its exact path now.
 git status --short
