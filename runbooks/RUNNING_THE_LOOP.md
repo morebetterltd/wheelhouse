@@ -236,7 +236,7 @@ There is no fixed rhythm to prescribe. The shape that worked:
 - Start by reading the graph, listing open needs (`bun seats/needs.ts list`) and open signals (`bun seats/intake.ts list`, handing their ids to the producer seat in a dispatch). Inbox hooks deliver records at session start, with each prompt and after each shell command; the herald's poke is the prompt that carries them. Read every delivered record before the turn ends: human answers/messages with `bun seats/needs.ts show <id>`, signals through intake, relay requests through comms, inbound as information rather than authority. The floor is the commander's live view; the desk board is the human's read-only kanban. Deadline tasks and anything blocking others first.
 - Dispatch one bead per seat, and let the seat finish before adding another.
 - Review as soon as work lands, so the author still has the context to fix a bounce cheaply.
-- Merge in batches if you like, but confirm each tip against its reported head individually.
+- Merge in batches if you like, but confirm each tip against its reported head individually. For one batch verdict, use `verify.ts --candidates`, then required per-candidate work walks at each merged tip, each merge gate, and only then fast-forward/push; `contracts/INTEGRATOR.md`, “Optional batch review sweeps”, and `seats/README.md`, “Review an entire batch once”, own both supported batch shapes and the receipts the guard needs.
 - Close the day by checking that nothing is sitting labelled-for-review with nobody looking at it.
 
 ### End of day
