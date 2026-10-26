@@ -156,6 +156,13 @@ if bun "$HERE/fixtures/docker-cache-pressure.ts" "$ROOT/seats/alerts.ts" "$FIX/d
   pass 'Docker cache-pressure and unavailable-Docker consumer cases pass'
 else fail 'Docker cache-pressure fixture failed'; fi
 
+phase 'numeric alert settings'
+if bun "$HERE/fixtures/alert-values.ts" "$HERE" "$FIX/alert-values" "$ROOT/seats/alerts.ts"; then
+  pass 'missing/blank numeric defaults, explicit values and finite validation; actual reader removals rejected'
+else
+  fail 'numeric alert setting consumer cases failed'
+fi
+
 phase 'drift file-set design'
 case "${WHEELHOUSE_TEMPLATE_DRIFT_CASE:-all}" in all|same|changed) ;; *) echo 'invalid drift test case' >&2; exit 2;; esac
 drift_set_cases
