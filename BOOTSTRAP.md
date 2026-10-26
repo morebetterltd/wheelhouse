@@ -558,6 +558,28 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
 
 `generated/` in the template holds specimens of these files. They are examples of the SHAPE. Never copy them — they describe an invented project.
 
+### Write the verification manual
+
+For **each product repo from question 1** (the root in the single-repo shape), load the installed `.agents/skills/create-verification/SKILL.md` at the install root and follow it against that repo. Use the repository scan from step 3: enumerate every discovered user-facing route, command, menu and public interface, not a shortlist. Write the five-section manual and complete feature map at that product repo's `.agents/skills/verify-<project>/`, where `<project>` is the repo directory's basename. The manual belongs in the product repo, not under `wheelhouse/`, because it is the project's property and travels with the code.
+
+The create skill writes the real copy; the installer writes the compatibility link. From the install root, set `repo` to the actual product repo path from question 1 (`.` for a single repo), then run:
+
+```bash
+[ -n "${repo:-}" ] && [ -d "$repo/.git" -o -f "$repo/.git" ] || { echo "STOP: product repo required" >&2; exit 1; }
+repo=$(cd "$repo" && pwd -P) || exit 1
+project=$(basename "$repo")
+mkdir -p "$repo/.claude/skills"
+# If this path already exists, inspect it; do not overwrite another skill or link.
+if [ ! -e "$repo/.claude/skills/verify-$project" ] && [ ! -L "$repo/.claude/skills/verify-$project" ]; then
+  ln -s "../../.agents/skills/verify-$project" "$repo/.claude/skills/verify-$project"
+fi
+bun seats/manual.ts check --repo "$repo" || { echo "FAIL verification manual — stop" >&2; exit 1; }
+```
+
+Paste the check output. For a runnable repo expect `manual ok: N features`, and compare the map against the scan: the structural check cannot discover an omitted feature. Follow the create skill's own proof and cleanup instructions; do not describe an unrun recipe as verified. If the product genuinely has no runnable surface, follow its `surface: none` exception: two-sentence manual, empty feature index, no invented live proof. The current check prints `manual ok: 0 features` for that declaration; report `surface: none` explicitly alongside it.
+
+Commit the manual and link **locally on that product repo's default line**, as recorded in the survey/interview. Check `git -C "$repo" symbolic-ref --short HEAD` against that record before committing; if it is detached, on another line, or has unrelated staged changes, stop and resolve the checkout with the owner rather than switching or merging their work. In an umbrella install, inspect status and stage only the new manual directory and compatibility link, then `git -C "$repo" commit -m "Add the verification manual for $project"`. In a single-repo install, include those exact paths in the step-5 install commit below, using that same subject. This product-owned manual is committed even when the factory files were deliberately excluded. The commit stays local: **never push from this step**; question 4b and `wheelhouse/INTEGRATOR.md` govern later push authority; creating a manual grants none.
+
 ### Verify — show the output, do not summarize it
 
 Run each of these and paste what it prints:
@@ -678,6 +700,16 @@ Run each of these and paste what it prints:
   test -L .claude/skills/intent && test "$(readlink .claude/skills/intent)" = ../../.agents/skills/intent && test -f .claude/skills/intent/SKILL.md || { echo "FAIL intent skill link" >&2; exit 1; }
   test -L .claude/skills/outcomes && test "$(readlink .claude/skills/outcomes)" = ../../.agents/skills/outcomes && test -f .claude/skills/outcomes/SKILL.md || { echo "FAIL outcomes skill link" >&2; exit 1; }
   ```
+
+- **Verification manual — repeat per product repo from question 1.** The create-verification skill above must have produced the product-owned manual and complete map. From the install root, set `repo` to that repo's path and `project` to its directory basename (do not reuse the last repo's values), then run and paste:
+
+  ```bash
+  bun seats/manual.ts check --repo "$repo" || { echo "FAIL verification manual — stop" >&2; exit 1; }
+  test -L "$repo/.claude/skills/verify-$project" && test -f "$repo/.claude/skills/verify-$project/SKILL.md" || { echo "FAIL verification manual link — stop" >&2; exit 1; }
+  bun seats/manual.ts features --repo "$repo" --json
+  ```
+
+  Require `manual ok: N features` and the resolving link. A declared `surface: none` currently prints `manual ok: 0 features`; name that declaration, not a successful live journey. Read the feature inventory against the scan and report its count per repo. Any nonzero check or link failure stops this procedure just as a contract-integrity FAIL does; do not hand back a partial install as success.
 
 - **Check `GRAPH.md`'s version-stamped claims against the CLI you actually have.** It states that this build has no `in_review` status, so the review queue is a `needs-review` label instead.
 
@@ -837,13 +869,25 @@ for src in "$TEMPLATE"/.agents/skills/*; do
   p=".agents/skills/${src##*/}"
   if [ -n "$(git status --short -- "$p")" ]; then git add -- "$p"; fi
 done
-git status --short          # read what is staged; if nothing is, there is no commit to make
-git commit -m "Install the wheelhouse: contracts, briefs, and the work graph"
+git status --short          # read what is staged; commit using the shape-specific block below
 ```
+
+**Single-repo shape:** add the product-owned manual explicitly, never the shared skills parent. Confirm this is the recorded default line and there are no unrelated staged changes, then commit the manual together with the install:
+
+```bash
+project=$(basename "$(pwd -P)")
+for p in ".agents/skills/verify-$project" ".claude/skills/verify-$project"; do
+  if [ -n "$(git status --short -- "$p")" ]; then git add -- "$p"; fi
+done
+git status --short
+git commit -m "Add the verification manual for $project"
+```
+
+**Umbrella shape:** the product manuals were committed in their own repos above; commit the container's install with `git commit -m "Install the wheelhouse: contracts, briefs, and the work graph"` if its staged diff is nonempty. Neither shape pushes from this step.
 
 The loop is the rule below — "never `git add` a path you have not seen in the status output" — written as something you can run, and it is a loop rather than one `git add` line because `git add` is atomic: a single absent pathspec fails the whole command having staged nothing. It is an `if` rather than an `&&` chain because the chain form reports the healthy path as a failure. A loop's exit status is its last iteration's, and `guard && git add` exits non-zero whenever that guard is false — so an install with nothing left to stage, which is the ordinary outcome when bd has already committed `.beads/`, ends on a non-zero status and any caller, CI step or wrapper that reads it calls the install failed. Measured at exit 1 in that state under bash, zsh and sh; the `if` form exits 0 in every state. It does NOT abort a `set -e` script mid-run — `A && B` is an AND-OR list, which `set -e` exempts, and execution continues past the false guard in all three shells. The list is a list of CANDIDATES; status decides. Anything else this install wrote — a `.gitattributes` bd added, a `.gitignore` you appended to below — you add to the candidate list yourself after seeing it in that first status.
 
-**Not every install commits.** If step 3 landed on a single repo whose install you kept out of the tree with `.git/info/exclude`, there is nothing here to stage — `CLAUDE.md`, `wheelhouse/` and `.beads/` are excluded on purpose, and committing them is the exact outcome that decision exists to prevent. Hand the principal that fact in place of a commit SHA, and with it the two consequences they will otherwise meet later: the revert-in-one-step above is not available to them, and a second seat cloning that repo receives none of this and has to repeat the exclusion by hand.
+**Not every factory install commits.** If step 3 landed on a single repo whose factory files you kept out of the tree with `.git/info/exclude`, `CLAUDE.md`, `wheelhouse/` and `.beads/` are excluded on purpose: do not force-add them. The product-owned verification manual and its link are not factory state: do not exclude them, and commit their exact paths as above. Tell the principal which factory files remain machine-local, with the two consequences they will otherwise meet later: the factory's revert-in-one-step above is not available to them, and a second seat cloning that repo receives none of those factory files and has to repeat the exclusion by hand.
 
 Before you stage, confirm the fleet's runtime directories are already invisible to this repository. The adapter creates each worker seat's worktree at `<root>/.wheelhouse-worktrees/<seat-name>` and per-bead scratch under `<root>/.wheelhouse-runs/<bead-id>/` in both supported shapes, because that is the single pair of paths the adapter, the cleanup reaper, and the seat trust model agree on. Both are runtime state, not product, and the template's tracked `.gitignore` already lists `.wheelhouse-worktrees/` and `.wheelhouse-runs/`, so there is no `.git/info/exclude` step to take for them. Check rather than assume:
 
@@ -853,7 +897,7 @@ git check-ignore -v .wheelhouse-worktrees/x .wheelhouse-runs/x   # both lines mu
 
 Measured: in a fresh install, `git status --short` at the install root reports nothing for either directory once they exist, and `git check-ignore` names the tracked `.gitignore` line for each. If the check prints nothing for one of them, the install's `.gitignore` drifted from the template's; restore those two lines from `$TEMPLATE/.gitignore` before staging. If this checkout sits inside some other repository, that outer repository is not this install's to edit; say so to the principal rather than leaving dirt they will find later and attribute to their own working copy.
 
-Stage what `git status` actually shows, not a remembered list. What bd writes varies by build: some versions add `.gitattributes` (graph merge behaviour — include it if present, or the next clone loses that behaviour silently), and the explicit Claude setup adds `.claude/`; include those when status shows them. Root `AGENTS.md`, `.agents/` beyond the explicitly installed shipped skill entries, and `.codex/` remain product/tool namespaces: do not stage them unless the principal explicitly identified a product-owned file. Never `git add` a path you have not seen in the status output — `git add` is atomic, and one nonexistent pathspec fails the whole command having staged **nothing**, which leaves you believing the commit is prepared when it is empty.
+Stage what `git status` actually shows, not a remembered list. What bd writes varies by build: some versions add `.gitattributes` (graph merge behaviour — include it if present, or the next clone loses that behaviour silently), and the explicit Claude setup adds `.claude/`; include those when status shows them. Root `AGENTS.md`, `.agents/` beyond the explicitly installed shipped skill entries and the product manual written above, and `.codex/` remain product/tool namespaces: do not stage them unless the principal explicitly identified a product-owned file. Never `git add` a path you have not seen in the status output — `git add` is atomic, and one nonexistent pathspec fails the whole command having staged **nothing**, which leaves you believing the commit is prepared when it is empty.
 
 One file inside `.beads/` is worth naming rather than leaving to that sweep, because it reads as runtime debris and is not: `.beads/interactions.jsonl`, an append-only log of what agents did to the graph and why. **Commit it.** Measured on bd 1.2.2: the `.beads/.gitignore` that bd writes itself does not exclude it — `git check-ignore .beads/interactions.jsonl` exits 1 — and `bd audit --help` says in as many words that the file "is intended to be versioned in git", for auditing why an agent did something and for dataset generation. It is only ever appended to, so it grows slowly and nothing rewrites what is already in it.
 
@@ -913,8 +957,8 @@ Five things, in this order.
 
 **Hand back what is now true.** Plainly, and with the two halves kept apart, because a principal who cannot tell them apart will trust the stubs:
 
-- what exists — the files, the graph, the shape you installed and where worktrees go, the merge policy, the fleet's push/PR/deploy authority, and the reserved actions in the principal's own words, and anything you corrected on the way through: the `wheelhouse/AGENTS.md` override from step 5, any `GRAPH.md` status correction from its verification, and which `.beads/` durability shape you found at its commit and what was chosen about it;
-- what is deliberately STUBBED and therefore not yet true — `wheelhouse/crew/bench.sh` exits non-zero on purpose, the worker's gotchas section is empty because gotchas are earned rather than invented, and the ISA's claims are empty for the same reason.
+- what exists — the files, each product repo's verification-manual path and number of mapped features, the graph, the shape you installed and where worktrees go, the merge policy, the fleet's push/PR/deploy authority, and the reserved actions in the principal's own words, and anything you corrected on the way through: the `wheelhouse/AGENTS.md` override from step 5, any `GRAPH.md` status correction from its verification, and which `.beads/` durability shape you found at its commit and what was chosen about it;
+- what is deliberately STUBBED and therefore not yet true — any repo declaring `surface: none` has no live journey yet (name each one), `wheelhouse/crew/bench.sh` exits non-zero on purpose, the worker's gotchas section is empty because gotchas are earned rather than invented, and the ISA's claims are empty for the same reason.
 
 **Read the loop you are about to run.** `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, now, before the dispatch below — you are executing its first stage in the next paragraph, not filing it for someone to read later. The contracts say what each role owes; that runbook says what the sequence looks like and what to do on the days it does not go straight through, and whoever has the contracts and not the runbook has the standards and no procedure. The role contracts are then read at the stage that needs them — `wheelhouse/fleet/WORKER.md` when you dispatch, `wheelhouse/crew/REVIEWER.md` when a branch lands, `wheelhouse/INTEGRATOR.md` when one is approved, `wheelhouse/GRAPH.md` for the review queue — and the runbook's closing table says which is which. That is the reading list, and it is a step inside this action rather than a parting gift.
 
