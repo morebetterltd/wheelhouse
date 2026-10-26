@@ -559,6 +559,18 @@ fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/skills-worktrees.after"
 fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/skills-status.after"
 LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
 if cmp -s "$FIX/contract-state.before" "$REFUSE_PROJ/seats/state.json" && cmp -s "$FIX/contract-worktrees.before" "$FIX/skills-worktrees.after" && cmp -s "$FIX/contract-status.before" "$FIX/skills-status.after" && [ "$LAUNCHES_BEFORE" = "$LAUNCHES_AFTER" ]; then pass 'Skills refusal: state, worktree and launch count unchanged'; else fail 'Skills refusal: side effect occurred'; fi
+# D3: the disposition, not the adapter caller's actor, must name the producer.
+bun -e 'import fs from "node:fs"; const file=process.argv[1],r=JSON.parse(fs.readFileSync(file,"utf8"));r.seats["fixture-producer"]={role:"producer",external:true,runtime:"commander-subagent"};fs.writeFileSync(file,JSON.stringify(r));' "$REFUSE_PROJ/seats/seats.json" || exit 2
+PRODUCED_SIGNAL="$(WHEELHOUSE_INTAKE_ROOT="$REFUSE_PROJ" bun "$HERE/intake.ts" post --kind finding --source fixture --title 'Produced-by refusal' --text 'A commander disposition must not dispatch work')" || exit 2
+WHEELHOUSE_INTAKE_ROOT="$REFUSE_PROJ" BEADS_ACTOR=commander bun "$HERE/intake.ts" dispose "$PRODUCED_SIGNAL" produced --work producer-refusal >/dev/null || exit 2
+bun -e 'import fs from "node:fs";const[src,dest,id]=process.argv.slice(1);fs.writeFileSync(dest,fs.readFileSync(src,"utf8").replace(/^Signal:.*$/m,"Signal: "+id));' "$FIX/dispatch-contract.md" "$FIX/produced-contract.md" "$PRODUCED_SIGNAL" || exit 2
+cp -f "$REFUSE_PROJ/seats/intake.jsonl" "$FIX/produced-ledger.before"
+WHEELHOUSE_DISPATCH_FORCE=1 WHEELHOUSE_CONTRACT_FIXTURE="$FIX/produced-contract.md" WHEELHOUSE_INTAKE_ROOT="$REFUSE_PROJ" WHEELHOUSE_INTAKE_FIXTURE="$REFUSE_PROJ/seats/intake.jsonl" run dispatch worker-1 producer-refusal 'must never reach a seat'
+[ "$RC" = 1 ] && says "refused: signal $PRODUCED_SIGNAL was produced by commander, not the producer fixture-producer" && pass 'produced-by refusal: commander disposition names signal and producer; force cannot bypass' || fail "produced-by refusal rc=$RC: $OUT"
+fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/produced-worktrees.after"
+fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/produced-status.after"
+LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
+if cmp -s "$FIX/contract-state.before" "$REFUSE_PROJ/seats/state.json" && cmp -s "$FIX/contract-worktrees.before" "$FIX/produced-worktrees.after" && cmp -s "$FIX/contract-status.before" "$FIX/produced-status.after" && cmp -s "$FIX/produced-ledger.before" "$REFUSE_PROJ/seats/intake.jsonl" && [ "$LAUNCHES_BEFORE" = "$LAUNCHES_AFTER" ]; then pass 'produced-by refusal: no process spawned; state, worktree and ledger unchanged'; else fail 'produced-by refusal: side effect occurred'; fi
 if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
 RUN_PROJ="$PROJ"
 phase "0a0. state lock waits visibly for live holders; safely reclaims abandoned writers"
