@@ -12,7 +12,7 @@ const fifo=path.join(dir,'release.fifo');assert.equal(completedCommand('mkfifo',
 fs.writeFileSync(path.join(bin,'tmux'),`#!/usr/bin/env bash
 set -eu
 case "$1" in
- display-message) case "$*" in *'#{pane_current_path}'*) echo "$WHEELHOUSE_HERALD_ROOT";; *) echo claude;; esac;;
+ display-message) case "$*" in *'#{pane_current_path}'*) printf '%s\\t%s\\n' "$WHEELHOUSE_HERALD_ROOT" "$(cd "$WHEELHOUSE_HERALD_ROOT" && pwd -P)";; *) echo claude;; esac;;
  capture-pane)
   if [ -f "$HEARTBEAT_CASE/hold" ]; then
    exec 7< "$HEARTBEAT_CASE/release.fifo"
