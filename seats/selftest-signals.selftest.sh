@@ -9,5 +9,6 @@ bun "$HERE/fixtures/selftest-signals.ts" "$HERE" "$FIX" "$@"
 # Keep selected legacy trap controls focused; the complete suite also probes
 # cancellation while suite/watchdog identities are still being published.
 if [ "$#" -eq 0 ]; then
+  bun "$HERE/fixtures/sweep-stop.ts" "$HERE" "$FIX"
   bun "$HERE/fixtures/sweep-startup-signals.ts" "$HERE" "$FIX"
 fi

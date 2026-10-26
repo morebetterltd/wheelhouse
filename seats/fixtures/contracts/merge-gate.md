@@ -1,5 +1,6 @@
 Trace: ISA F2 W12 merge gate.
 Signal: isa-gap: W12
+Skills: intent@1.0.0 outcomes@1.0.0
 
 Intent:
 A merge should include only work whose outcomes have been proved where their consumers meet them.

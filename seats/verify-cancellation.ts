@@ -141,13 +141,16 @@ export function trackReviewChild(child: ReturnType<typeof spawn>, extra: Partial
   if (!child.pid) return { ...extra, pid: 0, closed: true }; // preserve spawn-error handling
   const owned: ReviewChild = { ...extra, pid: child.pid, closed: false };
   reviewChildren.add(owned);
-  child.once("close", () => {
+  child.once("close", (code, signal) => {
     owned.closed = true;
-    // Unexpected runner death must not let the caller remove the registry's
-    // scratch while published suite groups remain alive. Start coordinated
-    // teardown before its close callback can resume main/launch a reviewer.
+    // A runner's handled TERM/INT/HUP is a shell exit code, not necessarily
+    // child.signal. Latch cancellation BEFORE the caller's close callback:
+    // even a perfectly retired interrupted sweep must never start a model.
+    const interrupted = signal !== null || code === 129 || code === 130 || code === 143;
+    const reason = signal === "SIGINT" || code === 130 ? "SIGINT" : signal === "SIGHUP" || code === 129 ? "SIGHUP" : "SIGTERM";
+    // Unexpected runner death must also retain/retire published suite groups.
     try {
-      if (owned.sweep && (groupAlive(owned.pid) || suiteGroups(owned).some(groupAlive))) { void cancelReview("SIGTERM"); return; }
+      if (owned.sweep && (interrupted || groupAlive(owned.pid) || suiteGroups(owned).some(groupAlive))) { void cancelReview(reason); return; }
     } catch { void cancelReview("SIGTERM"); return; }
     // Retire only a completed child whose group and published groups are gone.
     if (!groupAlive(owned.pid)) reviewChildren.delete(owned);

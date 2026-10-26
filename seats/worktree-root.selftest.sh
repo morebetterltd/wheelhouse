@@ -225,7 +225,7 @@ write_repo_claim() {
   node - "$CLAIM" "$1" "$2" <<'JS'
 const fs=require('fs'),[file,mode,id]=process.argv.slice(2);
 const repo=mode==='occupied-line'?'Repo: UMBRELLA':'Closes: H7. Repo: UMBRELLA (project-owned machinery).';
-const description=repo+'\nTrace: Dispatch regression fixture: prepare work in the repository its contract names.\nSignal: isa-gap: W3\nSkills: intent@1.0.0\n\nIntent:\nRoute this fixture task to its declared repository without creating a branch in the product repository. Refuse clearly if the occupied target belongs to another repository.\n\nOutcomes:\n- O1 Dispatch prepares the declared worktree or refuses without changing the live seat.\n  consumer: machine — the fixture dispatcher and its Git witness\n  surface: the seat worktree, dispatch output and both repositories\' refs\n  check: run — dispatch this task and inspect the native branch lists and retained seat record\n';
+const description=repo+'\nTrace: Dispatch regression fixture: prepare work in the repository its contract names.\nSignal: isa-gap: W3\nSkills: intent@1.0.0 outcomes@1.0.0\n\nIntent:\nRoute this fixture task to its declared repository without creating a branch in the product repository. Refuse clearly if the occupied target belongs to another repository.\n\nOutcomes:\n- O1 Dispatch prepares the declared worktree or refuses without changing the live seat.\n  consumer: machine — the fixture dispatcher and its Git witness\n  surface: the seat worktree, dispatch output and both repositories\' refs\n  check: run — dispatch this task and inspect the native branch lists and retained seat record\n';
 fs.writeFileSync(file,JSON.stringify([{id,description}])+'\n');
 JS
 }

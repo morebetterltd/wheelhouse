@@ -110,6 +110,7 @@ async function test(): Promise<void> {
     // turn without a judgment, not refusal of malformed work.
     const description = `Trace: verify-no-verdict regression fixture
 Signal: isa-gap: K1
+Skills: intent@1.0.0 outcomes@1.0.0
 
 Intent:
 Keep a completed local check distinguishable from a final judgment, so unfinished evidence cannot be mistaken for approval.
