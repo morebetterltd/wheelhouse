@@ -46,6 +46,12 @@ bun seats/adapter.ts status          # every standing seat, liveness
 # no spawn for verifier: it is an ephemeral consumer-surface walker started by seats/walk.ts
 ```
 
+After a bead-bound `spawn <seat> <bead-id>` or dispatch has prepared the worker's worktree (bare spawn starts at the install root), check its factory skills and project manual; a refusal stops this startup until the named skill or cwd is repaired:
+
+```bash
+bun seats/adapter.ts skills-check worker-1
+```
+
 `resume <seat>` instead of `spawn` reattaches a seat to the session it was stopped with, context warm — use it when a stop or reboot interrupted work in flight.
 
 ## 3. Watch it

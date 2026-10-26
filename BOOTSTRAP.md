@@ -549,7 +549,7 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
 - Write `wheelhouse/STARTUP.md`: this project's cold-start card. It is what step 6 and the commander point at when it is time to actually start a session, so its job is to resolve rather than to restate — the seat MECHANICS live in `wheelhouse/fleet/SEATS.md`'s "Running a seat" paragraph and in `seats/README.md`, identically in every project, and this file is where those mechanics meet this project's real namespace and real seat names. Make it at least as complete as `generated/STARTUP.md.example`: a title and one-paragraph durability note, the minimum viable fleet if this project has one, the four operating sections below, and the shutdown section. None are optional:
 
   1. **The commander.** `cd` to this project's real absolute root, then `claude`. Say that the folder's `CLAUDE.md` is what makes that session the commander, so no launcher is needed. Also say what the commander does first on a cold morning: if `wheelhouse/HANDOFF.md` exists, read it before the graph, then archive it to `wheelhouse/handoffs/<sign-off date>.md` per `wheelhouse/runbooks/RUNNING_THE_LOOP.md`'s "Next morning" section. No note is the normal first-morning state.
-  2. **Provisioning and spawning, from the roster you have just written.** One `seats/seat-env.sh <namespace> <seat-name>` line per roster seat — run once, safe to re-run — with a sentence saying it prints the one-time login flow for the harness and account that seat should BE (`PI_CODING_AGENT_DIR=... pi`, `CLAUDE_CONFIG_DIR=... claude auth login --claudeai`, or `CODEX_HOME=... codex login` / key login, matching question 8), and that the login-per-account rule is `wheelhouse/fleet/SEATS.md`'s seat-accounting section. Then the spawn lines: `bun seats/adapter.ts spawn <seat>` per seat, plus `status`, and a sentence saying `resume` is the warm reattach after a stop or reboot. Take the namespace, harnesses and names from the sections you have just written, not from your memory of the interview. There is nothing to paste into a seat — say so, because the role brief is injected at spawn. **Copy no seat name that is not on the roster**, and if the roster took no seats, say that in place of this section rather than inventing a specimen seat.
+  2. **Provisioning and spawning, from the roster you have just written.** One `seats/seat-env.sh <namespace> <seat-name>` line per roster seat — run once, safe to re-run — with a sentence saying it prints the one-time login flow for the harness and account that seat should BE (`PI_CODING_AGENT_DIR=... pi`, `CLAUDE_CONFIG_DIR=... claude auth login --claudeai`, or `CODEX_HOME=... codex login` / key login, matching question 8), and that the login-per-account rule is `wheelhouse/fleet/SEATS.md`'s seat-accounting section. Then the spawn lines: `bun seats/adapter.ts spawn <seat>` per seat, plus `status`, and a sentence saying `resume` is the warm reattach after a stop or reboot. After a bead-bound spawn (`spawn <seat> <bead-id>`) or dispatch prepares the worktree, run `bun seats/adapter.ts skills-check <seat>` and stop on refusal; bare spawn starts at the install root, not a prepared worktree. Take the namespace, harnesses and names from the sections you have just written, not from your memory of the interview. There is nothing to paste into a seat — say so, because the role brief is injected at spawn. **Copy no seat name that is not on the roster**, and if the roster took no seats, say that in place of this section rather than inventing a specimen seat.
   3. **Watching the fleet.** How dispatches go out (`bun seats/adapter.ts dispatch <seat> <bead-id> ...`) and where each seat's events land (`seats/logs/<seat>.jsonl`), with `bun seats/adapter.ts status` as the always-available liveness view. Then the bridge, by name, because it is real machinery this install just copied and a vague pointer here is the difference between a cockpit that gets used and one that gets rediscovered months in: `seats/cockpit.sh <namespace>` builds (or re-attaches to — it never duplicates, and a re-run respawns a missing floor pane) the project's tmux session `wh-<namespace>`, commander pane on the left, and `bun seats/floor.ts` on the right as the read-only floor — spotlight one seat, rail of every seat's attention cues. The supervisor owns the herald, desk, courier, dead-seat recovery, and nightly cleanup; cockpit records the commander pane in `seats/run/commander-pane.json` so the herald can aim itself. Write the real namespace into that line. Optional OS keep-alive is an explicit human step: on macOS, `seats/supervisor.sh install-launchd --print` writes `~/Library/LaunchAgents/com.wheelhouse.<namespace>.supervisor.plist` and prints the `launchctl bootstrap`/`bootout` commands without running them; on Linux, `seats/supervisor.sh print-systemd` prints a user unit to install by hand. Point at `seats/README.md`'s "The bridge" section for the keys and what each cue means rather than restating them.
   4. **How work reaches the fleet.** The principal speaks backlog items to the commander, which hands the signals to the required producer to judge and write contracts in the graph; the commander never writes intent or outcomes; workers report done on the task record with comments and the `needs-review` label without closing; reviewers gate branches with bench evidence; the commander/integrator closes only after merge per this project's merge policy. Use commander voice here too: say what the human task, intent, or outcome is, not just the internal graph id. Include step 6's exact signal-command paragraph and standalone command block in this section of the installed `wheelhouse/STARTUP.md`, including the one-row/no-other-action statement; do not leave them only in the install transcript.
   5. **Shutdown.** The end-of-day ritual from `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, in order: dispatch each active seat a write-your-handoff request (the seat answers on its bead), compose the fleet note at `wheelhouse/HANDOFF.md` with per-seat status, waiting verdicts and tomorrow's first actions, and only then run `bun seats/adapter.ts stop-all`. Say that `stop-all` is graceful, keeps sessions, and reports busy seats instead of killing them. A plain machine shutdown loses nothing the graph holds, but it skips the handoff and makes tomorrow's commander start from raw state.
@@ -938,11 +938,50 @@ Outcomes:
   consumer: machine — the reviewer checking this install's smoke result
   surface: branch fleet/<this bead's id>, file SMOKE.md
   check: run — git show fleet/<id>:SMOKE.md prints exactly the loop closes
+- O2 The report lists the skills the seat can see, including intent, outcomes, create-verification, maintain-verification and the project manual.
+  consumer: person-reading — the installer reading the real seat's report
+  surface: the smoke bead's report comment
+  check: read — the report pastes the harness-level skills listing, not only the filesystem check
 CONTRACT
    ```
 
    Trivial is the point: the bead exists to exercise dispatch, worktree, branch, report and verdict, and any failure it surfaces is an install failure, undiluted by real work's ambiguity.
 3. **Dispatch it through the adapter, and wait on the bead**: `bun seats/adapter.ts dispatch <worker-seat> <bead-id> <the dispatch text>` — composed per the runbook's stage 1: the bead id, the repo, a way to read anything it points at that changes nothing. The report arrives ON THE BEAD, not in a message; a silent seat gets the probe-then-nudge from `wheelhouse/fleet/SEATS.md`'s rules, not a guess.
+3a. **Check every prepared standing seat's skills**, after smoke dispatch has created its worktree. Run from the install root and paste the listings. This is a filesystem/Git check, not the real harness listing required in the smoke report. For other standing seats with worktrees, prepare them with a bead-bound spawn or dispatch first; bare spawn starts at the install root. A non-zero result stops this install naming the seat and missing/dirty skill; do not report the install finished.
+
+<!-- factory-skills-check:start -->
+```bash
+bun seats/roster.ts check || exit 2
+skill_seats="$(bun -e '
+import fs from "node:fs";
+import path from "node:path";
+import {effectiveRoster} from "./seats/roster";
+const state = fs.existsSync("seats/state.json") ? JSON.parse(fs.readFileSync("seats/state.json", "utf8")) : {seats: {}};
+for (const [name, entry] of Object.entries(effectiveRoster(process.cwd()))) {
+  if (entry.external || entry.role === "verifier") continue;
+  const candidates = [state.seats?.[name]?.cwd, path.join(".wheelhouse-worktrees", name)].filter(Boolean);
+  const prepared = candidates.some(cwd => {
+    try { return fs.lstatSync(path.join(cwd, ".git")).isFile(); }
+    catch (error) { if (error.code === "ENOENT") return false; throw error; }
+  });
+  if (prepared) console.log(name);
+}
+')" || exit 2
+while IFS= read -r seat; do
+  [ -n "$seat" ] || continue
+  bun seats/adapter.ts skills-check "$seat" || {
+    printf 'STOP: skills-check failed for seat %s; repair the named skill before finishing install.\n' "$seat" >&2
+    exit 2
+  }
+done <<< "$skill_seats"
+```
+<!-- factory-skills-check:end -->
+
+The adapter hides only the individual factory links, with exact Git exclude
+entries **without trailing slashes**. A trailing-slash rule matches a directory,
+not the symlink Git sees; never hide the whole skills directory, because new
+project manual/map files must remain visible.
+
 4. **Verdict, by the one-shot reviewer**: `bun seats/verify.ts <bead-id> fleet/<bead-id> <worker-seat>`. The exit code IS the verdict — 0 APPROVE, 2 BOUNCE, 3 DISCOVER, 1 error/malformed output, 4 reviewer busy (retry later), 5 no-verdict (reviewer ended without a judgment), 6 refused: not a contract — and the full output lands in `seats/verdicts/<bead-id>.md`, which git ignores because it is a working copy. **Transcribe the decisive extract onto the bead before citing it** (`wheelhouse/GRAPH.md`, "Where evidence lives"), then close the smoke bead naming the verdict. If the roster has no reviewer seat, or `verify.ts` refuses because the only reviewer shares the author's account, the verdict comes from the solo path instead — the principal, or a fresh session that authored nothing — recorded on the bead in the same shape, and say plainly that the mechanical reviewer leg went unexercised. Before the install's first ISA claim closes, run the first claim walk with `bun seats/walk.ts <claim-ref> --surface <kind>:<spec> --out .wheelhouse-runs/<bead-id>/<surface-walk> --verifier <verifier-seat>` and post the scrubbed walk transcript and verdict on the task before citing them in the claim (the local output is a git-excluded working copy, not something to commit), or state `Not walked:` explicitly per `INTENT.md`.
 5. **The loop closing IS the install verification.** A BOUNCE or an error is not an embarrassment to smooth over — it is the install failing loudly at the cheapest possible moment, and it stops this procedure exactly as a FAIL in step 5 would: diagnose, fix, re-run the smoke. Merging the one-line branch is not required for the verdict to count; whether it merges or is deleted is the principal's call under question 5's policy.
 

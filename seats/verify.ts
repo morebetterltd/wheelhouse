@@ -91,6 +91,7 @@ import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { heavyTestEntry } from "./heavy-test-entry";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { effectiveRoster } from "./roster";
+import { linkFactorySkills } from "./seat-worktree";
 import { hasPool } from "./pool";
 import { finalAssistantText, liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
 import { installReviewSignals, reviewCancelling, reviewChildrenStopped, reviewScratchCleanups, trackReviewChild } from "./verify-cancellation";
@@ -230,6 +231,7 @@ export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "ve
     const info = scratchWorktreeInfo(repoRoot, dir);
     if (!info) throw new Error("scratch worktree identity could not be verified");
     fs.writeFileSync(info.ownerFile, JSON.stringify(owner) + "\n", { flag: "wx", mode: 0o600 });
+    linkFactorySkills(ROOT, dir, line => process.stderr.write(`${line}\n`));
   } catch (e: any) {
     restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
     if (fs.existsSync(path.join(dir, ".git"))) removeScratchWorktree(repoRoot, dir);

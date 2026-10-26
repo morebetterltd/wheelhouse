@@ -485,6 +485,7 @@ bun seats/adapter.ts spawn    <seat> [bead-id]          # start it
 bun seats/adapter.ts probe    <seat>                    # one-shot provider/model liveness check
 bun seats/adapter.ts dispatch <seat> <bead-id> <text>   # hand it a bead
 bun seats/adapter.ts steer    <seat> <text>             # redirect mid-turn
+bun seats/adapter.ts skills-check <seat>                # read-only skill visibility and clean Git paths
 bun seats/adapter.ts status                             # liveness, every seat
 bun seats/adapter.ts stop     <seat>                    # graceful; session kept
 bun seats/adapter.ts stop-all                           # stop every idle rostered seat; report busy seats
@@ -537,6 +538,32 @@ is refused. `resume` never fails on a missing cwd: it falls back to the seat
 worktree, then to the root. `dispatch` transparently stops and relaunches the
 seat, attached to the same session, when its cwd does not already match the
 seat worktree.
+
+Every bead-bound spawn or dispatch links the install root's factory skills
+(`.agents/skills/*/SKILL.md`) into the prepared worktree under both
+`.agents/skills` (Pi/Codex) and `.claude/skills` (Claude Code), using absolute
+symlinks. Existing project directories and committed project links win and are
+not overwritten; stale untracked factory links are repaired. Reviewer and walker
+scratch worktrees get the same links. A repeat preparation leaves correct links
+and exclude bytes unchanged; new factory entries appear on the next preparation.
+
+After `spawn <seat> <bead-id>` or dispatch, run
+`bun seats/adapter.ts skills-check <seat>`. It uses the recorded cwd, falling back
+to `.wheelhouse-worktrees/<seat>`, checks the harness's directory for the four
+factory skills, any additional factory entries, and the project's `verify-*`
+manuals, then prints one skill name per line. Missing manuals/skills, dirty skill
+paths or unreadable Git state exit **2**, naming the seat and entry. The check
+never repairs links, changes state, launches a model or proves harness discovery.
+Bare `spawn <seat>` starts at the install root and does not prepare a worktree;
+check after a bead-bound spawn/dispatch, not that unprepared root session.
+
+**Verified Git gotcha:** per-entry exclude rules for symlinks have **no trailing
+slash**, e.g. `/.agents/skills/intent` and `/.claude/skills/intent`. A rule ending
+in `/` matches a real directory and does not hide a symlink; native Git status
+still reports the link. Never exclude `/.agents/skills/` or `/.claude/skills/`
+wholesale: new project manual/map files must remain visible. Resolve the exclude
+file with `git -C <worktree> rev-parse --git-path info/exclude`; a linked
+worktree's `.git` is a file, not a directory.
 
 In an umbrella install, `Repo: UMBRELLA` selects the container's Git repository
 before any existing worktree is reused. The field may start a line or follow
