@@ -22,7 +22,9 @@ Two paths:
 - **[Pi](https://github.com/earendil-works/pi), Claude Code, Codex, and [Bun](https://bun.sh), for the seats you choose.** Pi, Claude Code, and Codex are the supported seat harnesses; install the ones your roster uses. `bun` runs the adapter that spawns and dispatches them. `npm install -g @earendil-works/pi-coding-agent` and `brew install oven-sh/bun/bun`, or see their pages.
 - **four more command-line tools on your PATH: `git`, `bd`, `bash`, `awk`.** Three of those ship with macOS and every Linux. `bd` is the work graph, and is the one you probably have to install: `brew install beads`, or see https://github.com/gastownhall/beads.
 
-You do not have to check the seven by hand. The install opens with a dependency preflight that checks all of them, and for each one that is missing prints what the wheelhouse needs it for and how to install it, then stops before anything has been written.
+You do not have to check these by hand. Before anything is written to your project, the install's dependency preflight checks `git`, `bd`, `bash`, `awk`, `bun`, and `claude` (for the commander). For each missing tool, it prints why the wheelhouse needs it and how to install it, then stops.
+
+Once the roster has chosen the seat harnesses, seat provisioning checks the binary each chosen seat needs: `pi`, `claude` for a Claude Code seat, or `codex`. A missing harness prints the same why-and-how-to-install guidance and stops provisioning that seat before its account directory is created; harnesses no seat chose are not required.
 
 ## Install
 
