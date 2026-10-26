@@ -362,9 +362,14 @@ acquire_lock(){
   if bun "$LOCK_HELPER" inherited "$LOCK"; then return 0; else rc=$?; fi
   [ "$rc" = 75 ] || { info "STOP: selftest-sweep ancestry check failed (exit $rc)"; exit 2; }
   while :; do
-    result="$(bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
+    result="$(WHEELHOUSE_SELFTEST_SWEEP_CAPTURE_IDENTITY=1 bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
     case "$rc" in
-      0) ENROLLED=1; OWNED_LOCK="$result"; return 0 ;;
+      0)
+        ENROLLED=1; OWNED_LOCK="${result%%$'\n'*}"
+        WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY=""
+        case "$result" in *$'\n'*) WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY="${result#*$'\n'}" ;; esac
+        export WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY
+        return 0 ;;
       75) ENROLLED=1 ;; # Validated, durably registered waiter, not a Bun error.
       *) info "STOP: selftest-sweep lock helper failed (exit $rc)"; exit 2 ;;
     esac
