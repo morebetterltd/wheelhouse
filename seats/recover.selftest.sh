@@ -341,7 +341,8 @@ printf 'CAPTURE gone session-file cwd recommended command native=%s output=%s\n'
 RECOMMENDED_RC="$RC"; RECOMMENDED_OUT="$OUT"
 adapter_run status
 if [ "$RECOMMENDED_RC" = 0 ] && [[ "$RECOMMENDED_OUT" == *"session continuity intentionally dropped"* ]] \
-   && [ "$RC" = 0 ] && says RUNNING && kill -0 "$(state_get worker-1 pid)" 2>/dev/null \
+   && [ "$RC" = 0 ] && printf '%s\n' "$OUT" | grep -Eq '^worker-1[[:space:]].*(RUNNING|SETTLED)' \
+   && kill -0 "$(state_get worker-1 pid)" 2>/dev/null \
    && [ "$(state_get worker-1 cwd)" = "$RECORDED_RESUME_CWD" ] && [ "$(cat "$SEATDIR/cwd.txt")" = "$RECORDED_RESUME_CWD" ] \
    && [ "$(state_get worker-1 sessionFile)" != "$OLD_HEADER_SESSION" ] && [ -f "$(state_get worker-1 sessionFile)" ] \
    && selftest_capture_lacks "$ARGV" -q -- '"--session"'; then
