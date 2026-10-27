@@ -17,6 +17,8 @@ export async function manualCheckChild(bin: string, args: string[], cwd: string,
   };
   const handlers = new Map<NodeJS.Signals, () => void>();
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) { const h = () => stop(`cancelled by ${sig}`); handlers.set(sig,h); process.on(sig,h); }
+  // Pipe chunks need not align with a FINDINGS em dash: decode across chunks.
+  child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
   child.stdout.on("data", b => { stdout += b.toString(); if (stdout.length > 8*1024*1024) stop("stdout limit exceeded"); });
   child.stderr.on("data", b => { stderr += b.toString(); if (stderr.length > 8*1024*1024) stop("stderr limit exceeded"); });
   child.once("error", e => { spawnError = e.message; });
