@@ -13,8 +13,8 @@
  *   seats/logs/<seat>.jsonl every event pi emits, appended raw
  *
  * The process outlives the adapter because its stdin is the FIFO, opened
- * read-write (`0<>` in bash) so it never sees EOF, and its stdout is the log
- * file, appended by redirection with no pipe to hold open. A later `dispatch`
+ * read-write (`0<>` in bash) so it never sees EOF. Its stdout pipe is drained
+ * by seat-event-log into the appended event log. A later `dispatch`
  * opens the FIFO for writing, drops one line, and tails the log for the
  * response.
  *
@@ -1098,8 +1098,8 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   }
 
   // bash's `0<>` opens the FIFO read-write, so pi's stdin never sees EOF when
-  // a writer closes; stdout appends to the log by redirection, so no pipe
-  // ties pi's lifetime to ours. `exec` makes the child's pid pi's pid.
+  // a writer closes; the independent event-log filter drains stdout's pipe
+  // and appends the log. `exec` makes the child's pid pi's pid.
   const shellCmd =
     `exec pi ${args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ")} ` +
     `0<> '${fifo}' > >(${logFilterShell()} >> '${log}') 2>> '${errLog}'`;

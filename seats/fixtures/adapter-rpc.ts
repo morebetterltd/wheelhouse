@@ -9,7 +9,7 @@ const root = path.resolve(process.argv[2]);
 const runtime = path.join(root, "runtime/seats");
 const peerFile = path.join(import.meta.dir, "adapter-rpc-peer.mjs");
 const clockFile = path.join(import.meta.dir, "adapter-rpc-clock.ts");
-const caseNames = ["held-reply", "swallowed-reply", "unbudgeted-reply", "working-reply", "dead-peer", "closed-pipe", "backpressure", "partial-eof", "missing-log", "lost-log", "replaced-log"];
+const caseNames = ["held-reply", "swallowed-reply", "unbudgeted-reply", "working-reply", "steer-budget", "resume-budget", "dead-peer", "closed-pipe", "backpressure", "partial-eof", "missing-log", "lost-log", "replaced-log"];
 // Optional exact-case diagnosis; the unfiltered full sweep runs every case.
 const wanted = process.env.WHEELHOUSE_TEST_RPC_CASES?.split(",").map(s => s.trim());
 if (wanted) assert(wanted.every(name => caseNames.includes(name)), "unknown RPC case selection");
@@ -84,7 +84,7 @@ for (const kind of cases) {
   delete env.WHEELHOUSE_PROMPT_ACK_MS;
   delete env.WHEELHOUSE_FIFO_WRITE_MS;
   delete env.WHEELHOUSE_RPC_GIVE_UP_AFTER_MS;
-  if (['held-reply','swallowed-reply','unbudgeted-reply','working-reply'].includes(kind)) env.WHEELHOUSE_RPC_VIRTUAL_CLOCK = '1';
+  if (['held-reply','swallowed-reply','unbudgeted-reply','working-reply','steer-budget','resume-budget'].includes(kind)) env.WHEELHOUSE_RPC_VIRTUAL_CLOCK = '1';
   const invocations: any[] = [];
   function cli(args: string[], preload = false, extra: Record<string,string> = {}) {
     const command = ["bun", ...(preload ? ["--preload", clockFile] : []), path.join(project, "seats/adapter.ts"), ...args];
@@ -156,7 +156,32 @@ for (const kind of cases) {
       await assertSourceLost(cli(["dispatch", "reviewer-1", "new-bead", kind], true), forbidden);
       continue;
     }
-    if (['held-reply','swallowed-reply','unbudgeted-reply','working-reply'].includes(kind)) {
+    if(kind==='resume-budget') {
+      let barrier=next('peer-closed');send('exit');await barrier;
+      const ready=next('ready'),held=next('held');
+      const request=cli(['resume','reviewer-1'],true,{WHEELHOUSE_RPC_GIVE_UP_AFTER_MS:'40000',WHEELHOUSE_RPC_FIXTURE_START_HELD:'1'});
+      const beforeExit=(event:Promise<any>)=>Promise.race([event,request.finished.then(result=>{throw Error('resume exited before barrier: '+JSON.stringify(result));})]);
+      const fresh=await beforeExit(ready),command=await beforeExit(held);
+      const armed=fileSignal(path.join(clock,'armed'));try{await beforeExit(armed.promise);}finally{armed.close();}
+      fs.writeFileSync(path.join(clock,'observe'),'readiness budget control\n');
+      const forbidden=fileSignal(path.join(clock,'progress'));
+      fs.writeFileSync(path.join(clock,'step'),'60001');
+      try{
+        const outcome=await Promise.race([request.finished.then(result=>({result})),forbidden.promise.then(()=>({continued:true}))]);
+        if('continued' in outcome){request.child.kill('SIGTERM');await request.finished;throw Error('resume budget ignored: WAIT before owned-client cancellation');}
+        assert.equal(outcome.result.rc,3,outcome.result.err);assert.match(outcome.result.err,/STOP: seat "reviewer-1" .*has not answered get_state/);
+        const after=JSON.parse(fs.readFileSync(stateFile,'utf8')).seats['reviewer-1'];
+        assert.equal(after.pid,fresh.pid);assert.notEqual(after.pid,pid);assert.equal(after.sessionFile,state.seats['reviewer-1'].sessionFile);
+        assert.doesNotThrow(()=>process.kill(fresh.pid,0));assert.equal(peers.get(fresh.pid).closed,false);
+        assert(!events.some(event=>event.type==='term'||event.type==='signal'),'readiness refusal must bypass launch-only termination');
+        const notes=fs.readFileSync(log,'utf8').trim().split('\n').map(line=>JSON.parse(line)).filter(row=>row.type==='wheelhouse_note'&&row.message.startsWith('rpc unanswered:'));
+        assert.equal(notes.length,1);assert.equal(notes[0].rpc.id,command.id);
+      }finally{forbidden.close();}
+      console.log('PASS resume-budget: readiness exit 3; fresh pid and known session retained; no launch-only signal');
+      continue;
+    }
+    if (['held-reply','swallowed-reply','unbudgeted-reply','working-reply','steer-budget'].includes(kind)) {
+      const budgeted=kind==='swallowed-reply'||kind==='steer-budget';
       const notes = () => fs.readFileSync(log,'utf8').trim().split('\n').map(line=>JSON.parse(line)).filter(row=>row.type==='wheelhouse_note'&&/^rpc (unanswered|answered late):/.test(row.message));
       const assertFacts = (message:string) => {
         assert.match(message,/seat "reviewer-1" \(pid \d+\) has not answered get_state across \d+ reports/);
@@ -173,7 +198,7 @@ for (const kind of cases) {
         for(const file of ['progress','observe','armed','step','history.jsonl']) fs.rmSync(path.join(clock,file),{force:true});
         let barrier=next('holding');send('hold');await barrier;
         barrier=next('held');
-        const request=cli(['dispatch','reviewer-1','new-bead',kind],true,kind==='swallowed-reply'?{WHEELHOUSE_RPC_GIVE_UP_AFTER_MS:'40000'}:{});
+        const request=cli(kind==='steer-budget'?['steer','reviewer-1','owned fixture steer']:['dispatch','reviewer-1','new-bead',kind],true,budgeted?{WHEELHOUSE_RPC_GIVE_UP_AFTER_MS:'40000'}:{});
         const beforeExit=(event:Promise<any>)=>Promise.race([event,request.finished.then(result=>{throw Error('client exited before held barrier: '+JSON.stringify(result));})]);
         const held=await beforeExit(barrier);
         const armed=fileSignal(path.join(clock,'armed'));try{await beforeExit(armed.promise);}finally{armed.close();}
@@ -196,7 +221,7 @@ for (const kind of cases) {
             const progress=await tick();assert(!progress.message.includes('has not answered'),'working seat must not be named');
           }
           assert.equal(named,false);assert.equal(notes().length,0);
-        } else if(kind==='swallowed-reply') {
+        } else if(budgeted) {
           for(let i=0;i<6;i++)await tick();
         } else {
           for(let i=0;i<20&&!named;i++)await tick();
@@ -205,7 +230,7 @@ for (const kind of cases) {
           if(logical<60001)await tick(60001);
           assert(logical>60000,'unset-budget control must pass old 20s/60s budgets');
         }
-        if(kind==='swallowed-reply') {
+        if(budgeted) {
           const forbidden=fileSignal(path.join(clock,'progress'),()=>JSON.parse(fs.readFileSync(path.join(clock,'progress'),'utf8')).observations>observations);
           fs.writeFileSync(path.join(clock,'step'),'60001');
           try {

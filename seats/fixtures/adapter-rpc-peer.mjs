@@ -12,7 +12,7 @@ const socket = net.connect(process.env.WHEELHOUSE_RPC_FIXTURE_SOCKET);
 const send = message => socket.write(JSON.stringify(message) + "\n");
 const out = message => process.stdout.write(JSON.stringify(message) + "\n");
 const input = readline.createInterface({ input: process.stdin });
-let buffer = "", hold = false, pauseAfterState = false;
+let buffer = "", hold = process.env.WHEELHOUSE_RPC_FIXTURE_START_HELD === '1', pauseAfterState = false;
 let pending = [];
 socket.on("connect", () => send({
   type: "ready", token: process.env.WHEELHOUSE_RPC_FIXTURE_TOKEN,
