@@ -1156,8 +1156,8 @@ if [ -n "${BATCH_SEED_LOG:-}" ] && [ -s "$BATCH_SEED_LOG" ]; then
     pass "batch CLI reuses one real passing descendant sweep and records batch/reviewed tip and log"
   else fail "batch CLI acceptance/record failed rc=$RC out=$OUT"; fi
   if bun - "$BATCH_SEED_LOG" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md" "$VARGV" <<'JS'
-import fs from 'node:fs';import assert from 'node:assert/strict';
-const [log,record,argv]=process.argv.slice(2),text=fs.readFileSync(log,'utf8'),receipt=fs.readFileSync(record,'utf8'),prompt=fs.readFileSync(require('path').join(require('path').dirname(argv),'prompt.txt'),'utf8');
+import fs from 'node:fs';import assert from 'node:assert/strict';import path from 'node:path';
+const [log,record,argv]=process.argv.slice(2),text=fs.readFileSync(log,'utf8'),receipt=fs.readFileSync(record,'utf8'),prompt=fs.readFileSync(path.join(path.dirname(argv),'prompt.txt'),'utf8');
 const seconds=/selftest-sweep: PASS .*\/slowed.selftest.sh elapsed=([0-9]+)s/.exec(text);assert(seconds);
 const footer=/^selftest-sweep: PASS \(1 suite\(s\), [0-9]+s\)$/m.exec(text);assert(footer);
 for(const output of [receipt,prompt])for(const expected of ['selftest-sweep: tier=full suites=1',footer[0],`slowed.selftest.sh: ${seconds[1]}s`])assert(output.includes(expected),expected);
@@ -1770,10 +1770,10 @@ bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=
 rm -f "$HOME_FIX/.pi-seats-mixedv/reviewer/invoked" "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json"
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && bun -e '
-  import fs from "node:fs";
+  import fs from "node:fs"; import path from "node:path";
   const args = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const flagAfter = (flag) => { const i = args.indexOf(flag); return i >= 0 && /^--/.test(args[i+2] ?? ""); };
-  const prompt = fs.readFileSync(require("path").join(require("path").dirname(process.argv[1]), "prompt.txt"), "utf8");
+  const prompt = fs.readFileSync(path.join(path.dirname(process.argv[1]), "prompt.txt"), "utf8");
   if (!prompt || args.includes(prompt)) process.exit(1);
   if (!args.includes("--permission-mode") || args[args.indexOf("--permission-mode")+1] !== "acceptEdits") process.exit(2);
   if (!flagAfter("--allowed-tools") || !flagAfter("--disallowed-tools")) process.exit(3);

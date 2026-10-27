@@ -342,10 +342,10 @@ bun -e "import fs from 'node:fs'; const p='$proj/seats/seats.json'; const j=JSON
 rm -f "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"
 rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-claude-tools" 2>&1) || rc=$?
 if [ "$rc" -eq 0 ] && bun -e '
-  import fs from "node:fs";
+  import fs from "node:fs"; import path from "node:path";
   const args = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const flagAfter = (flag) => { const i = args.indexOf(flag); return i >= 0 && /^--/.test(args[i+2] ?? ""); };
-  const prompt = fs.readFileSync(require("path").join(require("path").dirname(process.argv[1]), "prompt.txt"), "utf8");
+  const prompt = fs.readFileSync(path.join(path.dirname(process.argv[1]), "prompt.txt"), "utf8");
   if (!prompt || args.includes(prompt)) process.exit(1);
   if (!args.includes("--permission-mode") || args[args.indexOf("--permission-mode")+1] !== "acceptEdits") process.exit(2);
   if (!flagAfter("--allowed-tools") || !flagAfter("--disallowed-tools")) process.exit(3);
