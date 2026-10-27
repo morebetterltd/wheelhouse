@@ -342,8 +342,8 @@ function pushInProgress(root: string, p: string, live: Set<string> | null): stri
   const processLines = observation.stdout.split("\n");
   if (!processLines.some(line => Number(/^\s*(\d+)\s+/.exec(line)?.[1]) === process.pid)) return "cannot verify pushes in flight: native process table lacks the observing process";
   for (const line of processLines) {
-    const m = line.match(/^\s*(\d+)\s+(.*)$/);
-    if (!m || !/\bgit(-remote-\w+)?\b.*\bpush\b/.test(m[2])) continue;
+    const m = line.match(/^\s*(\d+)\s+(.*)$/s);
+    if (!m || !/\bgit(-remote-\w+)?\b.*\bpush\b/s.test(m[2])) continue;
     const cwd = processCwd(Number(m[1]));
     if (cwd && (insideOf(cwd, path.resolve(p)) || insideOf(cwd, realpathOr(p) ?? p))) return `pid ${m[1]} is running git push`;
   }

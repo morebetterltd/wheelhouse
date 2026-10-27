@@ -9,7 +9,7 @@ import conditions from './wait-for-condition.cjs';
 const { waitForCondition, reconcileConditions } = conditions;
 const [mode, ...args] = process.argv.slice(2);
 const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-const psPattern = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\w+\s+\w+\s+\d+\s+[\d:]+\s+\d+)\s+(.*)$/;
+const psPattern = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\w+\s+\w+\s+\d+\s+[\d:]+\s+\d+)\s+(.*)$/s;
 type Row = { pid: number; ppid: number; pgid: number; stat: string; birth: string; command: string; cwd?: string };
 type Receipt = { root: string; stateDir: string; leader: Row; suite: Row; publisher: Row; members: Row[]; launch: any };
 function native(file: string, argv: string[], options: any = {}) {
@@ -21,7 +21,9 @@ function native(file: string, argv: string[], options: any = {}) {
 }
 function snapshot() {
   // Schema captured from actual ps/lsof before this consumer was written.
-  const ps = native('ps', ['-ww', '-axo', 'pid=,ppid=,pgid=,stat=,lstart=,command=']);
+  const ps = native('ps', ['-ww', '-axo', 'pid=,ppid=,pgid=,stat=,lstart=,command='], { env: { LC_ALL: process.platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8' } });
+  const separatorRow = ps.stdout.split('\n').find(line => new RegExp(`^\\s*${separatorSubject.pid}\\s+`).test(line));
+  assert(separatorRow?.includes('\u2028') && separatorRow.includes('\u2029'), 'native UTF-8 separator subject must exist for every snapshot');
   const cwd = native('lsof', ['-d', 'cwd', '-Fpcn']);
   assert(ps.stdout.length && cwd.stdout.length, 'empty native inventory');
   const rows: Row[] = ps.stdout.trim().split('\n').map(line => {
@@ -67,7 +69,17 @@ function replaceOnce(text: string, from: string, to: string) {
   assert.equal(text.split(from).length, 2, 'mutation/instrumentation anchor must match exactly once');
   return text.replace(from, to);
 }
-if (mode === 'review') {
+// Keep a bounded, directly owned separator-bearing native process alive for
+// every snapshot. Its argv/cwd deliberately do not impersonate a fixture seat.
+const separatorSubject = spawn('/bin/sleep', ['120'], { argv0: 'lifetime-line\u2028paragraph\u2029end', cwd: '/', stdio: 'ignore' });
+const separatorStarted = new Promise<void>((resolve, reject) => { separatorSubject.once('spawn', () => resolve()); separatorSubject.once('error', reject); });
+const separatorDone = new Promise(resolve => separatorSubject.once('close', resolve));
+await separatorStarted;
+try {
+if (mode === 'snapshot') {
+  snapshot();
+  console.log('PASS adapter lifetime snapshot: live U+2028/U+2029 subject parsed');
+} else if (mode === 'review') {
   // Run the REAL dispatcher sweep preparation, never a review/model, over a
   // scratch inventory containing exactly one selected adapter suite. The
   // admitted outer suite holds host admission throughout this child. Never
@@ -277,3 +289,7 @@ git -C "$2" add seats || exit 2
   }
   keep('results', records); assert.equal(failures, 0, `${failures} adapter lifetime case(s) failed`);
 } else throw Error('unknown adapter lifetime mode');
+} finally {
+  if (separatorSubject.exitCode === null && separatorSubject.signalCode === null) separatorSubject.kill('SIGTERM');
+  await separatorDone;
+}
