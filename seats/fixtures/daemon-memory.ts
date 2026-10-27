@@ -231,8 +231,14 @@ if(control==='fixed'&&kind==='desk'){
     if(name==='parent-exit'){assert(source.includes("?'process.exit(0);':"));source=source.replace("?'process.exit(0);':","?'setInterval(()=>{},1000);':");}
     const owned=path.join(root,'setup-'+name+'.ts'),record=path.join(root,'setup-'+name+'.json');fs.writeFileSync(owned,source);
     const label=probe.includes('shutdown')?'DIGEST_SHUTDOWN':'DIGEST_LIFETIME';
-    assert.throws(()=>digestProbe(label,owned,file,mode,record,0),new RegExp('fixture setup incomplete: '+name+' wait'));
+    const diagnostics:string[]=[],nativeError=console.error;
+    console.error=(...args:any[])=>{diagnostics.push(args.join(' '));nativeError(...args);};
+    try{
+      assert.throws(()=>digestProbe(label,owned,file,mode,record,0),(error:any)=>error instanceof assert.AssertionError&&error.message.startsWith('fixture setup incomplete: '+name+' wait; record='));
+    }finally{console.error=nativeError;}
     const measured=JSON.parse(fs.readFileSync(record,'utf8'));assert.equal(measured.setup,name);assert.equal(measured.success,false);assert(Number.isFinite(measured.elapsedMs)&&measured.elapsedMs>=0);
+    const prefix=label+'_SETUP ',line=diagnostics.find(line=>line.startsWith(prefix));assert(line,'setup failure must print its diagnostic record');
+    const diagnostic=JSON.parse(line.slice(prefix.length));assert.equal(diagnostic.setup,name);assert.equal(diagnostic.elapsedMs,measured.elapsedMs);assert(diagnostic.stderr.includes('fixture setup incomplete: '+name+' wait'));
     console.log('PASS '+label+' setup control: '+name+' wait diagnosed, native_rc=2 never accepted as rejection');
   }
 }
