@@ -25,10 +25,11 @@ Date.now = () => {
 // budget. Only controlled held cases freeze it; drain/source-loss cases keep
 // native time. Each step is released by the fixture after an observed report.
 if (process.env.WHEELHOUSE_RPC_VIRTUAL_CLOCK === '1') {
+  let armed = 0;
   Object.defineProperty(performance, 'now', { value: () => {
     const step = path.join(dir, 'step');
     const value = fs.existsSync(step) ? Number(fs.readFileSync(step, 'utf8')) : 0;
-    if (new Error().stack?.includes('at rpcReplyProgress (')) fs.writeFileSync(path.join(dir, 'armed'), 'reply monitor observed\n');
+    if (new Error().stack?.includes('at rpcReplyProgress (')) fs.writeFileSync(path.join(dir, 'armed'), String(++armed));
     return value;
   } });
 }

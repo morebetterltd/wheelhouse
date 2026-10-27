@@ -13,7 +13,7 @@ const send = message => socket.write(JSON.stringify(message) + "\n");
 const out = message => process.stdout.write(JSON.stringify(message) + "\n");
 const input = readline.createInterface({ input: process.stdin });
 let buffer = "", hold = process.env.WHEELHOUSE_RPC_FIXTURE_START_HELD === '1', pauseAfterState = false;
-let pending = [];
+let pending = [], holdPrompt = false;
 socket.on("connect", () => send({
   type: "ready", token: process.env.WHEELHOUSE_RPC_FIXTURE_TOKEN,
   pid: process.pid, ppid: process.ppid, uid: process.getuid(), cwd: process.cwd(),
@@ -26,6 +26,7 @@ socket.on("data", data => {
     buffer = buffer.slice(i + 1);
     switch (message.type) {
       case "hold": hold = true; send({ type: "holding" }); break;
+      case 'hold-prompt': holdPrompt = true; send({type:'holding'}); break;
       case "release":
         hold = false;
         for (const reply of pending) out(reply);
@@ -64,7 +65,8 @@ input.on("line", line => {
       send({ type: "input-paused" });
     }
   } else if (command.type === "prompt") {
-    out({ type: "response", id: command.id, success: true });
+    const reply = {type:'response',id:command.id,success:true};
+    if(holdPrompt){pending.push(reply);send({type:'held',id:command.id});}else out(reply);
     out({ type: "agent_end" });
   }
 });

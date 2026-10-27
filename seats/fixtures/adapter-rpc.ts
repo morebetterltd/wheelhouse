@@ -9,7 +9,7 @@ const root = path.resolve(process.argv[2]);
 const runtime = path.join(root, "runtime/seats");
 const peerFile = path.join(import.meta.dir, "adapter-rpc-peer.mjs");
 const clockFile = path.join(import.meta.dir, "adapter-rpc-clock.ts");
-const caseNames = ["held-reply", "swallowed-reply", "unbudgeted-reply", "working-reply", "steer-budget", "resume-budget", "dead-peer", "closed-pipe", "backpressure", "partial-eof", "missing-log", "lost-log", "replaced-log"];
+const caseNames = ["held-reply", "swallowed-reply", "unbudgeted-reply", "working-reply", "steer-budget", "resume-budget", "prompt-budget", "dead-peer", "closed-pipe", "backpressure", "partial-eof", "missing-log", "lost-log", "replaced-log"];
 // Optional exact-case diagnosis; the unfiltered full sweep runs every case.
 const wanted = process.env.WHEELHOUSE_TEST_RPC_CASES?.split(",").map(s => s.trim());
 if (wanted) assert(wanted.every(name => caseNames.includes(name)), "unknown RPC case selection");
@@ -84,7 +84,7 @@ for (const kind of cases) {
   delete env.WHEELHOUSE_PROMPT_ACK_MS;
   delete env.WHEELHOUSE_FIFO_WRITE_MS;
   delete env.WHEELHOUSE_RPC_GIVE_UP_AFTER_MS;
-  if (['held-reply','swallowed-reply','unbudgeted-reply','working-reply','steer-budget','resume-budget'].includes(kind)) env.WHEELHOUSE_RPC_VIRTUAL_CLOCK = '1';
+  if (['held-reply','swallowed-reply','unbudgeted-reply','working-reply','steer-budget','resume-budget','prompt-budget'].includes(kind)) env.WHEELHOUSE_RPC_VIRTUAL_CLOCK = '1';
   const invocations: any[] = [];
   function cli(args: string[], preload = false, extra: Record<string,string> = {}) {
     const command = ["bun", ...(preload ? ["--preload", clockFile] : []), path.join(project, "seats/adapter.ts"), ...args];
@@ -180,11 +180,13 @@ for (const kind of cases) {
       console.log('PASS resume-budget: readiness exit 3; fresh pid and known session retained; no launch-only signal');
       continue;
     }
-    if (['held-reply','swallowed-reply','unbudgeted-reply','working-reply','steer-budget'].includes(kind)) {
-      const budgeted=kind==='swallowed-reply'||kind==='steer-budget';
+    if (['held-reply','swallowed-reply','unbudgeted-reply','working-reply','steer-budget','prompt-budget'].includes(kind)) {
+      const budgeted=kind==='swallowed-reply'||kind==='steer-budget'||kind==='prompt-budget';
+      const commandType=kind==='prompt-budget'?'prompt':'get_state';
       const notes = () => fs.readFileSync(log,'utf8').trim().split('\n').map(line=>JSON.parse(line)).filter(row=>row.type==='wheelhouse_note'&&/^rpc (unanswered|answered late):/.test(row.message));
       const assertFacts = (message:string) => {
-        assert.match(message,/seat "reviewer-1" \(pid \d+\) has not answered get_state across \d+ reports/);
+        assert.match(message,/seat "reviewer-1" \(pid \d+\) has not answered (get_state|prompt) across \d+ reports/);
+        assert(message.includes('has not answered '+commandType),message);
         assert.match(message,/command taken from FIFO \(unread bytes 0, non-consuming descriptor\)|FIFO unread bytes unknown/);
         assert.match(message,/CPU time delta \d+ ms; seat log byte size \d+/);
         assert(message.includes(`fd 0: FIFO held by pid ${pid}`),message);
@@ -196,12 +198,12 @@ for (const kind of cases) {
       for(let round=0;round<rounds;round++) {
         fs.writeFileSync(stateFile,JSON.stringify(state)); // force the same owned cross-bead preflight each round
         for(const file of ['progress','observe','armed','step','history.jsonl']) fs.rmSync(path.join(clock,file),{force:true});
-        let barrier=next('holding');send('hold');await barrier;
+        let barrier=next('holding');send(kind==='prompt-budget'?'hold-prompt':'hold');await barrier;
         barrier=next('held');
         const request=cli(kind==='steer-budget'?['steer','reviewer-1','owned fixture steer']:['dispatch','reviewer-1','new-bead',kind],true,budgeted?{WHEELHOUSE_RPC_GIVE_UP_AFTER_MS:'40000'}:{});
         const beforeExit=(event:Promise<any>)=>Promise.race([event,request.finished.then(result=>{throw Error('client exited before held barrier: '+JSON.stringify(result));})]);
         const held=await beforeExit(barrier);
-        const armed=fileSignal(path.join(clock,'armed'));try{await beforeExit(armed.promise);}finally{armed.close();}
+        const armed=fileSignal(path.join(clock,'armed'),()=>fs.existsSync(path.join(clock,'armed'))&&Number(fs.readFileSync(path.join(clock,'armed'),'utf8'))>=(kind==='prompt-budget'?2:1));try{await beforeExit(armed.promise);}finally{armed.close();}
         fs.writeFileSync(path.join(clock,'observe'),'native WAIT observation\n');
         let logical=0,observations=0,named=false;
         async function tick(nextLogical=logical+5001) {
@@ -236,8 +238,12 @@ for (const kind of cases) {
           try {
             const outcome=await Promise.race([request.finished.then(result=>({result})),forbidden.promise.then(()=>({continued:true}))]);
             if('continued' in outcome){request.child.kill('SIGTERM');await request.finished;throw Error('budget ignored: native WAIT after 60001ms, before owned-client cancellation');}
-            assert.equal(outcome.result.rc,3,outcome.result.err);assert.match(outcome.result.err,/^STOP: seat "reviewer-1" \(pid \d+\) has not answered get_state/m);assertFacts(outcome.result.err);
-            assert.deepEqual(JSON.parse(fs.readFileSync(stateFile,'utf8')),state,'budget leaves seat state untouched');
+            assert.equal(outcome.result.rc,3,outcome.result.err);assert.match(outcome.result.err,/^STOP: seat "reviewer-1" \(pid \d+\) has not answered (get_state|prompt)/m);assertFacts(outcome.result.err);
+            const after=JSON.parse(fs.readFileSync(stateFile,'utf8'));
+            if(kind==='prompt-budget'){
+              assert.equal(after.seats['reviewer-1'].pid,pid);assert.equal(after.seats['reviewer-1'].sessionFile,state.seats['reviewer-1'].sessionFile);
+              assert.equal(after.seats['reviewer-1'].lastBead,'new-bead','already-delivered prompt keeps its dispatch context');
+            }else assert.deepEqual(after,state,'preflight budget leaves seat state untouched');
             assert.equal(peer.closed,false);assert.doesNotThrow(()=>process.kill(pid,0));
             const unanswered=notes();assert.equal(unanswered.length,1);assert.equal(unanswered[0].rpc.id,held.id);
           }finally{forbidden.close();}

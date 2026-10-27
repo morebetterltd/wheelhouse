@@ -1721,6 +1721,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   try {
     resp = await sameCwdDriver.prompt(rec, promptText, "followUp");
   } catch (e: any) {
+    if (e instanceof RpcGiveUp) throw e;
     die(`dispatch prompt failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
   }
   if (!resp.success) {
