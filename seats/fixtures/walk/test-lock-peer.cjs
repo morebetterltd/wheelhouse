@@ -24,7 +24,7 @@ const pause = () => new Promise(resolve => setTimeout(resolve,10));
   }
   while (!fs.existsSync(path.join(dir,'start-suite'))) await pause();
   if (mode === 'queue') {
-    child = cp.spawn('bash',[process.env.WALK_LOCK_HEAVY,'/bin/true'],{env:process.env,stdio:['ignore','inherit','inherit']});
+    child = cp.spawn('bash',[process.env.WALK_LOCK_HEAVY,'true'],{env:process.env,stdio:['ignore','inherit','inherit']});
     const result = await new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',(code,signal)=>resolve({code,signal}));});
     fs.writeFileSync(path.join(dir,'suite-close.json'),JSON.stringify(result));
     if (interrupted) process.exit(signals[interrupted]);

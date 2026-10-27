@@ -53,7 +53,7 @@ async function runCase(mode:'initial'|'queue'|'unrelated') {
   } else {
    await until(()=>fs.existsSync(dir+'/launched.json'),[w],'verifier launch before holder');
    h=await holder(lock);
-   if(mode==='unrelated')other=start('bash',[fleet+'/seats/heavy-test.sh','/bin/true'],env);
+   if(mode==='unrelated')other=start('bash',[fleet+'/seats/heavy-test.sh','true'],env);
    fs.writeFileSync(dir+'/start-suite','yes');
    await until(()=>fs.readdirSync(lock+'.queue').filter(n=>/^[0-9]{20}\./.test(n)).length===2,[w,h.h,...(other?[other]:[])],'real queued suite ticket');
    queuedBefore=fs.readdirSync(lock+'.queue').filter(n=>/^[0-9]{20}\./.test(n)).map(n=>JSON.parse(fs.readFileSync(path.join(lock+'.queue',n),'utf8')));
