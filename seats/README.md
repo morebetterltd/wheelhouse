@@ -704,8 +704,12 @@ remain errors. Cancel a hung command explicitly; the admitted selftest sweep sup
 test containment. Staffing growth and stop-all busy actors use observed events
 and explicit release, never elapsed startup/turn clocks.
 Status's one whole-host `ps` orphan census uses the same descriptor capture.
-Native errors/signals/nonzero, diagnostics, empty or malformed census output
-produce `UNVERIFIED orphan census` rather than an empty-table inference.
+Command lines containing a newline, U+2028 LINE SEPARATOR or U+2029 PARAGRAPH
+SEPARATOR are ordinary command text, not malformed records (native `ps` may
+escape the newline). Native errors/signals/nonzero exits, diagnostics, empty
+output or a row missing the expected PID, parent PID, start-time or command
+fields still produce `UNVERIFIED orphan census` rather than an empty-table
+inference.
 Healthy recorded seat rows remain visible; an unavailable census neither proves
 absence of extra processes nor changes seat identity/state. Adapter regression
 cases replay actual captured process records beyond the old pipe ceiling and
