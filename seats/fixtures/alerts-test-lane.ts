@@ -62,11 +62,14 @@ function supervise(label: string, args: string[], cwd: string) {
   children.push(child);
   const done = new Promise<number | null>(resolve => child.once("exit", code => resolve(code)));
   // Hard containment only for this private fixture family, never host admission.
-  const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch {} }, 110000);
+  const timer = setTimeout(() => {
+    if(child.exitCode===null&&child.signalCode===null) try { process.kill(-child.pid!, "SIGKILL"); } catch {}
+  }, 110000);
   const run = { child, done, output, timer }; supervised.push(run); return run;
 }
 const json = (f: string) => JSON.parse(fs.readFileSync(f, "utf8"));
-const rows = () => fs.existsSync(inbox) ? fs.readFileSync(inbox, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)).filter(r => r.source?.name === "test-lane-held") : [];
+const alertRows = () => fs.existsSync(inbox) ? fs.readFileSync(inbox, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)).filter(r => r.class === "alert") : [];
+const rows = () => alertRows().filter(r => r.source?.name === "test-lane-held");
 const active = () => json(snapshot).alerts["test-lane-held"]?.active === true;
 function reset() { for (const f of [snapshot, inbox, log]) fs.rmSync(f, { force: true }); }
 async function check(at: number) {
@@ -88,7 +91,7 @@ async function sensitive(name: string, needle: string, replacement: string, at: 
     console.log(`REJECT lane ${name}: actual check exit=0; consumer assertion fails with source control ${JSON.stringify(needle)}`);
   } finally { fs.writeFileSync(file, implementation); }
 }
-function fired() { assert(active() && rows().length === 1, "FIRE: one active lane row required"); }
+function fired() { assert(active() && rows().length === 1 && alertRows().length === 1, "FIRE: exactly one active inbox alert row required"); }
 function running(marker: any, before: string) {
   assert(process.kill(marker.pid, 0), "NO_ACTION: holder remains alive");
   assert(!fs.existsSync(signals) || !fs.readFileSync(signals, "utf8"), "NO_ACTION: holder received a signal");
