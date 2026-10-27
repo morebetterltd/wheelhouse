@@ -142,7 +142,8 @@ function diagnose(error: any, parent?: number, name?: string) {
   if (parent !== undefined && name) { capture(parent, name, 1); capture(parent, `${name}.queue`, 1); capture(parent, `${name}.host`, 1); }
   console.error("SELFTEST_LOCK_REFUSAL " + JSON.stringify({ operation: process.argv[2], lock: process.argv[3], reason: error.message,
     host: { hostname: HOST, hostId, identitySource, identityFailures, knownHostnames: [...hostNames], platform: process.platform },
-    ...(error.ancestryObservations ? { ancestryObservations: error.ancestryObservations } : {}), observed, snapshots }));
+    ...(error.ancestryObservations ? { ancestryObservations: error.ancestryObservations } : {}),
+    ...(error.ownership ? { ownership: error.ownership } : {}), observed, snapshots }));
 }
 // Async supervisor failures may occur outside a transition's pinned parent.
 // Reopen only for a diagnostic snapshot; never repair state from this path.
@@ -631,7 +632,17 @@ function main(): number {
     }
     if (op === "refresh") {
       const snapshot = inspect(parent, name);
-      if (!owned || snapshot.identity !== owned || snapshot.marker.pid !== pid || snapshot.marker.token !== token || !alive(pid)) throw new Refused("cannot refresh a different lock owner");
+      const payloadAlive = alive(pid);
+      const mismatches: string[] = [];
+      if (!owned) mismatches.push("missing caller identity");
+      else if (snapshot.identity !== owned) mismatches.push("identity");
+      if (snapshot.marker.pid !== pid) mismatches.push("pid");
+      if (snapshot.marker.token !== token) mismatches.push("token");
+      if (!payloadAlive) mismatches.push("payload liveness");
+      if (mismatches.length) throw Object.assign(new Refused(`cannot refresh a different lock owner (${mismatches.join(", ")})`), {
+        ownership: { mismatches, caller: { pid, token, identity: owned || null, payloadAlive },
+          lock: { pid: snapshot.marker.pid, token: snapshot.marker.token, identity: snapshot.identity } },
+      });
       const queue = queueFd(parent, `${name}.queue`, false);
       if (queue === null) throw new Refused("cannot refresh without FIFO ownership");
       try {
