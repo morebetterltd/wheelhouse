@@ -24,6 +24,14 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 prune_fixture_start "$@"
 selftest_install_cleanup_traps cleanup
 
+phase 'run-scratch task-id boundaries with an unreadable open list'
+if bash "$HERE/fixtures/prune-prefix-run.sh" "$PRUNE"; then
+  pass 'a longer task id is not attributed to a shorter closed one'
+  pass 'exact, dash and underscore closed-task scratch remains safe and is automatically removed'
+else
+  fail 'run-scratch task-id boundary regression'
+fi
+
 # Harness falsifiers stay full-tier; the real enclosing-Git check is core.
 if bun "$HERE/fixtures/prune-nested-git.ts" "$HERE" "$FIX/nested-controls" "$PRUNE"; then
   pass 'nested Git leak check detects HEAD/index corruption, child failure and timeout'

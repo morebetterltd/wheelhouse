@@ -22,7 +22,8 @@ const bin=path.dirname(process.env.WALK_LOCK_PEER_BIN!); assert(fs.statSync(bin)
 fs.copyFileSync(peer,bin+'/pi'); fs.chmodSync(bin+'/pi',0o755);
 // An accidental graph invocation cannot mutate the install or a handmade graph.
 fs.writeFileSync(bin+'/bd','#!/bin/sh\necho "SETUP: this fixture must not invoke bd" >&2\nexit 99\n',{mode:0o755});
-const reply='OUTCOME: O1 PASS — fixture result\nOUTCOME: O2 PASS — fixture guide\nOUTCOME: O3 PASS — fixture command\nVERDICT: WALKED-DONE\n';
+// The verifier answers only the contract's person-facing outcomes; O3 is machine.
+const reply='OUTCOME: O1 PASS — fixture result\nOUTCOME: O2 PASS — fixture guide\nVERDICT: WALKED-DONE\n';
 function start(file:string,args:string[],env:any=process.env) {
  const p=spawn(file,args,{cwd:fleet,env,stdio:['ignore','pipe','pipe']});let stdout='',stderr='',error:any;let stdoutEOF=false,stderrEOF=false;
  p.stdout.on('data',b=>stdout+=b);p.stderr.on('data',b=>stderr+=b);p.stdout.on('end',()=>stdoutEOF=true);p.stderr.on('end',()=>stderrEOF=true);p.once('error',e=>error=e);

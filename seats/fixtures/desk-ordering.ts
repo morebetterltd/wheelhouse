@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { observeDesk, events, completion, http } from "./desk-observation";
+import { observeDesk, observeDigest, events, completion, http } from "./desk-observation";
 const [fixture, template] = process.argv.slice(2);
 assert(fs.statSync(path.join(fixture, ".wheelhouse-selftest-fixture")).isFile());
 async function until(test: () => boolean, child: ReturnType<typeof Bun.spawn>, label: string) {
@@ -21,6 +21,7 @@ for (const kind of ["board", "digest-page", "needs-during-digest"]) for (const b
   fs.writeFileSync(path.join(seats, "needs.jsonl"), JSON.stringify({ type: "opened", id: "ordering-need", at: new Date().toISOString(), kind: "question", title: "Ordering fixture", body: "A real response", options: [], machine: {} }) + "\n");
   const gate = path.join(root, "release"), stub = path.join(root, "bin/bd");
   fs.writeFileSync(stub, `#!/usr/bin/env bun\nimport fs from "node:fs";const root=${JSON.stringify(root)};fs.writeFileSync(root+"/bd-enter/"+process.pid+".json",JSON.stringify({pid:process.pid,args:process.argv.slice(2)}));\nprocess.on("SIGTERM",()=>{fs.appendFileSync(root+"/bd-exits",String(process.pid)+"\\n");process.exit(143);});\nwhile(!fs.existsSync(root+"/release"))await Bun.sleep(25);console.log(process.argv[2]==="ready"?"":"[]");process.exit(0);\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(seats,"digest.ts"),observeDigest(fs.readFileSync(path.join(seats,"digest.ts"),"utf8")));
   let source = observeDesk(fs.readFileSync(path.join(seats, "desk.ts"), "utf8"));
   if (broken) {
     const anchor = 'async function handle(req: Request): Promise<Response> { const u=new URL(req.url);'; assert.equal(source.split(anchor).length, 2);

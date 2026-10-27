@@ -573,7 +573,7 @@ WHEELHOUSE_INTAKE_ROOT="$REFUSE_PROJ" BEADS_ACTOR=commander bun "$HERE/intake.ts
 bun -e 'import fs from "node:fs";const[src,dest,id]=process.argv.slice(1);fs.writeFileSync(dest,fs.readFileSync(src,"utf8").replace(/^Signal:.*$/m,"Signal: "+id));' "$FIX/dispatch-contract.md" "$FIX/produced-contract.md" "$PRODUCED_SIGNAL" || exit 2
 cp -f "$REFUSE_PROJ/seats/intake.jsonl" "$FIX/produced-ledger.before"
 WHEELHOUSE_DISPATCH_FORCE=1 WHEELHOUSE_CONTRACT_FIXTURE="$FIX/produced-contract.md" WHEELHOUSE_INTAKE_ROOT="$REFUSE_PROJ" WHEELHOUSE_INTAKE_FIXTURE="$REFUSE_PROJ/seats/intake.jsonl" run dispatch worker-1 producer-refusal 'must never reach a seat'
-[ "$RC" = 1 ] && says "refused: signal $PRODUCED_SIGNAL was produced by commander, not the producer fixture-producer" && pass 'produced-by refusal: commander disposition names signal and producer; force cannot bypass' || fail "produced-by refusal rc=$RC: $OUT"
+[ "$RC" = 1 ] && says "refused: signal $PRODUCED_SIGNAL was produced by commander, not the producer seat \"fixture-producer\"" && pass 'produced-by refusal: commander disposition names signal and producer; force cannot bypass' || fail "produced-by refusal rc=$RC: $OUT"
 fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/produced-worktrees.after"
 fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/produced-status.after"
 LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
@@ -1567,6 +1567,23 @@ else fail "status did not survive adapter restart (exit $RC): $OUT"; fi
 if ! says "account fixture-human-account"; then
   pass "status still works for a roster with no account.label"
 else fail "status carried a label from a different roster into an unlabeled seat: $OUT"; fi
+if ! says "staffing:"; then pass "adapter status has no staffing trailer without a pool"
+else fail "adapter status printed staffing trailer without pool: $OUT"; fi
+mkdir -p "$HOME_FIX/.pi-seats-proj/rv1"
+cat > "$PROJ/seats/pool.json" <<'JSON'
+{"version":1,"entries":{"rv1":{"harness":"codex","provider":"openai","models":["rv"],"account":{"dir":"~/.pi-seats-proj/rv1","authRoute":"env"}}},"roles":{"reviewers":{"min":0,"max":1,"entries":["rv1"],"model":"rv"}}}
+JSON
+run status
+if [ $RC -eq 0 ] && says "staffing: workers 1/0..0 · reviewers 0/0..1 · see bun seats/staffing.ts status"; then pass "adapter status appends staffing trailer when a pool exists"
+else fail "adapter status missing staffing trailer with pool (rc=$RC): $OUT"; fi
+# Reviewers are registered identities; they have no persistent adapter pid.
+cat > "$PROJ/seats/staffing.json" <<'JSON'
+{"version":1,"seats":{"reviewer-rv1":{"role":"reviewer","entry":"rv1","addedAt":"2026-01-01T00:00:00Z"}}}
+JSON
+run status
+if [ $RC -eq 0 ] && says "staffing: workers 1/0..0 · reviewers 1/0..1"; then pass "adapter status counts a live role reviewer in the pool trailer"
+else fail "adapter status miscounted role reviewer (rc=$RC): $OUT"; fi
+rm -f "$PROJ/seats/pool.json" "$PROJ/seats/staffing.json"
 
 phase "5. no tokens — identity never leaks into state or logs"
 if selftest_capture_lacks "$STATE" -q -- "$SENTINEL" && ! grep -rq "$SENTINEL" "$PROJ/seats/logs/"; then

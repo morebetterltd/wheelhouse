@@ -231,7 +231,10 @@ function producedByError(root: string, signal: string, row: IntakeRow, beadId: s
   if (!roster?.seats || typeof roster.seats !== "object" || Array.isArray(roster.seats)) throw new Error(`producer roster seats must be an object: ${file}`);
   const producers = Object.entries(roster.seats).filter(([, seat]: [string, any]) => seat?.role === "producer").map(([name]) => name).sort();
   if (!producers.length) return `refused: signal ${signal} has no producer seat in ${file}`;
-  if (!producers.includes(disposition.by)) return `refused: signal ${signal} was produced by ${disposition.by ?? "<missing>"}, not the producer ${producers.join(", ")}`;
+  const expectedProducer = producers.length === 1 && producers[0] === "producer"
+    ? "producer seat"
+    : `producer ${producers.length === 1 ? "seat" : "seats"} ${producers.map(name => JSON.stringify(name)).join(", ")}`;
+  if (!producers.includes(disposition.by)) return `refused: signal ${signal} was produced by ${disposition.by ?? "<missing>"}, not the ${expectedProducer}`;
   return null;
 }
 function contractErrors(root: string, text: string, requireSignal: boolean, labels: readonly string[] = [], requireSkills = REQUIRE_SKILLS, beadId?: string): string[] {

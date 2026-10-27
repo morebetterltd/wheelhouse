@@ -1,11 +1,13 @@
 /**
  * seat-worktree.ts — one persistent git worktree per seat.
  *
- * A seat's worktree is `<root>/.wheelhouse-worktrees/<seat-name>`; it carries
- * the seat across beads. Dispatching a bead does `git switch -c fleet/<bead>
+ * A seat's product anchor is `<root>/.wheelhouse-worktrees/<seat-name>`;
+ * declared umbrella tasks use a separate `umbrella-<seat-name>` anchor when
+ * the primary belongs to the product. Each carries the seat across beads in
+ * its own repository. Dispatching a bead does `git switch -c fleet/<bead>
  * <base>` (or `git switch fleet/<bead>` for a reopened bead) INSIDE that
  * worktree, so a warm build survives from one bead to the next and the fleet
- * never holds more worktrees than seats (+2 headroom). The rules, in order:
+ * applies the seats (+2 headroom) creation cap in each repository. The rules, in order:
  *
  *   1. Two seats never share a worktree: a target another seat's record
  *      already names is refused, naming the occupying seat.
@@ -72,6 +74,23 @@ export function git(root: string, args: string[], cwd?: string, env?: NodeJS.Pro
 
 export function worktreesDir(root: string): string { return path.join(root, WORKTREES_DIRNAME); }
 export function seatWorktreeDir(root: string, seat: string): string { return path.join(worktreesDir(root), validateSegment("seat name", seat)); }
+export function umbrellaSeatWorktreeDir(root: string, seat: string): string { return path.join(worktreesDir(root), `umbrella-${validateSegment("seat name", seat)}`); }
+
+/** Keep the product anchor: a declared umbrella task uses its separate anchor
+ * when the ordinary one belongs to another repo, or that alternate exists.
+ * A fresh seat still follows the original primary-anchor path. */
+function dispatchWorktreeDir(root: string, seat: string, umbrella: boolean): string {
+  const primary = seatWorktreeDir(root, seat);
+  if (!umbrella) return primary;
+  const alternate = umbrellaSeatWorktreeDir(root, seat);
+  if (fs.existsSync(alternate) || isSymlink(alternate)) return alternate;
+  if (fs.existsSync(primary)) {
+    const expected = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const actual = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], primary);
+    if (expected.ok && actual.ok && !samePath(actual.out, expected.out)) return alternate;
+  }
+  return primary;
+}
 export function beadBranch(beadId: string): string { return `fleet/${beadId}`; }
 
 export function registeredWorktrees(root: string): RegisteredWorktree[] {
@@ -136,7 +155,7 @@ function beadStatuses(root: string): Map<string, string> {
 function isLegacyWorktree(root: string, p: string, roster?: Record<string, unknown>): boolean {
   if (!isFleetWorktreePath(root, p)) return false;
   const name = path.basename(p);
-  return !(roster ? Object.keys(roster).includes(name) : false);
+  return !(roster ? Object.keys(roster).some(seat => name === seat || name === `umbrella-${seat}`) : false);
 }
 
 function legacyBeadOpen(root: string, wt: RegisteredWorktree, state: StateLike, statuses: Map<string, string>): boolean {
@@ -199,22 +218,40 @@ function pushIntegrationBaseCandidate(root: string, candidates: string[], ref: s
   candidates.push(ref);
 }
 
-/** Which base a bead branches from. Explicit wins, then the bead's own
- * `Integration:` line (via bd, when available), then the install's env
- * default, then the install's recorded merge target, then the remote's default
- * branch, then local main/master/HEAD. */
-export function resolveBase(root: string, beadId: string, explicit?: string | null, bdRoot: string = root): string {
-  const candidates: string[] = [];
-  if (explicit) candidates.push(explicit);
+/** Explicit wins. An Integration: ref is used unless it is strictly behind
+ * the resolved default line; no goal ref is created, moved or published here.
+ * Default precedence remains env, recorded merge target, origin HEAD,
+ * origin/main, origin/master, main, master, HEAD. */
+export function resolveBase(root: string, beadId: string, explicit?: string | null, bdRoot: string = root, note: (line: string) => void = () => {}): string {
+  if (explicit && refExists(root, explicit)) return explicit;
+  const integration: string[] = [];
   const fromBead = integrationLineFor(bdRoot, beadId);
-  if (fromBead) pushIntegrationBaseCandidate(root, candidates, fromBead);
-  if (process.env.WHEELHOUSE_WORKTREE_BASE) candidates.push(process.env.WHEELHOUSE_WORKTREE_BASE);
-  pushBaseCandidate(candidates, templateSourceValue(bdRoot, "merge-target"));
+  if (fromBead) pushIntegrationBaseCandidate(root, integration, fromBead);
+  const goal = integration.find(ref => refExists(root, ref));
+  const defaults: string[] = [];
+  if (process.env.WHEELHOUSE_WORKTREE_BASE) defaults.push(process.env.WHEELHOUSE_WORKTREE_BASE);
+  pushBaseCandidate(defaults, templateSourceValue(bdRoot, "merge-target"));
   const originHead = git(root, ["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"]);
-  if (originHead.ok && originHead.out) candidates.push(originHead.out);
-  candidates.push("origin/main", "origin/master", "main", "master", "HEAD");
-  for (const c of candidates) if (refExists(root, c)) return c;
-  refuse(`no base ref resolves for bead ${beadId} (tried ${candidates.join(", ")}); pass --base <ref>`);
+  if (originHead.ok && originHead.out) defaults.push(originHead.out);
+  defaults.push("origin/main", "origin/master", "main", "master", "HEAD");
+  const defaultRef = defaults.find(ref => refExists(root, ref));
+  if (goal) {
+    if (defaultRef) {
+      const goalSha = git(root, ["rev-parse", `${goal}^{commit}`]);
+      const defaultSha = git(root, ["rev-parse", `${defaultRef}^{commit}`]);
+      if (goalSha.ok && defaultSha.ok && goalSha.out !== defaultSha.out &&
+          git(root, ["merge-base", "--is-ancestor", goal, defaultRef]).ok) {
+        const unique = git(root, ["rev-list", "--count", `${defaultRef}..${goal}`]);
+        if (unique.ok && unique.out === "0") {
+          note(`Integration: ${fromBead} (${goal} at ${goalSha.out}) holds nothing the default line lacks; using ${defaultRef} at ${defaultSha.out} instead`);
+          return defaultRef;
+        }
+      }
+    }
+    return goal;
+  }
+  if (defaultRef) return defaultRef;
+  refuse(`no base ref resolves for bead ${beadId} (tried ${[...(explicit ? [explicit] : []), ...integration, ...defaults].join(", ")}); pass --base <ref>`);
 }
 
 function beadText(root: string, beadId: string): string {
@@ -576,11 +613,14 @@ export interface EnsureResult {
   previousBranch: string | null;
 }
 
-/** Prepare `<root>/.wheelhouse-worktrees/<seat>` on `fleet/<bead>`. Throws
+/** Prepare the product or separate umbrella seat anchor on `fleet/<bead>`. Throws
  * SeatWorktreeError with an operator-readable message on any refusal. */
 export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
   const root = path.resolve(o.root);
-  const seatTarget = seatWorktreeDir(root, o.seat);
+  // One declaration snapshot drives both path selection and repository choice.
+  const declaredRepo = repoLineFor(root, o.beadId);
+  const umbrella = /^UMBRELLA$/i.test(declaredRepo ?? "");
+  const seatTarget = dispatchWorktreeDir(root, o.seat, umbrella);
   let target = seatTarget;
   let branch = beadBranch(o.beadId);
   const note = o.note ?? (() => {});
@@ -601,11 +641,13 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
 
   const rec = o.state.seats?.[o.seat];
   const statuses = beadStatuses(root);
-  const recordedLegacyBead = rec?.cwd && isLegacyWorktree(root, rec.cwd, o.roster) ? path.basename(rec.cwd) : null;
+  const recordedLegacyBead = rec?.cwd && !samePath(rec.cwd, umbrellaSeatWorktreeDir(root, o.seat)) && isLegacyWorktree(root, rec.cwd, o.roster) ? path.basename(rec.cwd) : null;
   const recordedLegacy = rec?.cwd && recordedLegacyBead && statuses.get(recordedLegacyBead) !== "closed" && fs.existsSync(rec.cwd) ? rec.cwd : null;
   const namedLegacy = path.join(worktreesDir(root), o.beadId);
   const legacy = recordedLegacy ?? (fs.existsSync(namedLegacy) ? namedLegacy : null);
-  const repo = gitRepoFor(root, legacy ?? seatTarget, o.beadId);
+  // An umbrella declaration chooses its repo before considering a stale
+  // product legacy cwd. Only registered legacy trees of that repo can follow.
+  const repo = gitRepoFor(root, umbrella ? seatTarget : legacy ?? seatTarget, o.beadId, declaredRepo);
   const registered = registeredWorktrees(repo);
   const atLegacy = legacy ? registered.find((w) => samePath(w.path, legacy)) : undefined;
   // A task-named legacy directory may carry an intentional custom branch,
@@ -653,7 +695,7 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     fs.rmdirSync(target);
   }
 
-  const base = resolveBase(repo, o.beadId, o.base, root);
+  const base = resolveBase(repo, o.beadId, o.base, root, note);
   const baseTip = git(repo, ["rev-parse", `${base}^{commit}`]).out;
   const elsewhere = registeredWorktrees(repo).find((w) => (w.branch === branch || w.branch === beadBranch(o.beadId)) && !samePath(w.path, target));
   if (elsewhere) refuse(`branch ${elsewhere.branch} is already checked out at ${elsewhere.path}; cannot prepare target ${target}: a branch can be in one worktree at a time`);
@@ -774,15 +816,16 @@ export function productRepoFor(root: string): string | null {
  * target: silently reusing a product worktree would prepare the wrong repo.
  * Otherwise retain the existing target's repository, including hand-created
  * product worktrees when the umbrella itself is also a git repository. */
-export function gitRepoFor(root: string, target: string, beadId?: string): string {
-  if (beadId && /^UMBRELLA$/i.test(repoLineFor(root, beadId) ?? "")) {
+export function gitRepoFor(root: string, target: string, beadId?: string, declaredRepo?: string | null): string {
+  const declaration = declaredRepo === undefined && beadId ? repoLineFor(root, beadId) : declaredRepo;
+  if (/^UMBRELLA$/i.test(declaration ?? "")) {
     const umbrella = git(root, ["rev-parse", "--show-toplevel"]);
     const expected = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
     if (!umbrella.ok || !expected.ok) refuse(`${root} is not a git repository, but bead ${beadId} declares Repo: UMBRELLA`);
     if (fs.existsSync(target)) {
       const actual = git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], target);
       if (actual.ok && !samePath(actual.out, expected.out)) {
-        refuse(`bead ${beadId} declares Repo: UMBRELLA, but worktree ${target} belongs to another repository; refusing to create or switch its branch. Prepare an umbrella-owned seat worktree before dispatching this task.`);
+        refuse(`bead ${beadId} declares Repo: UMBRELLA, but worktree ${target} belongs to another repository; refusing to create or switch its branch. The selected umbrella target must belong to the umbrella repository.`);
       }
     }
     return umbrella.out;

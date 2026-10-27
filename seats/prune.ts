@@ -245,7 +245,11 @@ function beadFor(name: string, beads: Map<string, string>): [string, string] | n
 }
 function beadPrefix(name: string, beads: Map<string, string>, sep = ""): [string, string] | null {
   let best: [string, string] | null = null;
-  for (const [id, st] of beads) if (name.startsWith(`${id}${sep}`) && (!best || id.length > best[0].length)) best = [id, st];
+  for (const [id, st] of beads) {
+    const matches = sep ? name.startsWith(`${id}${sep}`)
+      : name === id || name.startsWith(`${id}-`) || name.startsWith(`${id}_`);
+    if (matches && (!best || id.length > best[0].length)) best = [id, st];
+  }
   return best;
 }
 function pidAlive(pid: number | null): boolean {

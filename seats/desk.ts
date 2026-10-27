@@ -2,7 +2,6 @@
 /** desk.ts — local human-needs desk. */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
 import { fold, answerNeed, addMessage, type NeedFold } from "./needs";
 import type { Digest } from "./digest";
 
@@ -41,6 +40,17 @@ const RAW_DIGEST_CACHE_MAX = Number(process.env.WHEELHOUSE_DESK_DIGEST_CACHE_MAX
 const DIGEST_CACHE_MAX = Number.isFinite(RAW_DIGEST_CACHE_MAX) ? Math.max(1, Math.floor(RAW_DIGEST_CACHE_MAX)) : 16;
 const digestCache = new Map<string, CacheEntry<Digest>>();
 const digestRefreshing = new Set<string>();
+const DIGEST_REFRESH_MAX = 2;
+const digestStops = new Set<() => void>();
+function installDigestExitCleanup(){
+  const stop = () => { for(const cancel of digestStops) cancel(); };
+  process.once("exit", stop);
+  for(const signal of ["SIGTERM","SIGINT","SIGHUP"] as const){
+    const handler = () => { stop(); process.off(signal,handler); process.kill(process.pid,signal); };
+    process.once(signal,handler);
+  }
+}
+installDigestExitCleanup();
 
 function fnv1a(s: string): number { let h = 0x811c9dc5; for (let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h >>> 0; }
 function namespace(): string { try { const m = fs.readFileSync(TEMPLATE_SOURCE,"utf8").match(/^namespace=(.+)$/m); if (m?.[1]?.trim()) return m[1].trim(); } catch {} return path.basename(ROOT); }
@@ -121,24 +131,42 @@ function digestCacheGet(key: string): Digest | undefined { const hit=digestCache
 function digestCacheSet(key: string, value: Digest){ digestCache.set(key, { at: Date.now(), value }); while(digestCache.size > DIGEST_CACHE_MAX){ const oldest=digestCache.keys().next().value; if(oldest === undefined) break; digestCache.delete(oldest); } }
 function digestCacheFresh(key: string): boolean { const hit=digestCache.get(key); return !!hit && Date.now()-hit.at < DIGEST_REFRESH_MS; }
 function scheduleDigestRefresh(win = digestWindow()){
-  if(digestRefreshing.has(win.key) || digestCacheFresh(win.key)) return;
+  if(digestRefreshing.has(win.key) || digestCacheFresh(win.key) || digestRefreshing.size >= DIGEST_REFRESH_MAX) return;
   digestRefreshing.add(win.key);
   setTimeout(() => {
     (async () => {
+      let child: ReturnType<typeof Bun.spawn> | undefined;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      let completed = false;
+      const stopChild = () => {
+        if(!child || completed) return;
+        // detached gives this job its own group; a timed-out native bd query
+        // must not outlive the digest process and accumulate orphan queries.
+        try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
+      };
+      digestStops.add(stopChild);
       try {
-        const digestModule = pathToFileURL(path.join(SEATS,"digest.ts")).href;
-        const workerCode = `self.onmessage = async (event) => { try { process.env.WHEELHOUSE_DIGEST_ROOT = event.data.root; const mod = await import(event.data.module); self.postMessage({ ok: true, digest: mod.buildDigest(event.data.since, event.data.until) }); } catch (e) { self.postMessage({ ok: false, error: String(e && e.message || e) }); } };`;
-        const worker = new Worker(URL.createObjectURL(new Blob([workerCode], { type: "text/javascript" })), { type: "module" });
-        const next = await new Promise<Digest | null>((resolve) => {
-          const killed = setTimeout(() => { try { worker.terminate(); } catch {} resolve(null); }, DIGEST_TIMEOUT_MS);
-          worker.onmessage = (event: MessageEvent) => { clearTimeout(killed); try { worker.terminate(); } catch {} resolve(event.data?.ok ? event.data.digest as Digest : null); };
-          worker.onerror = () => { clearTimeout(killed); try { worker.terminate(); } catch {} resolve(null); };
-          worker.postMessage({ root: ROOT, module: digestModule, since: win.since, until: win.until });
-        });
-        if(!next) return;
+        // Bun 1.2.22 on Darwin retained allocations when Worker VMs were recreated,
+        // even after termination/revocation. Native process exit ends that
+        // allocation lifetime; use the existing read-only JSON CLI unchanged.
+        child = Bun.spawn({cmd:[process.execPath,path.join(SEATS,"digest.ts"),"--json","--since",win.since,"--until",win.until],cwd:ROOT,
+          env:{...process.env,WHEELHOUSE_DIGEST_ROOT:ROOT,WHEELHOUSE_NEEDS_ROOT:ROOT},
+          stdin:"ignore",stdout:"pipe",stderr:"ignore",detached:true});
+        deadline = setTimeout(stopChild, DIGEST_TIMEOUT_MS);
+        const [text, code] = await Promise.all([new Response(child.stdout as ReadableStream).text(),child.exited.then(code => { completed = true; return code; })]);
+        if(code !== 0) return;
+        const next = JSON.parse(text) as Digest;
+        if(next?.window?.since !== win.since || next?.window?.until !== win.until ||
+          !["seats","shipped","blocked","cleared","inReview","sentBack","alerts"].every(key => Array.isArray((next as any)[key])) ||
+          !next.failed?.summary || !Array.isArray(next.failed.items)) return;
         digestCacheSet(win.key, next);
         if(win.isDefault) digestSnapshot = next;
-      } catch {} finally { digestRefreshing.delete(win.key); }
+      } catch {} finally {
+        if(deadline) clearTimeout(deadline);
+        if(child && !completed) { stopChild(); await child.exited.catch(() => {}); }
+        digestStops.delete(stopChild);
+        digestRefreshing.delete(win.key);
+      }
     })();
   }, 0).unref?.();
 }

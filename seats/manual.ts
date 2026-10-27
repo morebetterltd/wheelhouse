@@ -236,6 +236,14 @@ export function lintContract(text: string, manual: VerificationManual): MapContr
     if (!needed.has(map.slug)) { error = `${map.id}: map outcome ${map.slug} is not needed by any other outcome's product surface`; break; }
   }
   if (!error) for (const [slug, surface] of needed) if (!seen.has(slug)) { error = `${surface}: missing map outcome for ${slug}`; break; }
+  // A surface: none declaration owes a real manual at its first product
+  // surface, not only a map entry. Artifact-only work still owes neither.
+  const needsManualSections = manual.surface === "none" && needed.size > 0;
+  const hasManualSections = parsed.outcomes.some(outcome =>
+    outcome.surface.replace(/`/g, "").replace(/^\.\//, "") === `.agents/skills/verify-${manual.project}/SKILL.md` &&
+    outcome.group === "machine" && outcome.checkKind === "run" &&
+    MANUAL_SECTIONS.every(section => containsLiteral(outcome.claim, section)));
+  if (!error && needsManualSections && !hasManualSections) error = `missing manual-sections outcome for ${manual.project}: require ${MANUAL_SECTIONS.join(", ")} at .agents/skills/verify-${manual.project}/SKILL.md`;
   return { expected: needed.size, found: provided.length, needed: [...needed.keys()], provided: provided.map(map => map.slug), error };
 }
 function main(args: string[]): number {
@@ -259,7 +267,7 @@ function main(args: string[]): number {
   }
   if (!["check", "features", "evidence"].includes(command) || file || (json && command !== "features") || (dir && command !== "evidence") || positional.length !== (command === "evidence" ? 1 : 0) || (command === "evidence" && !dir)) throw new Error(`usage: manual.ts check|features [--repo <path>] [--project <name>] [--json]; evidence <feature> --dir <path>; ${LINT_USAGE}`);
   const manual = readManual(repo, project);
-  if (command === "check") console.log(`manual ok: ${manual.features.length} features`);
+  if (command === "check") console.log(manual.surface === "none" ? "manual ok: no surface" : `manual ok: ${manual.features.length} features`);
   else if (command === "features") console.log(json ? JSON.stringify(manual.features) : manual.features.map(feature => `${feature.slug}\t${feature.title}\n${feature.howToGetToIt}\n${feature.whatProvesItWorks}`).join("\n\n"));
   else console.log(`evidence ok: ${checkEvidence(manual, positional[0], dir!)}`);
   return 0;

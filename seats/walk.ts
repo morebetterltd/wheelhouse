@@ -641,7 +641,7 @@ function workPrompt(contract: Contract, tip: string, manual: VerificationManual 
       `  check: ${outcome.checkKind} — ${outcome.checkHow}`,
     ]),
     ``,
-    `For each outcome, go where its consumer meets it (its surface) and make the check that consumer would make: walk means drive the real page, app or CLI session as that person; read means read the artifact top to bottom and run its commands; run means run it and read the literal output. Prove each outcome true or false with your own evidence. You have not been given, and must not go looking for, the author's report, the task's history, or any fleet file; the surfaces and your cwd are the whole world.`,
+    `You receive only person-on-surface and person-reading outcomes. For each outcome given, go where that person meets it (its surface) and make their check: walk means drive the real page, app or CLI session as that person; read means read the artifact top to bottom and run its commands. Machine outcomes belong to the worker's evidence and the review's test run; they are not given to you and must not be re-run or answered here. Prove every outcome given true or false with your own evidence. You have not been given, and must not go looking for, the author's report, the task's history, or any fleet file; the surfaces and your cwd are the whole world.`,
     ...(manual ? [`Verification manual (may be used): ${manual.file}`, ...entries,
       `Follow the manual's launch, doctor, drive, evidence and cleanup. Drive named features from their entries; execute an explicit reach URL/command before driving. A failed reach step is WALKED-NOT-DONE, not permission to find another route or consult implementation source.`] : []),
     `Caller-provided RUN_DIR: ${path.join(outDir, "runtime")}`,
@@ -649,7 +649,7 @@ function workPrompt(contract: Contract, tip: string, manual: VerificationManual 
     `Use only isolated test instances, scratch state and non-production ports/sockets. Never stop, replace or modify installed applications or production service definitions. Retain evidence after cleanup.`,
     `Install root for machine-local wheelhouse/ paths: ${ROOT} (also exported as WHEELHOUSE_ROOT). Only resolve a path there when a named outcome surface sends you there.`,
     `Image budget for screen captures: full-size evidence under ${rootRelative(budget.fullDir)}; in-context JPEGs <=${IMAGE_MAX_WIDTH}px wide, first ${IMAGE_MAX_CONTEXT} only. Use wheelhouse-walk-capture <label> -- <capture-command...>.`,
-    `Retain a full transcript. End with exactly one unfenced OUTCOME row per outcome in id order, each with evidence detail:`,
+    `Retain a full transcript. End with exactly one unfenced OUTCOME row per outcome given, in original contract id order (do not renumber gaps), each with evidence detail. Never add a row for an omitted machine outcome:`,
     `OUTCOME: O<n> PASS — <what you drove, read or ran and observed>`,
     `OUTCOME: O<n> FAIL — <quoted failing step>`,
     `OUTCOME: O<n> UNREACHED — <blocker>`,
@@ -678,7 +678,11 @@ async function workMain(args: string[]): Promise<void> {
   setVerifierGateBead(bead, "seats/walk.ts");
   const checked = checkBeadContract(ROOT, bead);
   if (checked.errors.length) refuse(contractRemedy(bead, checked.errors));
-  const contract = parseContract(checked.text!);
+  const fullContract = parseContract(checked.text!);
+  // One projection governs prompt/manual entries, required rows AND timeout rows.
+  const contract: Contract = { ...fullContract, outcomes: fullContract.outcomes.filter(outcome =>
+    outcome.group === "person-on-surface" || outcome.group === "person-reading") };
+  if (!contract.outcomes.length) refuse(`${bead}: no outcome needs a walk (all outcomes are machine); use bun seats/merge-gate.ts ${bead} ${branch}`);
   const review = readReviewRecord(ROOT, bead);
   const reviewNext = `review first: bun seats/verify.ts ${bead} ${branch} ${author}`;
   if (!review) refuse(`${bead}: ${reviewNext}`);

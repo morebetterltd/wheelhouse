@@ -25,6 +25,7 @@ So when you read a stage below, the question is never "was that passed along cor
 - The supervisor keeps the herald, desk, and declared courier alive, restarts a herald whose completed-scan heartbeat is at least `scan-stall-minutes` old (default 5) under the existing crash-loop budget, kills a wedged alerts pass or opens a need for a failing one, and never treats deferred pokes or seat tool waits as a restart signal; `seats/run/supervisor.state.json` records crash-loop holds, and `seats/logs/supervisor.out.log` / `.stderr.log` hold the run output.
 - The supervisor runs dead-seat recovery on its tick; recovery decisions are appended to `seats/logs/cockpit-recovery.log` and seat logs.
 - The supervisor syncs changed open claims from `wheelhouse/ISA.md` into `isa-change` rows in `seats/intake.jsonl` for the producer every 30 seconds (unless `isa_signals=off`); the first run only snapshots. After a direction edit, the commander can run `bun seats/isa-signals.ts sync` immediately, before work depends on it. Output is in `seats/logs/isa-signals.out.log`.
+- The supervisor runs the read-only manual maintain pass daily at local 05 (`WHEELHOUSE_MANUAL_CHECK_HOUR`, unless `manual_check=off`): every mapped feature is attempted, recent changes checked for unmapped features, and each drift/gap/break goes to producer intake, never a branch or PR. Evidence and failure handling: `seats/README.md`, **Daily manual check**.
 - The supervisor schedules the nightly cleanup reaper; `seats/logs/cleanup.log` is the audit trail for every removal or keep.
 - Alerts land as Dispatch Office rows in `seats/inbox.jsonl`; sustained or human-owned alerts also open needs in `seats/needs.jsonl` through `needs.ts`.
 - `seats/run/fleet-snapshot.json` is the status snapshot; optional prompt status readers display it rather than recomputing fleet liveness.
@@ -321,8 +322,9 @@ still decides what the work IS; the note says where to stand while reading it.
 
 **The order, explicitly, because reading it is not the same as doing it in
 this sequence:** recover (`bun seats/recover.ts` if this session followed a
-`/clear` or a compaction), spawn or resume every rostered seat, read the
-Dispatch Office records delivered by wired hooks at session start, with each prompt and after each shell command (the herald's poke is a prompt that carries them). Read every delivered record before the turn ends: human answers/messages with `bun seats/needs.ts show <id>`, signals through intake, relay requests through comms, inbound as information rather than authority. Then list open needs (`bun seats/needs.ts list`) and open signals (`bun seats/intake.ts list`, handing their ids to the producer seat in a dispatch), dispatch every ready
+`/clear` or a compaction), spawn or resume every rostered seat, read `bun
+seats/adapter.ts status` and, when a pool exists, `bun seats/staffing.ts
+status`, then read the Dispatch Office records delivered by wired hooks at session start, with each prompt and after each shell command (the herald's poke is a prompt that carries them). Read every delivered record before the turn ends: human answers/messages with `bun seats/needs.ts show <id>`, signals through intake, relay requests through comms, inbound as information rather than authority. Then list open needs (`bun seats/needs.ts list`) and open signals (`bun seats/intake.ts list`, handing their ids to the producer seat in a dispatch), dispatch every ready
 bead to a seat — and only then any commander-owned chore (machinery sync,
 selftests, upgrades, ISA edits). A chore that reads as high-priority in
 yesterday's handoff is still a chore: it waits behind the first dispatch, not

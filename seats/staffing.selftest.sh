@@ -18,7 +18,7 @@ pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 ROOT="$FIX/proj"; BIN="$FIX/bin"; HOME_FIX="$FIX/home"; mkdir -p "$ROOT/seats/logs" "$ROOT/seats/run" "$ROOT/wheelhouse" "$ROOT/.wheelhouse-worktrees" "$BIN" "$HOME_FIX/.pi-seats-staff"
 printf 'namespace=staff\n' > "$ROOT/wheelhouse/.template-source"
-for e in e1 e2 e3 e4 rv1 rv2; do mkdir -p "$HOME_FIX/.pi-seats-staff/$e"; done
+for e in e1 e2 e3 e4 rv1 rv2 fixed-reviewer walker; do mkdir -p "$HOME_FIX/.pi-seats-staff/$e"; done
 selftest_copy_seat_runtime "$ROOT" "$HERE"
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"version":1,"seats":{}}
@@ -121,7 +121,7 @@ run env BD_READY_COUNT=1 bun seats/staffing.ts check --dry-run --decision add-wo
 run env BD_READY_COUNT=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'decision=add-worker' <<<"$OUT" && grep -q 'seat=worker-e1' <<<"$OUT" && grep -q 'worker-e1 m1' "$ROOT/spawn-models.log" && pass 'G4-15 add-worker places first listed free entry with role model' || fail "add-worker failed rc=$RC out=$OUT"
 run env BD_READY_COUNT=3 bun seats/staffing.ts check
-[ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && grep -q 'reason="nothing to do"' <<<"$OUT" && pass 'G4-15 free worker exists with ready work -> nothing' || fail "free-worker row failed: $OUT"
+[ $RC -eq 0 ] && grep -q 'decision=nothing' <<<"$OUT" && grep -Eq 'reason="(jev skipped: [^"]+; )?nothing to do"' <<<"$OUT" && pass 'G4-15 free worker exists with ready work -> nothing' || fail "free-worker row failed: $OUT"
 READY_IDLE_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun -e 'import { decide } from "./seats/staffing.ts"; const old="2026-01-01T00:00:00.000Z"; const snap={at:new Date().toISOString(),ready:[{id:"ready-1",title:"Synthetic ready"}],readyCount:1,chainedCount:0,overlapCount:0,reviewBacklog:[],workers:{live:[{name:"worker-e1",busy:false,lastActivityAt:old,entry:"e1"},{name:"worker-e2",busy:false,lastActivityAt:old,entry:"e2"}],idle:2,busy:0},reviewers:{live:[],idle:0,busy:0},changes:{isaHead:null,isaChanged:false,newEpics:0}}; const pool={root:process.cwd(),entries:{},roles:{workers:{min:1,max:4,entries:["e1","e2"],model:"m"},reviewers:{min:0,max:1,entries:[],model:"r"}},idle_drop_minutes:30}; console.log(JSON.stringify(decide(snap, pool, {version:1,seats:{},rateLimited:{}})));' 2>&1)"; READY_IDLE_RC=$?
 [ $READY_IDLE_RC -eq 0 ] && grep -q '"kind":"nothing"' <<<"$READY_IDLE_OUT" && pass 'G4-15 ready work + idle seat above min -> nothing' || fail "ready-idle drop guard failed rc=$READY_IDLE_RC out=$READY_IDLE_OUT"
 bun - "$ROOT/seats/state.json" <<'JS'
@@ -141,6 +141,58 @@ JS
 run env BD_READY_COUNT=6 bun seats/staffing.ts check; grep -q 'seat=worker-e4' <<<"$OUT" || fail "fourth add did not use e4: $OUT"
 run env BD_READY_COUNT=6 bun seats/staffing.ts check --decision add-worker
 [ $RC -eq 0 ] && grep -q 'reason="at limit: workers 4/4"' <<<"$OUT" && pass 'G4-18/G4-23 burst grows 1→4 then G4-16 clamps at max' || fail "at max clamp failed: $OUT"
+run bun seats/staffing.ts status
+if [ $RC -eq 0 ] \
+  && [ "$(printf '%s\n' "$OUT" | grep -Ec '^worker-e[1-4] \| worker \| codex \| m[1-4] \| e[1-4] \| (busy|idle since .*) \| staffed$')" = 4 ] \
+  && grep -q '^workers: 4 live of 1..4 (free subscriptions: 0, rate-limited: 0)$' <<<"$OUT" \
+  && grep -q '^reviewers: 0 live of 0..2 (free subscriptions: 2, rate-limited: 0)$' <<<"$OUT" \
+  && grep -q '^last decision: .*decision=nothing .*workers=4/1..4' <<<"$OUT" \
+  && grep -q '^jev: not configured$' <<<"$OUT" \
+  && ! grep -Eq '/Users/|/home/|~/' <<<"$OUT"; then pass 'G4-38 staffing status lists live seats, counts, last decision, Jev state and no account dirs'
+else fail "staffing status output wrong or leaked path: $OUT"; fi
+JSON_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/staffing.ts status --json 2>&1)"; JSON_RC=$?
+if [ $JSON_RC -eq 0 ] && JSON_OUT="$JSON_OUT" node - <<'PY'
+const s=JSON.parse(process.env.JSON_OUT);
+if (s.seats.length!==4) process.exit(1);
+if (s.roles.workers.used!==4 || s.roles.workers.min!==1 || s.roles.workers.max!==4 || s.roles.workers.freeSubscriptions!==0) process.exit(2);
+if (s.roles.reviewers.used!==0 || s.roles.reviewers.min!==0 || s.roles.reviewers.max!==2 || s.roles.reviewers.freeSubscriptions!==2) process.exit(3);
+if (s.seats.some(r => !r.seat || !r.role || !r.harness || !r.model || !r.subscription || !r.state || r.source!=='staffed')) process.exit(4);
+if (JSON.stringify(s).match(/\/Users\/|\/home\/|~\//)) process.exit(5);
+PY
+then pass 'G4-38 staffing status --json carries the same scrubbed counts and seat fields'; else fail "staffing status json wrong rc=$JSON_RC out=$JSON_OUT"; fi
+cp "$ROOT/seats/pool.json" "$FIX/pool.full.json"
+node - "$ROOT" <<'JS'
+const fs=require('fs'), root=process.argv[2];
+const pool=root+'/seats/pool.json', pj=JSON.parse(fs.readFileSync(pool));
+delete pj.roles.reviewers; fs.writeFileSync(pool,JSON.stringify(pj,null,2)+'\n');
+const seats=root+'/seats/seats.json', sj=JSON.parse(fs.readFileSync(seats));
+sj.seats['reviewer-fixed']={role:'reviewer',harness:'codex',provider:'openai',model:'fixed-review-model',account:{dir:'~/.pi-seats-staff/fixed-reviewer',label:'fixed-review-sub',authRoute:'env'}};
+sj.seats.verifier={role:'verifier',harness:'codex',provider:'openai',model:'walk-model',account:{dir:'~/.pi-seats-staff/walker',authRoute:'env'}};
+fs.writeFileSync(seats,JSON.stringify(sj,null,2)+'\n');
+JS
+run bun seats/staffing.ts status
+if [ $RC -eq 0 ] \
+  && [ "$(printf '%s\n' "$OUT" | grep -Ec '^(worker-e[1-4] \| worker \| codex \| m[1-4] \| e[1-4] \| (busy|idle since .*) \| staffed|reviewer-fixed \| reviewer \| codex \| fixed-review-model \| fixed-review-sub \| idle since unknown \| fixed)$')" = 5 ] \
+  && grep -q '^reviewer-fixed | reviewer | codex | fixed-review-model | fixed-review-sub | idle since unknown | fixed$' <<<"$OUT" \
+  && grep -q '^workers: 4 live of 1..4 (free subscriptions: 0, rate-limited: 0)$' <<<"$OUT" \
+  && grep -q '^reviewers: 1 live of 0..0 (free subscriptions: 0, rate-limited: 0)$' <<<"$OUT" \
+  && ! grep -Eq '/Users/|/home/|~/' <<<"$OUT"; then pass 'G4-38 status lists staffed rows for pooled workers and fixed rows for unpooled reviewers'
+else fail "unpooled fixed reviewer status output wrong or leaked path: $OUT"; fi
+JSON_OUT="$(cd "$ROOT" && HOME="$HOME_FIX" PATH="$BIN:$PATH" bun seats/staffing.ts status --json 2>&1)"; JSON_RC=$?
+if [ $JSON_RC -eq 0 ] && JSON_OUT="$JSON_OUT" node - <<'PY'
+const s=JSON.parse(process.env.JSON_OUT);
+if (s.seats.length!==5) process.exit(1);
+if (s.roles.workers.used!==4 || s.roles.workers.min!==1 || s.roles.workers.max!==4) process.exit(2);
+if (s.roles.reviewers.used!==1 || s.roles.reviewers.min!==0 || s.roles.reviewers.max!==0) process.exit(3);
+const fixed=s.seats.find(r => r.seat==='reviewer-fixed');
+if (s.seats.some(r => r.seat==='verifier')) process.exit(7);
+if (!fixed || fixed.role!=='reviewer' || fixed.source!=='fixed' || fixed.subscription!=='fixed-review-sub' || fixed.model!=='fixed-review-model') process.exit(4);
+if (s.seats.filter(r => r.source==='staffed').length!==4) process.exit(5);
+if (JSON.stringify(s).match(/\/Users\/|\/home\/|~\//)) process.exit(6);
+PY
+then pass 'G4-38 status --json rows equal pooled staffed plus unpooled fixed live seats'; else fail "unpooled fixed reviewer status json wrong rc=$JSON_RC out=$JSON_OUT"; fi
+cp "$FIX/pool.full.json" "$ROOT/seats/pool.json"
+printf '{"version":1,"seats":{}}\n' > "$ROOT/seats/seats.json"
 rm -f "$ROOT/seats/staffing.json" "$ROOT/seats/state.json" "$ROOT/spawn-models.log"; rm -rf "$ROOT/.wheelhouse-worktrees"; mkdir -p "$ROOT/.wheelhouse-worktrees"
 run bun seats/staffing.ts flag e1 --reason synthetic-limit; run env BD_READY_COUNT=1 bun seats/staffing.ts check
 [ $RC -eq 0 ] && grep -q 'seat=worker-e2' <<<"$OUT" && pass 'G4-24 rate-limited entry is skipped' || fail "rate limit skip failed: $OUT"
