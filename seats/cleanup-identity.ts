@@ -42,6 +42,20 @@ function openAt(fd: number, name: string, directory = false) {
   return f;
 }
 function id(fd: number) { const s = fs.fstatSync(fd, { bigint: true }); return `${s.dev}:${s.ino}`; }
+// st_dev is a mount-session number (it can change on reboot), not persistent
+// volume authority. Keep the stored format for v1/v2 compatibility, compare its
+// inode, and require the opened directory to be on the install's CURRENT volume.
+// Live descriptor/path/race proofs still use the complete id() unchanged.
+function recordedDirectoryMatches(recorded: unknown, identity: string, root: string): boolean {
+  const pattern = /^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$/;
+  const previous = typeof recorded === "string" ? pattern.exec(recorded) : null;
+  const current = pattern.exec(identity);
+  if (!previous || !current) return false;
+  const rootStat = fs.lstatSync(root, { bigint: true });
+  return rootStat.isDirectory() && !rootStat.isSymbolicLink()
+    && current[1] === String(rootStat.dev)
+    && previous[2] === current[2];
+}
 function unlinkAt(fd: number, name: string, directory = false) {
   if (native.symbols.unlinkat(fd, z(name), directory ? (darwin ? 0x80 : 0x200) : 0)) fail(`remove ${name}`);
 }
@@ -105,6 +119,7 @@ function validRecordFields(m: any, kind: string) {
 }
 function validRecord(m: any, kind: string) { return validRecordFields(m, kind) && markerHostMatches(m); }
 function record(kind: string, root: string, identity: string) {
+  if (!recordedDirectoryMatches(identity, identity, root)) throw new CleanupRefused("cleanup ownership directory is on a different volume from its install root");
   const host = requireStableHost();
   return { kind, version: 2, root, identity, pid: process.pid, hostname: HOST, hostId: host.hostId, token: randomUUID().replaceAll("-", ""), started: new Date().toISOString().replace(/\.\d{3}Z$/, "Z") };
 }
@@ -145,6 +160,7 @@ function runtime(root: string) {
     }
     const proof = cleanupPathIdentity(root, path.join(root, "seats", "run"));
     if (proof.chain.at(-1)!.identity !== id(fd)) throw new CleanupRefused("seats/run changed during inspection");
+    if (!recordedDirectoryMatches(id(fd), id(fd), root)) throw new CleanupRefused("seats/run is on a different volume from its install root");
     return { fd, proof };
   } catch (e: any) { fs.closeSync(fd); throw new CleanupRefused(`${root}/seats/run: ${e.message}`); }
 }
@@ -152,6 +168,7 @@ export function prepareCleanupRuntime(root: string) { const r = runtime(root); f
 function inspectLock(parent: number, root: string) {
   const fd = openAt(parent, "cleanup.lock", true);
   try {
+    if (!recordedDirectoryMatches(id(fd), id(fd), root)) throw new CleanupRefused("cleanup.lock is on a different volume from its install root");
     const names = entries(fd), legacy = JSON.stringify(names) === '["pid"]';
     if (!legacy && JSON.stringify(names) !== JSON.stringify(["pid", LOCK_MARKER].sort())) throw new CleanupRefused("cleanup.lock entries must be exactly pid (legacy), or pid and ownership marker");
     const pid = readMember(fd, "pid");
@@ -161,7 +178,7 @@ function inspectLock(parent: number, root: string) {
     if (!legacy) {
       const marker = readMember(fd, LOCK_MARKER); members[LOCK_MARKER] = marker;
       const m = JSON.parse(marker.raw);
-      if (!validRecord(m, LOCK_MARKER) || m.root !== root || m.identity !== id(fd) || m.pid !== owner) throw new CleanupRefused("cleanup.lock ownership marker does not match root/inode/pid");
+      if (!validRecord(m, LOCK_MARKER) || m.root !== root || !recordedDirectoryMatches(m.identity, id(fd), root) || m.pid !== owner) throw new CleanupRefused("cleanup.lock ownership marker does not match root/inode/pid");
       token = m.token;
     }
     return { identity: id(fd), owner, token, members };
@@ -301,6 +318,7 @@ export function prepareTaskScratch(root: string, bead: string) {
     parent = openAt(rootFd, ".wheelhouse-runs", true);
     const proof = cleanupPathIdentity(root, path.dirname(target));
     if (proof.chain.at(-1)!.identity !== id(parent)) throw new CleanupRefused("scratch parent changed during creation");
+    if (!recordedDirectoryMatches(id(parent), id(parent), root)) throw new CleanupRefused("scratch parent is on a different volume from its install root");
     const unchanged = () => { if (!cleanupPathUnchanged(root, path.dirname(target), proof)) throw new CleanupRefused("scratch parent changed during creation"); };
     // An existing marker is validated, not replaced. Missing markers remain
     // missing, including legacy empty directories; only the creator can claim.
@@ -312,7 +330,12 @@ export function prepareTaskScratch(root: string, bead: string) {
     let present = -1;
     try { present = openAt(parent, bead, true); }
     catch (e: any) { if (e.errno !== 2) throw e; }
-    if (present >= 0) { fs.closeSync(present); return existing(); }
+    if (present >= 0) {
+      try {
+        if (!recordedDirectoryMatches(id(present), id(present), root)) throw new CleanupRefused("scratch directory is on a different volume from its install root");
+      } finally { fs.closeSync(present); }
+      return existing();
+    }
     requireStableHost(); // Do not publish an unmarked task if identity lookup failed.
     temporary = `.scratch-create-${randomUUID()}`;
     if (native.symbols.mkdirat(parent, z(temporary), 0o700)) fail("mkdir scratch candidate");
@@ -341,7 +364,7 @@ export function prepareTaskScratch(root: string, bead: string) {
   }
 }
 function scratchContextMatches(m: any, root: string, target: string, identity: string, bead?: string) {
-  return m.root === root && m.target === target && m.identity === identity
+  return m.root === root && m.target === target && recordedDirectoryMatches(m.identity, identity, root)
     && typeof m.bead === "string" && m.bead.length > 0 && (bead === undefined || m.bead === bead)
     && (path.basename(target) === m.bead || path.basename(target).startsWith(m.bead + "-") || path.basename(target).startsWith(m.bead + "_"));
 }

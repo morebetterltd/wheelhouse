@@ -4,6 +4,7 @@
 import * as fs from "node:fs";
 import * as cp from "node:child_process";
 import * as os from "node:os";
+import * as path from "node:path";
 import * as ffi from "bun:ffi";
 import { mock } from "bun:test";
 const nativeFs = { ...fs }, nativeCp = { ...cp }, nativeOs = { ...os }, nativeFfi = { ...ffi };
@@ -33,9 +34,28 @@ const readFileSync = ((file: any, ...args: any[]) => {
   }
   return (nativeFs.readFileSync as any)(file, ...args);
 }) as typeof fs.readFileSync;
+// Fixture-only restart/mount observations. Inodes, modes, contents and actual
+// filesystem operations are real; only the observed device fields change.
+const shift = Number(process.env.CLEANUP_FIXTURE_DEVICE_SHIFT || "0");
+if (!Number.isSafeInteger(shift) || shift < 0) throw new Error("invalid fixture device shift");
+const other = process.env.CLEANUP_FIXTURE_OTHER_VOLUME;
+const otherInodes = new Set<string>();
+function inventory(file: string) {
+  const st = nativeFs.lstatSync(file, { bigint: true }); otherInodes.add(String(st.ino));
+  if (st.isDirectory()) for (const name of nativeFs.readdirSync(file)) inventory(path.join(file, name));
+}
+if (other) inventory(other);
+function observed(st: any) {
+  const change = shift + (otherInodes.has(String(st.ino)) ? 1 : 0);
+  if (change) Object.defineProperty(st, "dev", { value: typeof st.dev === "bigint" ? st.dev + BigInt(change) : st.dev + change, enumerable: true, configurable: true });
+  return st;
+}
+const lstatSync = ((...args: any[]) => observed((nativeFs.lstatSync as any)(...args))) as typeof fs.lstatSync;
+const statSync = ((...args: any[]) => observed((nativeFs.statSync as any)(...args))) as typeof fs.statSync;
+const fstatSync = ((...args: any[]) => observed((nativeFs.fstatSync as any)(...args))) as typeof fs.fstatSync;
 const hostname = () => process.env.CLEANUP_FIXTURE_HOST ?? "network-after";
 mock.module("node:child_process", () => ({ ...nativeCp, execFileSync, default: { ...nativeCp.default, execFileSync } }));
-mock.module("node:fs", () => ({ ...nativeFs, readFileSync, default: { ...nativeFs.default, readFileSync } }));
+mock.module("node:fs", () => ({ ...nativeFs, readFileSync, lstatSync, statSync, fstatSync, default: { ...nativeFs.default, readFileSync, lstatSync, statSync, fstatSync } }));
 mock.module("node:os", () => ({ ...nativeOs, hostname, default: { ...nativeOs.default, hostname } }));
 if (process.env.CLEANUP_FIXTURE_FAIL_ADOPTION_LOGS === "1") {
   // Exercise a real FFI error/errno, not a fabricated CLI refusal. An invalid

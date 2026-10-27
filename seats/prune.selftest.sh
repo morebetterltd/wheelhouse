@@ -256,6 +256,11 @@ mkdir -p "$EXT/seats/run"; printf '{"seat":"worker-1","branch":"fleet/%s","workt
 OUT=$(ext_cleanup --bead "$PUSH_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ -d "$EWTS/$PUSH_ID" ] && printf '%s\n' "$OUT" | grep >/dev/null "kept needs-review $EWTS/$PUSH_ID reason=deferred: push in progress" && pass 'worktree kept with "deferred: push in progress" while the push marker names a live pid' || fail "mid-push rc=$RC: $OUT"
 rm -f "$EXT/seats/run/push.worker-1.json"; kill "$PUSH_PID" >/dev/null 2>&1; wait "$PUSH_PID" 2>/dev/null
+if bun "$HERE/fixtures/prune-push-separators.ts" "$EXT" "$EWTS/$PUSH_ID" "$EXT/seats/prune.ts"; then
+  pass 'push with a line separator in its command line defers cleanup'
+else
+  fail 'separator-bearing push was not deferred without a push marker'
+fi
 OUT=$(ext_cleanup --bead "$PUSH_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ ! -e "$EWTS/$PUSH_ID" ] && printf '%s\n' "$OUT" | grep >/dev/null "removed merged-worktree $EWTS/$PUSH_ID " && pass 'worktree removed once the push has ended' || fail "post-push rc=$RC: $OUT"
 

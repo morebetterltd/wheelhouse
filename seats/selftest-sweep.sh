@@ -365,12 +365,16 @@ acquire_lock(){
     [ "$rc" = 75 ] || { info "STOP: selftest-sweep ancestry check failed (exit $rc)"; exit 2; }
   fi
   while :; do
-    result="$(bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
+    result="$(WHEELHOUSE_SELFTEST_SWEEP_CAPTURE_IDENTITY=1 bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
     case "$rc" in
-      0) ENROLLED=1; OWNED_LOCK="$result"
-         # Admission-only: nested fixture runners keep ordinary wait semantics.
+      0)
+        ENROLLED=1; OWNED_LOCK="${result%%$'\n'*}"
+        WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY=""
+        case "$result" in *$'\n'*) WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY="${result#*$'\n'}" ;; esac
+        export WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY
+        # Admission-only: nested fixture runners keep ordinary wait semantics.
          unset WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT
-         return 0 ;;
+        return 0 ;;
       75) ENROLLED=1
           # Opt-in nightly admission: EXIT withdraws only our validated ticket.
           # Ordinary reviews retain FIFO waiting. Status 75 means skipped.

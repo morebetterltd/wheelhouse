@@ -141,6 +141,7 @@ build_proj(){
   mkdir -p "$proj/seats" "$proj/contracts" "$HOME_FIX/.pi-seats-$ns/verifier"
   selftest_copy_seat_runtime "$proj" "$HERE"
   cp -f "$WALK" "$proj/seats/walk.ts"
+  cp -f "$(dirname "$WALK")/walk-test-lock.ts" "$proj/seats/walk-test-lock.ts"
   cp -f "$VERIFY" "$proj/seats/verify.ts"
   chmod +x "$proj/seats/walk.ts" "$proj/seats/evidence-scrub.sh"
   cat > "$proj/contracts/VERIFIER.md" <<'EOF'
@@ -171,6 +172,16 @@ EOF
     || { echo "selftest: could not build fixture git repo" >&2; exit 2; }
 }
 
+run_test_lock_fixture(){
+  local proj="$FIX/proj-test-lock" ns="walk-test-lock" lock_bin="$FIX/test-lock-bin"
+  build_proj "$proj" "$ns"
+  mkdir -p "$lock_bin"
+  HOME="$HOME_FIX" PATH="$lock_bin:$RUN_PATH" WALK_LOCK_PEER_BIN="$lock_bin/pi" \
+    bun "$HERE/fixtures/walk/test-lock.ts" "$proj" "$HOME_FIX/.pi-seats-$ns/verifier" "$HERE/fixtures/contracts/valid.md" "$HERE/fixtures/walk/test-lock-peer.cjs"
+}
+# This path invokes no bd command and never runs the legacy review seed suite.
+if [ "${WHEELHOUSE_WALK_TEST_LOCK_ONLY:-0}" = 1 ]; then run_test_lock_fixture; exit $?; fi
+
 run_work_fixture(){
   local proj="$FIX/proj-work" ns="walk-work"
   build_proj "$proj" "$ns"
@@ -199,6 +210,9 @@ TS
   then pass "verifier spawn receives env budget $expected"
   else fail "verifier spawn armed budget differs from env $expected"; fi
 }
+
+phase 'work walk test-lock timing (no graph writes)'
+if run_test_lock_fixture; then pass 'test-lock timing assertions completed'; else fail 'test-lock timing assertions failed'; fi
 
 phase 'captured malformed GUI output: match the actual verdict line, not other text'
 if bun - "$CLOCK" "$HERE/fixtures/walk/gui-malformed-output.txt" <<'TS'
