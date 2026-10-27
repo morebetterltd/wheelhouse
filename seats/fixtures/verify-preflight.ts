@@ -66,7 +66,7 @@ async function unit() {
 const runner = `#!/usr/bin/env bash
 set -eu
 root=$(pwd -P)
-bun -e 'const fs=require("fs"),cp=require("node:child_process");fs.appendFileSync(process.env.Q7MP_LEDGER,JSON.stringify({cwd:process.cwd(),tip:cp.execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),pattern:process.env.WHEELHOUSE_SELFTEST_SWEEP_PATTERN||null,marker:process.env.Q7MP_ENV,hermetic:process.env.WHEELHOUSE_SKIP_REAL_PI})+"\\n")'
+bun -e 'import fs from "node:fs";import cp from "node:child_process";fs.appendFileSync(process.env.Q7MP_LEDGER,JSON.stringify({cwd:process.cwd(),tip:cp.execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),pattern:process.env.WHEELHOUSE_SELFTEST_SWEEP_PATTERN||null,marker:process.env.Q7MP_ENV,hermetic:process.env.WHEELHOUSE_SKIP_REAL_PI})+"\\n")'
 selected=\${WHEELHOUSE_SELFTEST_SWEEP_PATTERN:-"$root/seats/audit.selftest.sh $root/seats/ordinary.selftest.sh"}
 set -- $selected
 printf 'selftest-sweep: tier=full suites=%s\\n' "$#"
