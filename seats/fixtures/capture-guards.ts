@@ -8,7 +8,7 @@ assert(fs.statSync(seats).isDirectory());
 assert(fs.existsSync(path.join(fix, ".wheelhouse-selftest-fixture")));
 // Inventory is explicit: removing a call/site must not silently shrink coverage.
 const inventory = new Map([
-  ["adapter.selftest.sh", 5], ["walk.selftest.sh", 3],
+  ["adapter.selftest.sh", 6], ["walk.selftest.sh", 3],
   ["verify.selftest.sh", 3], ["reset.selftest.sh", 2],
   ["herald.selftest.sh", 1], ["desk.selftest.sh", 6],
   ["isolation.selftest.sh", 5], ["prune.selftest.sh", 1],
@@ -56,14 +56,31 @@ for (const [file, expected] of inventory) {
     assert(exprs.length > 0, `${file}:${i + 1}: no capture expression`);
     const captures = [...new Set(exprs)];
     // Preserve the entire actual if/pass/fail assertion, not a reimplementation.
-    let end = i;
-    if (lines[i].trimStart().startsWith("if ")) {
+    let start = i, end = i;
+    // A guard may be on a continued condition line: retain its whole real if,
+    // not a syntactically invalid fragment beginning with &&.
+    while (start > 0 && !lines[start].trimStart().startsWith("if ") && lines[start - 1].trimEnd().endsWith("\\")) start--;
+    if (lines[start].trimStart().startsWith("if ")) {
       while (!/(?:^|;)\s*fi\s*$/.test(lines[end])) {
         end++;
         assert(end < lines.length, `${file}:${i + 1}: unterminated assertion`);
       }
     }
-    const assertion = lines.slice(i, end + 1).join("\n");
+    const assertion = lines.slice(start, end + 1).join("\n");
+    const context = file === "adapter.selftest.sh" && assertion.includes("OLD_HEADER_SESSION") ? `
+# Make this assertion's non-capture prerequisites true, so a missing/empty
+# argv file must be rejected by the real selftest_capture_lacks call.
+GONE_SESSION_CWD="$FIX/gone session cwd"; RECORDED_RESUME_CWD="$SEAT_WT"
+OLD_HEADER_SESSION="$FIX/old-session.jsonl"
+mkdir -p "$RECORDED_RESUME_CWD"
+printf 'old session\\n' > "$OLD_HEADER_SESSION"
+cp -f "$OLD_HEADER_SESSION" "$FIX/session-before-cold-resume.jsonl"
+printf 'new session\\n' > "$FIX/new-session.jsonl"
+SESSION_CWD_RESUME_RC=0
+SESSION_CWD_RESUME_OUT="session-file cwd is gone: $GONE_SESSION_CWD; session continuity intentionally dropped; resuming fresh in $RECORDED_RESUME_CWD"
+state_get(){ case "$1" in cwd) printf '%s' "$RECORDED_RESUME_CWD";; pid) printf '%s' "$$";; sessionFile) printf '%s' "$FIX/new-session.jsonl";; *) printf fresh;; esac; }
+says(){ [ "$1" = RUNNING ]; }
+` : "";
     for (const expression of captures) {
       try {
         const errors: string[] = [];
@@ -71,7 +88,7 @@ for (const [file, expected] of inventory) {
           try {
             const dir = path.join(fix, String(i) + "-" + file.replaceAll("/", "-"), mode);
             fs.mkdirSync(dir, { recursive: true });
-            const script = prelude + `
+            const script = prelude + context + `
 ${file === "channel-credentials.selftest.sh" ? "RC=1" : ""}
 # Seed ALL inputs to a multi-capture assertion, then corrupt exactly one.
 ${captures.map(e => `capture=${e}\nmkdir -p "$(dirname "$capture")"\nprintf '{"captured":true}\\n' > "$capture"`).join("\n")}
