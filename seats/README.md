@@ -1164,7 +1164,13 @@ bun seats/walk.ts --work <bead-id> --branch <ref> --author <author-seat> [--repo
 Do not mix `--work` with a positional claim, `--surface` or `--baseline`.
 `--branch` and `--author` are required. The contract is checked first, before
 account selection or any verifier spawn; missing/invalid contracts refuse5 with
-the contract remedy. The verifier's canonical account directory must differ
+the contract remedy. Only `person-on-surface` and `person-reading` outcomes
+need a walk. A machine-only contract refuses5 with “no outcome needs a walk”
+and a pointer to `bun seats/merge-gate.ts <bead> <ref>`, before account selection,
+scratch checkout or verifier spawn. Machine outcomes rest on the worker's
+command evidence and the review's test run; they are not re-run by the verifier.
+The walk's time budget is for the person-facing outcomes only, not a repeat of
+the review's sweep. The verifier's canonical account directory must differ
 from the author's (roster, with retired-seat state fallback), using the same
 shared gate as the reviewer. Same-account and credential refusals exit5;
 usage/unresolved-ref errors exit1.
@@ -1189,13 +1195,16 @@ The product resolver is shared with `verify.ts`: default the install root or
 install root. Pin `<ref>^{commit}`, not the author's current checkout. The
 verifier runs in a detached scratch worktree at that tip; a product subdirectory
 keeps its location inside the tree. Its prompt contains only the contract's
-Intent and reconstructed Outcomes (consumer, surface, check), pinned tip and
-surface setup — no bead title, metadata, comments/history, worker report,
+Intent and reconstructed person-facing Outcomes (consumer, surface, check),
+pinned tip and surface setup — no machine outcome claims, surfaces or checks,
+bead title, metadata, comments/history, worker report,
 author identity or branch name. A validated manual is named when present;
 entries for feature slugs named in outcome surfaces are included. Launch,
 doctor, drive, evidence and cleanup come from that snapshot, not live edits.
 
-End with one plain, unfenced row per outcome in id order, then one verdict:
+End with one plain, unfenced row per person-facing outcome given, in original
+contract id order (do not renumber gaps), then one verdict. Machine outcomes
+are neither given nor answered; adding a machine row is malformed:
 
 ```text
 OUTCOME: O1 PASS — <what was driven, read or run and observed>
@@ -1211,9 +1220,11 @@ requires COULD-NOT-WALK naming the first UNREACHED; all PASS requires WALKED-DON
 Verdict exits remain0/2/3. Claim mode keeps its existing single-verdict behavior.
 
 `walk.json` adds `mode: "work"`, `bead`, `branch`, pinned `tip`, root-relative
-`repo`, `outcomes: [{id,result,detail}]`, `verdict`, `line` and `transcript`.
+`repo`, `outcomes: [{id,result,detail}]` for only the person-facing outcomes,
+`verdict`, `line` and `transcript`.
 The inbox carries the verdict, every row without truncating evidence, and output
-paths. A dispatcher timeout records UNREACHED rows rather than fabricating PASS.
+paths. A dispatcher timeout records UNREACHED rows for only those person-facing
+outcomes rather than fabricating PASS or recording machine results.
 Default output is `seats/verdicts/walks/<bead>/<stamp>`; use a fresh `--out` under
 the task scratch root for fleet runs. An existing work `walk.json` is never
 overwritten by another pass. The merge gate below consumes these rows;
