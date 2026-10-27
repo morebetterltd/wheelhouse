@@ -22,7 +22,7 @@ if(process.env.MANUAL_MODE==='slow'){process.on('SIGTERM',()=>{});setTimeout(()=
 for(const name of ['pi','claude','codex'])fs.writeFileSync(bin+'/'+name,stub,{mode:0o755});
 // An accidental graph invocation cannot affect either an installed or handmade graph.
 fs.writeFileSync(bin+'/bd','#!/bin/sh\necho unexpected-bd-call >&2\nexit 99\n',{mode:0o755});
-const init=cmd('git',['init','-q','-b','main']);assert.equal(init.status,0,init.stderr);git('add','.');git('-c','user.name=selftest','-c','user.email=selftest@local','commit','-qm','reference manual fixture');
+const init=cmd('git',['init','-q','-b','main']);assert.equal(init.status,0,init.stderr);git('-c','user.name=selftest','-c','user.email=selftest@local','commit','--allow-empty','-qm','empty default line');const legacy=git('rev-parse','HEAD');git('add','.');git('-c','user.name=selftest','-c','user.email=selftest@local','commit','-qm','reference manual fixture');
 const counter=product+'/.agents/skills/verify-five-features/features/counter.md';let t=fs.readFileSync(counter,'utf8');assert(t.includes('/counter'));fs.writeFileSync(counter,t.replace('/counter','/countr'));
 const app=product+'/server.ts';t=fs.readFileSync(app,'utf8');const old='case "/about": return page("About", "<p>A small verification fixture with five public features.</p>");';assert(t.includes(old));fs.writeFileSync(app,t.replace(old,'case "/search": return new Response("Search");\n        case "/about": return new Response("broken about", { status: 500 });'));
 git('add','.');git('-c','user.name=selftest','-c','user.email=selftest@local','commit','-qm','Add search route and revise fixture interface');
@@ -47,4 +47,5 @@ leg('manual check none',()=>{const r=run('none','none');assert.equal(r.status,0,
 leg('manual check missing findings refused',()=>{const r=run('bad','bad');assert.equal(r.status,3,r.stderr);assert.equal(r.added,0);assert.match(r.stderr,/FINDINGS/);});
 leg('manual check bounded helper',()=>{const r=run('slow','slow',{WHEELHOUSE_MANUAL_CHECK_TIMEOUT_MS:'200'});assert.equal(r.status,3,r.stderr);assert.equal(r.added,0);assert.match(r.stderr,/timed out/);});
 leg('manual check verifier required',()=>{fs.writeFileSync(factory+'/seats/seats.json',JSON.stringify({seats:{reviewer:{...roster.seats.verifier,role:'reviewer'}}}));try{const r=run('no-seat');assert.equal(r.status,2,r.stderr);assert.match(r.stderr,/verifier/);assert.equal(r.added,0);}finally{fs.writeFileSync(factory+'/seats/seats.json',JSON.stringify(roster));}});
+leg('manual check default tip despite a checkout without manual',()=>{git('branch','legacy',legacy);git('switch','legacy');const oldBranches=git('branch','--list');try{const r=run('default-tip');assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/checked=1/);assert.equal(r.artifacts['before.json'].tip,tip);assert.equal(r.branches,oldBranches);assert.equal(r.tree,'');}finally{git('switch','main');}});
 save();if(legs.some(x=>x.error))process.exitCode=1;
