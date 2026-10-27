@@ -86,6 +86,15 @@ leg('work prompt omits machine outcomes', () => {
 });
 leg('work cwd pinned and verifier brief appended', () => { assert(good); assert.equal(good.snapshot.status, 0); assert.equal(good.snapshot.stderr, ''); assert.equal(good.snapshot.head.trim(), pin); assert.notEqual(good.snapshot.cwd, product); assert.equal(path.basename(good.snapshot.cwd), 'product'); assert(good.argv.includes('--append-system-prompt')); assert(good.argv.some((arg: string) => arg.endsWith('/contracts/VERIFIER.md'))); assert(!fs.existsSync(good.snapshot.cwd)); });
 leg('work rows cover walked outcomes only', () => { assert.equal(good.status, 0, 'reply covering exactly the person-facing outcomes must be accepted: '+good.stderr); assert.equal(good.metadata.mode, 'work'); assert.equal(good.metadata.tip, pin); assert.equal(good.metadata.branch, branch); assert.deepEqual(good.metadata.outcomes.map((x: any) => x.id), ['O1', 'O2']); assert.deepEqual(good.metadata.outcomes.map((x: any) => x.result), ['PASS', 'PASS']); assert(good.metadata.outcomes.every((x: any) => x.detail)); });
+leg('work person-only record passes merge gate', () => {
+  assert.equal(good.status, 0, 'producer must accept person-only rows: '+good.stderr);
+  const file = path.join(fleet, 'out-work-all-pass/walk.json');
+  const x = completedCommand('bun', ['seats/merge-gate.ts', 'fixture-work', branch, '--repo', product, '--walk', file], { cwd: fleet, env: { ...process.env, WHEELHOUSE_SKIP_BD: '1', WHEELHOUSE_CONTRACT_FIXTURE: fixture } });
+  const receipt = JSON.parse(fs.readFileSync(path.join(fleet, 'seats/verdicts/fixture-work.merge-gate.json'), 'utf8'));
+  save('actual-walk-to-gate', { ...x, receipt });
+  assert.equal(x.error, undefined); assert.equal(x.signal, null); assert.equal(x.status, 0, x.stderr+x.stdout); assert.match(x.stdout, /MERGE-GATE: PASS/);
+  assert.deepEqual(receipt.outcomes.map((o: any) => [o.id, o.result]), [['O1','PASS'], ['O2','PASS'], ['O3','SKIPPED']]);
+});
 leg('work machine outcome row refused', () => refused(run('machine-row', [...passRows, 'OUTCOME: O3 UNREACHED — sandbox', 'VERDICT: COULD-NOT-WALK — O3: sandbox'].join('\n')), 4, /OUTCOME row O3/));
 leg('work machine-only contract refused before spawn', () => { const r = run('machine-only', 'VERDICT: WALKED-DONE\n', common, machineOnly); refused(r, 5, /no outcome needs a walk/, true); assert.match(r.stderr, /bun seats\/merge-gate\.ts/); assert.equal(r.scratchAdds, 0, 'machine-only work must not allocate a checkout'); });
 leg('work original ids survive omitted machine outcome', () => { const r = run('gapped', ['OUTCOME: O2 PASS — counter read-back', 'OUTCOME: O3 PASS — README read', 'VERDICT: WALKED-DONE'].join('\n'), common, gapped); assert.equal(r.status, 0, r.stderr); assert.deepEqual(r.metadata.outcomes.map((o: any) => o.id), ['O2', 'O3']); assert(!r.prompt.includes('- O1 ')); });
