@@ -53,7 +53,23 @@ const ledgers = [good, parked, wrong, commander, open, dropped].map(h => [h.root
 test("producer passes", () => { for (const mode of ["bead", "file"]) accepted(check(good, mode)); });
 test("parked refused", () => { for (const mode of ["bead", "file"]) refused(check(parked, mode), `refused: signal ${signal} is not disposed produced`); });
 test("work mismatch refused", () => { for (const mode of ["bead", "file"]) refused(check(wrong, mode), `refused: signal ${signal} produced work other-work, not ${work}`); });
-test("commander refused", () => { for (const mode of ["bead", "file"]) refused(check(commander, mode), `refused: signal ${signal} was produced by commander, not the producer ${producer}`); });
+test("commander refused", () => { for (const mode of ["bead", "file"]) refused(check(commander, mode), `refused: signal ${signal} was produced by commander, not the producer seat "${producer}"`); });
+test("default roster names producer once", () => {
+  const root = path.join(scratch, "default-roster"); fs.mkdirSync(path.join(root, "seats"), { recursive: true });
+  fs.copyFileSync(path.join(template, "seats/seats.json.example"), path.join(root, "seats/seats.json"));
+  const posted = command([path.join(runtime, "intake.ts"), "post", "--kind", "finding", "--source", "walk", "--title", "ko3e"], root, { WHEELHOUSE_INTAKE_ROOT: root });
+  assert.equal(posted.status, 0, posted.stderr); const id = posted.stdout.trim(); assert.match(id, /^sig-[a-z0-9]+$/);
+  const disposed = command([path.join(runtime, "intake.ts"), "dispose", id, "produced", "--work", work], root, { WHEELHOUSE_INTAKE_ROOT: root, BEADS_ACTOR: "commander" });
+  assert.equal(disposed.status, 0, disposed.stderr);
+  const file = path.join(root, "contract.md"); fs.writeFileSync(file, valid.replace(/^Signal:.*$/m, "Signal: " + id));
+  const before = fs.readFileSync(path.join(root, "seats/intake.jsonl"), "utf8");
+  const r = check({ root, file }, "file", { WHEELHOUSE_SKIP_BD: "", WHEELHOUSE_INTAKE_FIXTURE: "" });
+  refused(r, `refused: signal ${id} was produced by commander, not the producer seat`);
+  assert(!r.stderr.includes("producer producer"), r.stderr);
+  assert.equal((r.stderr.match(/\bproducer\b/g) ?? []).length, 1, r.stderr);
+  assert.equal(fs.readFileSync(path.join(root, "seats/intake.jsonl"), "utf8"), before);
+  console.log(`DEFAULT_ROSTER_REFUSAL exit=${r.status} stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`);
+});
 for (const [name, h] of [["open", open], ["dropped", dropped]] as const) test(name + " refused", () => refused(check(h), `refused: signal ${signal} is not disposed produced`));
 test("file requires explicit bead id", () => {
   const r = check(good, "file-no-id"); refused(r, `refused: signal ${signal} requires --bead <id>`);
@@ -63,7 +79,7 @@ test("file uses the supplied id, not filename or disposition work", () => {
   refused(check(good, "bead", {}, "other-work"), `produced work ${work}, not other-work`);
   refused(check(good, "file", {}, "other-work"), `produced work ${work}, not other-work`);
 });
-test("caller identity cannot replace disposition actor", () => refused(check(commander, "bead", { BEADS_ACTOR: producer }), `was produced by commander, not the producer ${producer}`));
+test("caller identity cannot replace disposition actor", () => refused(check(commander, "bead", { BEADS_ACTOR: producer }), `was produced by commander, not the producer seat "${producer}"`));
 test("root override without legacy fixture", () => accepted(check(good, "file", { WHEELHOUSE_INTAKE_FIXTURE: "" })));
 test("normal file mode reads the same root", () => accepted(check(good, "file", { WHEELHOUSE_SKIP_BD: "", WHEELHOUSE_INTAKE_FIXTURE: "" })));
 test("missing ledger refuses", () => {
