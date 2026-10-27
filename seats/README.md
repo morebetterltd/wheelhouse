@@ -745,7 +745,7 @@ finding --source verify-cancellation --title 'Retention scratch remained'
 --ref path/to/result.json --from-stdin` (pipe it through
 `seats/evidence-scrub.sh` first). Intake text has a 64 KiB limit: for a larger
 record, post a summary with its reference and carry the complete scrubbed record
-into the produced task's comments. Do not retry until it passes or guess a cure;
+into the produced task's comments. Do not retry away the failure or guess a cure;
 the captured finding becomes separate causal investigation work. This preserves
 the next diagnosis; it does not claim a cause or cure for historical early exits
 whose streams were lost.
