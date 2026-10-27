@@ -2041,14 +2041,33 @@ function rotateLogIfSafe(name: string, log: string, last: string): void {
   fs.truncateSync(log, 0);
 }
 
+function staffingTrailer(state: State, roster: Record<string, SeatEntry>): string | null {
+  if (!hasPool(ROOT)) return null;
+  try {
+    const pool = loadPool(ROOT);
+    let workers = 0;
+    // Review identities are live registrations, not resident adapter processes:
+    // verify.ts starts their ephemeral process only when a review is assigned.
+    const reviewers = Object.values(roster).filter((entry) => !entry.external && entry.role === "reviewer").length;
+    for (const [name, rec] of Object.entries(state.seats)) {
+      const entry = roster[name];
+      if (!entry || entry.external || entry.role !== "worker" || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) continue;
+      workers++;
+    }
+    return `staffing: workers ${workers}/${pool.roles.workers?.min ?? 0}..${pool.roles.workers?.max ?? 0} · reviewers ${reviewers}/${pool.roles.reviewers?.min ?? 0}..${pool.roles.reviewers?.max ?? 0} · see bun seats/staffing.ts status`;
+  } catch { return null; }
+}
+
 async function cmdStatus(): Promise<void> {
   const state = readState();
   const names = Object.keys(state.seats);
+  const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
   if (names.length === 0) {
     console.log("no seats recorded in seats/state.json");
+    const staffing = staffingTrailer(state, roster);
+    if (staffing) console.log(staffing);
     return;
   }
-  const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
   const census = processRows();
   if (census.rows === null) console.error(`UNVERIFIED orphan census: ${census.error}; no absence of extra processes inferred; recorded seat rows still reported`);
   const rows = census.rows;
@@ -2122,6 +2141,8 @@ async function cmdStatus(): Promise<void> {
       }
     }
   }
+  const staffing = staffingTrailer(state, roster);
+  if (staffing) console.log(staffing);
   if (sawSettled) reportHostBudgetWorktreeCap();
 }
 

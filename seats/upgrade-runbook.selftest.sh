@@ -371,6 +371,12 @@ if [ "$TEMPLATE" = "$ROOT" ]; then
   for needle in 'channels.ts' 'comms.ts'; do
     grep -qF "$needle" "$TEMPLATE/runbooks/UPGRADE.md" || fail "UPGRADE.md step 3 copy list missing $needle"
   done
+  for needle in 'pool.ts' 'roster.ts' 'staffing.ts' 'fleet-snapshot.ts' 'seat-activity.ts' 'jev.ts' 'pool.json.example' 'seats/staffing.json' 'pool.selftest.sh' 'staffing.selftest.sh' 'staffing-live.selftest.sh' 'fleet-snapshot.selftest.sh' 'jev.selftest.sh'; do
+    grep -qF "$needle" "$TEMPLATE/runbooks/UPGRADE.md" || fail "UPGRADE.md dynamic-staffing upgrade docs missing $needle"
+  done
+  for needle in 'Move a fixed roster to a pool (optional)' 'pool: none (fixed roster)' 'diff -u seats/seats.json.before-pool seats/seats.json' 'reuse that row' 'moving it would force a re-login' 'the pool replaces the fixed roster' 'bun seats/staffing.ts status' 'another namespace root' "commander's own login"; do
+    grep -qF "$needle" "$TEMPLATE/runbooks/UPGRADE.md" || fail "UPGRADE.md pool migration section missing $needle"
+  done
   grep -qF 'seats/comms.ts send' "$TEMPLATE/generated/CLAUDE.md.example" || fail "generated CLAUDE specimen missing seats/comms.ts send"
   grep -qF 'inbound' "$TEMPLATE/generated/CLAUDE.md.example" || fail "generated CLAUDE specimen missing inbound rule"
   pass "stakeholder-channel upgrade docs name channels, comms, specimens, and read-back"
@@ -676,6 +682,88 @@ fi
 
 
 if [ -f "$ROOT/seats/adapter.ts" ] && [ -f "$ROOT/seats/seat-env.sh" ]; then
+# Dynamic-staffing upgrade: declining the pool is a byte-for-byte no-op, while
+# accepting moves old worker/reviewer rows into seats/pool.json without copying
+# their login directories.
+POOL_FIX="$TMP/pool-upgrade"
+POOL_HOME="$POOL_FIX/home"
+POOL_BIN="$POOL_FIX/bin"
+POOL_PROJ="$POOL_FIX/project"
+mkdir -p "$POOL_HOME/.pi-seats-poolupgrade/worker-a" "$POOL_HOME/.pi-seats-poolupgrade/verifier-a" "$POOL_BIN" "$POOL_PROJ/seats" "$POOL_PROJ/contracts" "$POOL_PROJ/wheelhouse" "$POOL_PROJ/wheelhouse/crew"
+git -C "$POOL_PROJ" init -q -b main
+printf 'seats/run/\nseats/logs/\nseats/state.json\nseats/staffing.json\n.wheelhouse-worktrees/\n.wheelhouse-runs/\n' > "$POOL_PROJ/.gitignore"
+printf '# ISA\n' > "$POOL_PROJ/wheelhouse/ISA.md"
+git -C "$POOL_PROJ" add .gitignore wheelhouse/ISA.md
+git -C "$POOL_PROJ" -c user.email=selftest@example.invalid -c user.name=selftest -c commit.gpgsign=false commit -q -m fixture
+selftest_copy_seat_runtime "$POOL_PROJ" "$ROOT/seats"
+chmod +x "$POOL_PROJ/seats/seat-env.sh"
+printf '# Fleet: Worker\n\nfixture brief.\n' > "$POOL_PROJ/contracts/WORKER.md"
+printf 'namespace=poolupgrade\n' > "$POOL_PROJ/wheelhouse/.template-source"
+cat > "$POOL_PROJ/seats/seats.json" <<'JSON'
+{"version":1,"seats":{"worker-a":{"role":"worker","harness":"pi","provider":"anthropic","model":"stub-model","account":{"dir":"~/.pi-seats-poolupgrade/worker-a","authRoute":"oauth","label":"old worker login"}},"verifier-a":{"role":"reviewer","harness":"pi","provider":"anthropic","model":"stub-model","account":{"dir":"~/.pi-seats-poolupgrade/verifier-a","authRoute":"oauth","label":"old verifier login"}},"producer":{"role":"producer","external":true},"verifier":{"role":"verifier","harness":"pi","provider":"anthropic","model":"stub-model","account":{"dir":"~/.pi-seats-poolupgrade/walker","authRoute":"oauth"}}}}
+JSON
+mkdir -p "$POOL_HOME/.pi-seats-poolupgrade/walker"
+printf '{"seats":{"worker-a":{"pid":999999,"sessionFile":"old-worker"},"verifier-a":{"pid":999998,"sessionFile":"old-verifier"}}}\n' > "$POOL_PROJ/seats/state.json"
+cp "$POOL_PROJ/seats/seats.json" "$POOL_FIX/seats.before.json"
+cp "$POOL_PROJ/seats/state.json" "$POOL_FIX/state.before.json"
+rm -f "$POOL_PROJ/seats/pool.json"
+# Execute the runbook's decline block, including both printed diff commands.
+awk '/^### Move a fixed roster to a pool \(optional\)/{section=1;next} section && /^```bash$/{fence=1;next} section && fence && /^```$/{exit} section && fence {print}' "$TEMPLATE/runbooks/UPGRADE.md" > "$POOL_FIX/decline.sh"
+[ -s "$POOL_FIX/decline.sh" ] || fail "pool migration decline block missing"
+POOL_DECLINE_OUT=$(cd "$POOL_PROJ" && HOME="$POOL_HOME" bash -e "$POOL_FIX/decline.sh" 2>&1)
+printf '%s\n' "$POOL_DECLINE_OUT"
+if [ "$POOL_DECLINE_OUT" = 'pool: none (fixed roster)' ] && cmp -s "$POOL_FIX/seats.before.json" "$POOL_PROJ/seats/seats.json" && cmp -s "$POOL_FIX/state.before.json" "$POOL_PROJ/seats/state.json" && [ ! -e "$POOL_PROJ/seats/pool.json" ]; then
+  pass "pool migration decline leaves seats.json, state.json, and pool.json untouched"
+else
+  fail "pool migration decline was not a no-op: out=$POOL_DECLINE_OUT"
+fi
+cat > "$POOL_PROJ/seats/pool.json" <<'JSON'
+{"version":1,"entries":{"worker-a":{"harness":"pi","provider":"anthropic","models":["stub-model"],"account":{"dir":"~/.pi-seats-poolupgrade/worker-a","authRoute":"oauth","label":"old worker login"}},"verifier-a":{"harness":"pi","provider":"anthropic","models":["stub-model"],"account":{"dir":"~/.pi-seats-poolupgrade/verifier-a","authRoute":"oauth","label":"old verifier login"}}},"roles":{"workers":{"min":1,"max":1,"entries":["worker-a"],"model":"stub-model"},"reviewers":{"min":1,"max":1,"entries":["verifier-a"],"model":"stub-model"}}}
+JSON
+set +e
+POOL_CONFLICT_OUT=$(cd "$POOL_PROJ" && HOME="$POOL_HOME" bun seats/pool.ts check 2>&1); POOL_CONFLICT_RC=$?
+set -e
+if [ "$POOL_CONFLICT_RC" -eq 2 ] && printf '%s\n' "$POOL_CONFLICT_OUT" | grep -q 'the pool replaces the fixed roster for workers'; then
+  pass "pool migration adopt first sees the expected fixed-roster conflict"
+else
+  fail "pool migration adopt did not hit roster conflict first rc=$POOL_CONFLICT_RC out=$POOL_CONFLICT_OUT"
+fi
+env PROJ="$POOL_PROJ" node -e 'const fs=require("fs"); const p=process.env.PROJ+"/seats/seats.json"; const j=require(p); delete j.seats["worker-a"]; delete j.seats["verifier-a"]; fs.writeFileSync(p, JSON.stringify(j,null,2)+"\n")'
+POOL_CHECK_OUT=$(cd "$POOL_PROJ" && HOME="$POOL_HOME" bun seats/pool.ts check 2>&1)
+[ "$POOL_CHECK_OUT" = 'pool: 2 entries, workers 1..1 (1 entries), reviewers 1..1 (1 entries)' ] || fail "pool migration clean check failed: $POOL_CHECK_OUT"
+cat > "$POOL_BIN/pi" <<'PISTUB'
+#!/usr/bin/env node
+const fs=require('fs'),path=require('path'),crypto=require('crypto');
+const dir=process.env.PI_CODING_AGENT_DIR; if(!dir) process.exit(2); fs.mkdirSync(dir,{recursive:true});
+const args=process.argv.slice(2); if(!args.includes('--mode')) { console.log('OK'); process.exit(0); }
+const sessDir=path.join(dir,'sessions'); fs.mkdirSync(sessDir,{recursive:true}); const sessionId=crypto.randomUUID(); const sessionFile=path.join(sessDir,sessionId+'.jsonl'); fs.writeFileSync(sessionFile, JSON.stringify({type:'start'})+'\n');
+let buf='', streaming=false; const out=o=>process.stdout.write(JSON.stringify(o)+'\n');
+function finish(cmd){ fs.appendFileSync(sessionFile, JSON.stringify({type:'prompt',message:cmd.message})+'\n'); out({type:'agent_end',messages:[{role:'assistant',content:[{type:'text',text:'OK'}],stopReason:'stop'}]}); streaming=false; }
+function handle(cmd){ if(cmd.type==='get_state') out({id:cmd.id,type:'response',success:true,data:{isStreaming:streaming,sessionId,sessionFile}}); else if(cmd.type==='prompt'){ streaming=true; out({id:cmd.id,type:'response',success:true}); out({type:'agent_start'}); setTimeout(()=>finish(cmd),20); } else out({id:cmd.id,type:'response',success:false,error:'unknown'}); }
+process.stdin.on('data',c=>{buf+=c;let i;while((i=buf.indexOf('\n'))>=0){const l=buf.slice(0,i);buf=buf.slice(i+1);if(l.trim())handle(JSON.parse(l));}});
+process.on('SIGTERM',()=>process.exit(0));
+PISTUB
+chmod +x "$POOL_BIN/pi"
+cat > "$POOL_BIN/bd" <<'BDSTUB'
+#!/usr/bin/env bash
+case "$1" in
+  ready) printf '[{"id":"ready-1","title":"Ready"}]\n' ;;
+  list) printf '[]\n' ;;
+  *) printf '[]\n' ;;
+esac
+BDSTUB
+chmod +x "$POOL_BIN/bd"
+POOL_RUN(){ PRC=0; POUT=$(cd "$POOL_PROJ" && env HOME="$POOL_HOME" PATH="$POOL_BIN:$PATH" WHEELHOUSE_SKIP_BD=1 WHEELHOUSE_CLEANUP=0 WHEELHOUSE_RPC_TIMEOUT_MS=5000 bun seats/staffing.ts "$@" 2>&1) || PRC=$?; }
+POOL_RUN add reviewers; [ "$PRC" -eq 0 ] || fail "pool migration add reviewer failed: $POUT"
+POOL_RUN status; [ "$PRC" -eq 0 ] || fail "pool migration status failed: $POUT"
+printf '%s\n' "$POUT"
+printf '%s\n' "$POUT" | grep -q 'reviewer-verifier-a | reviewer | pi | stub-model | old verifier login' || fail "pool migration status missing staffed reviewer: $POUT"
+node -e 'const s=require(process.argv[1]); if(s.seats["reviewer-verifier-a"]?.role!=="reviewer") process.exit(1)' "$POOL_PROJ/seats/staffing.json" || fail "pool migration did not register a staffed reviewer"
+node -e 'const s=require(process.argv[1]); if(s.seats.verifier?.role!=="verifier" || !s.seats.producer || s.seats["worker-a"] || s.seats["verifier-a"]) process.exit(1)' "$POOL_PROJ/seats/seats.json" || fail "pool migration changed walker/producer or left pooled fixed rows"
+POOL_RUN drop reviewer-verifier-a
+[ "$PRC" -eq 0 ] && printf '%s\n' "$POUT" | grep -q 'at minimum: reviewers 1/1' || fail "pool migration reviewer drop miscounted: $POUT"
+pass "pool migration adopt reuses existing login dirs, loads pool, removes fixed rows, and registers a staffed seat"
+
 # Harness-switch upgrade: old rosters without harness fields still mean pi, and
 # changing one seat's harness must not touch another seat's running session.
 HARNESS_FIX="$TMP/harness-switch"

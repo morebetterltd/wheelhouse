@@ -9,7 +9,7 @@ pass(){ printf '  ok    %s\n' "$*"; }
 fail(){ printf '  FAIL  %s\n' "$*"; exit 1; }
 
 ROOT="$FIX/proj"; HOME_FIX="$FIX/home"; BIN="$FIX/bin"
-mkdir -p "$ROOT/seats" "$ROOT/wheelhouse" "$HOME_FIX/.pi-seats-pooltest/pool/a" "$HOME_FIX/.pi-seats-pooltest/pool/b" "$HOME_FIX/.pi-seats-pooltest/pool/c" "$HOME_FIX/.pi-seats-pooltest/pool/codex-a" "$HOME_FIX/.pi-seats-pooltest/pool/claude-b" "$HOME_FIX/.pi-seats-pooltest/pool/openrouter-c" "$BIN"
+mkdir -p "$ROOT/seats" "$ROOT/wheelhouse" "$HOME_FIX/.pi-seats-pooltest/pool/a" "$HOME_FIX/.pi-seats-pooltest/pool/b" "$HOME_FIX/.pi-seats-pooltest/pool/c" "$HOME_FIX/.pi-seats-pooltest/pool/codex-a" "$HOME_FIX/.pi-seats-pooltest/pool/claude-b" "$HOME_FIX/.pi-seats-pooltest/pool/openrouter-c" "$HOME_FIX/.pi-seats-pooltest/fixed" "$BIN"
 printf 'namespace=pooltest\n' > "$ROOT/wheelhouse/.template-source"
 selftest_copy_seat_runtime "$ROOT" "$HERE"; chmod +x "$ROOT/seats/seat-env.sh"
 for tool in pi claude codex; do printf '#!/usr/bin/env sh\nexit 0\n' > "$BIN/$tool"; chmod +x "$BIN/$tool"; done
@@ -111,6 +111,11 @@ j.seats['fixed-worker']={role:'worker',harness:'codex',provider:'openai',model:'
 fs.writeFileSync(p,JSON.stringify(j));
 JS
 expect_refusal 'fixed worker plus pool workers is refused' 'the pool replaces the fixed roster for workers'
+cat > "$ROOT/seats/seats.json" <<'JSON'
+{"version":1,"commander":{"role":"commander","external":true},"seats":{"fixed-worker":{"role":"worker","harness":"codex","provider":"openai","model":"worker-model","account":{"dir":"~/.pi-seats-pooltest/pool/a","authRoute":"oauth"}}}}
+JSON
+write_valid_pool
+expect_refusal 'fixed worker sharing the pool login reports roster replacement first' 'the pool replaces the fixed roster for workers'
 cat > "$ROOT/seats/seats.json" <<'JSON'
 {"version":1,"commander":{"role":"commander","external":true},"seats":{"observer":{"role":"researcher","external":true}}}
 JSON

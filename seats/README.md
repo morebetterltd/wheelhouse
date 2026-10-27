@@ -53,7 +53,8 @@ The main files here:
 - `floor.ts` — read-only status display for the commander cockpit.
 - `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and review markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
 - `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, seatStreams, alerts, settledSeats}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work, silent mid-turn model streams and invalid commander panes open/close human needs through `seats/needs.ts` only.
-- `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. The herald is the clock: when a pool exists it periodically launches `bun seats/staffing.ts check` detached and appends output to `seats/logs/staffing.out.log`, while `staffing.lock` remains the overlap guard. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state.
+- `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. The herald is the clock: when a pool exists it periodically launches `bun seats/staffing.ts check` detached and appends output to `seats/logs/staffing.out.log`, while `staffing.lock` remains the overlap guard. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state. `status` prints `seat | role | harness | model | subscription | state | source` rows, per-role live-of-min..max counts, the last decision and a Jev configuration line; `--json` returns the same data without account directories.
+- `jev.ts` — optional staffing decider, enabled only with `JEV_BASE_URL` and `JEV_API_KEY` (or `JEV_API_KEY_FILE`, mode 0600 and outside the install root). It receives only aggregate counts, change counters and ready-work titles/chaining/groups, never paths, file contents, env, account directories, labels or credentials. Missing configuration skips Jev; low confidence, `other`, malformed/error/timeout responses fall back to the built-in rule.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
 seat's `auth.json`, written either by OAuth `/login` inside the interactive Pi
@@ -639,6 +640,8 @@ discarded deltas. Checks require a running herald (or explicit
 an independent process supervisor timer.
 
 `status` prints an `ORPHAN:` line only for a confirmed duplicate seat process: a candidate must not be a descendant of the recorded seat pid, must either hold the seat FIFO or predate the recorded pid, and must still be present on a second scan a few seconds later. The line includes the remedy (`inspect pid ..., then stop it or run bun seats/recover.ts`) so transient child tools are not reported as duplicate seats and genuine duplicates say what to do next.
+
+When `seats/pool.json` exists, `bun seats/adapter.ts status` also prints a staffing trailer with per-role live/min/max counts and points to `bun seats/staffing.ts status`. The staffing status command is the detailed operator view: one row per staffed live seat for pooled worker/reviewer roles, and one row per fixed live seat for worker/reviewer roles not declared in the pool, with role, harness, model, public subscription label (or entry name/provider), busy/idle state, and source (`fixed` or `staffed`); then workers/reviewers used/min/max, free and rate-limited subscription counts, the last decision line, and whether Jev is configured. `--json` prints the same data as one object. Neither form prints account directories.
 
 `dispatch` prefixes the message with `Bead <bead-id>` and queues behind the
 current turn if the seat is mid-stream; redirecting the CURRENT turn is what
@@ -1616,6 +1619,7 @@ bash seats/prune-safety.selftest.sh
 bash seats/prune.selftest.sh
 bash seats/staffing.selftest.sh
 bash seats/staffing-live.selftest.sh
+bash seats/jev.selftest.sh
 bash seats/alerts.selftest.sh
 bash seats/never-lose-work.selftest.sh
 bash seats/intent-check.selftest.sh
