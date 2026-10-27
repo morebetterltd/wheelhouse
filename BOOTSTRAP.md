@@ -9,7 +9,7 @@ Six steps, in this order. Do not reorder. Steps 1 and 2 write nothing that depen
 3. Read, then interview — ending in a written roster
 4. Provision the seats
 5. Initialize the graph and write the install (verify and commit included)
-6. Close the loop — the smoke dispatch that proves the install
+6. Close the loop — prove the manual, then the smoke dispatch that proves the fleet
 
 ## 1. Before anything writes — the tools this needs, and what was here before you
 
@@ -205,7 +205,7 @@ Everything in this list is copied whole and unedited. The interview-derived cont
 
 ## 3. Read, then interview
 
-Survey the repository so your questions are informed: build and dependency files, language and framework, test setup, CI config, existing docs, whether there are multiple product repos beneath this root, and how the project is built and run.
+Survey the repository so your questions are informed: build and dependency files, language and framework, test setup, CI config, existing docs, whether there are multiple product repos beneath this root, and how the project is built and run. For each product repo, also scan its user-facing features — routes, commands, screens, menus and documented workflows — as the create-verification skill's first section describes. Form a complete proposed list in user words before the interview, with a stable feature slug and observable entry points for each item; distinguish the real product from examples and note inaccessible areas. This is the found list for question 2e, not yet a claim that the scan found everything.
 
 Read the branch that merges target out of each repository rather than assuming it, once per product repo, because they need not agree. This is the one survey answer that gets written into several installed files at once, so a guess here is a guess repeated: an install that assumed `master` wrote it into three files, and it surfaced only when a worker ran a dispatch's read path and got `fatal: ambiguous argument 'master'`.
 
@@ -233,7 +233,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    Say which shape you are installing, and record it in the worker's `## This project` section along with where worktrees go. An install that records this wrong puts the seat worktrees inside the repo and pollutes the very diff the workers are meant to produce.
 
-2. **What "it runs" means.** Four questions, because `crew/BENCH.md` has five sections to fill and (b) fills two of them:
+2. **What "it runs" means.** The bench questions (a–d) fill `crew/BENCH.md`'s five sections, with (b) filling two; (e) confirms the feature inventory the verification manual will cover:
 
    a. "For a \<project type\>, I would prove a build works by \<your proposal: a server answers a health check; a CLI executes a real command against real input; an app installs and reaches its first screen\>. What is the observation that would convince you a build actually works?"
 
@@ -243,7 +243,9 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
    d. "What does someone need installed or running before they can execute this bench at all?"
 
-   `crew/BENCH.md` has five project sections and these four questions fill them; the fifth, the artifact, comes from (b). Do not fill a section the principal did not answer. The template's own rule is no invention: an unanswered section says so, and the stub keeps the reviewer honest until it is filled. If the principal cannot answer yet, record it as unanswered and continue — the bench ships as an explicit stub.
+   `crew/BENCH.md` has five project sections and these four bench questions fill them; the fifth, the artifact, comes from (b). Do not fill a section the principal did not answer. The template's own rule is no invention: an unanswered section says so, and the stub keeps the reviewer honest until it is filled. If the principal cannot answer yet, record it as unanswered and continue — the bench ships as an explicit stub.
+
+   e. **Features I found.** Show the proposed list for each product repo, numbered with one feature per line in user words, and ask: "Features I found: <the numbered list>. Is this right, and what is missing?" With `AskUserQuestion`, offer `List is right` and `Add or correct features`, with free text for the additions/corrections; without the tool, ask in prose. An empty scan still gets this question, not an assumed empty map. For each addition, ask how a person reaches it in this same interview turn, including any flag, data, login or launch condition the scan could not derive. Record prerequisites, never credentials or secrets. Preserve the owner's words for that reach; never guess a URL or workflow. Read the corrected list back, including every owner-named feature, and record it in `wheelhouse/interview/features.md` below. Step 5 maps every recorded feature, using the owner's words in `## How to get to it` for additions. This question is not skippable: the feature the owner names is the one the scan could not see, and the map without it is the map the verifier will trust. If the owner cannot yet explain a reach, record that gap and stop the manual from passing rather than inventing an entry.
 
 3. **First ideal state.** "What is true when this fleet's first iteration is done?" **DO NOT PROPOSE AN ANSWER.** This is the one thing only the principal knows, and a plausible suggestion gets accepted by default — after which the ISA states your goal rather than theirs.
 
@@ -376,7 +378,7 @@ Ask in as few turns as you can manage. Lead each question with your proposal fro
 
 ### Record what the interview decided — the machine copies, before anything derives from them
 
-Five writes close the interview, in this order, because everything step 4 provisions and step 5 fills is a COPY of these records rather than a recollection of the conversation.
+The following machine records close the interview, in this order, because everything step 4 provisions and step 5 fills is a COPY of these records rather than a recollection of the conversation.
 
 **First, the merge target, into `wheelhouse/.template-source`** — the machine record for the principal-confirmed branch new fleet branches integrate into:
 
@@ -407,6 +409,8 @@ bun seats/channels.ts check --credentials    # require exit 0; names/presence on
 ```
 
 For every declared Slack, Teams or Telegram channel, have the owner provision its credential using question 10's exact locations before this check. A STOP names the missing kind's environment variable and mode-`0600` file; fix it and rerun, rather than completing the step or bypassing the send gate with a raw API call. Paste only the credential-free presence/count lines into the install log. An empty channel record still passes without credentials.
+
+**Then `wheelhouse/interview/features.md`, from question 2e's corrected read-back** — commit this record with the install; do not create `wheelhouse/.install-features.json` or rely on a transcript that step 5 cannot read. Write a Markdown heading, one `Confirmed repo: ` line followed by a JSON-quoted question-1 repo path for each confirmed product repo (even one with no features), and one fenced `jsonl` block, with one JSON object per feature (found or owner-named). Each object has `repo` (the question-1 product path relative to the install root, `.` for a single repo), `slug` (a unique flat lowercase hyphenated name within that repo), `origin` (`[found]` or `[owner]`), `name` (the feature in user words) and `reach` (how a person reaches it). Use JSON string escaping, so punctuation and quoted owner words remain unambiguous; the `[owner]` origin marks every addition the scan missed. Preserve that owner's reach verbatim in the string. If it is unanswered, use `null`, never invented instructions. Include every confirmed feature, not just additions; explicitly record a confirmed empty list for a genuinely surface-less repo. Read the file back to the owner before moving on. In an umbrella install the shared record identifies each repo separately; do not compare one repo's map to another repo's answers. If the factory install is deliberately machine-local and excluded, retain this factory record with those files and report that exception rather than force-adding excluded paths.
 
 ## 4. Provision the seats
 
@@ -574,7 +578,7 @@ A seat the probe fails and the principal cannot fix now is recorded as declined-
 
 ### Write the verification manual
 
-For **each product repo from question 1** (the root in the single-repo shape), load the installed `.agents/skills/create-verification/SKILL.md` at the install root and follow it against that repo. Use the repository scan from step 3: enumerate every discovered user-facing route, command, menu and public interface, not a shortlist. Write the five-section manual and complete feature map at that product repo's `.agents/skills/verify-<project>/`, where `<project>` is the repo directory's basename. The manual belongs in the product repo, not under `wheelhouse/`, because it is the project's property and travels with the code.
+For **each product repo from question 1** (the root in the single-repo shape), load the installed `.agents/skills/create-verification/SKILL.md` at the install root and follow it against that repo. Read `wheelhouse/interview/features.md` from step 3 and map every feature recorded for this repo, not just the scan's shortlist. Reconcile it with the source scan so later discoveries are not dropped. First list every recorded slug in the feature index, including owner-named additions. For an addition whose reach the scan cannot derive, use the owner's words in `## How to get to it`; if those words were not collected in question 2e, return to that interview question, not a guessed recipe. Keep an unanswered feature listed in the index but do not invent its file: `manual.ts check` must fail on that missing file until the owner supplies its reach. Write the five-section manual and complete feature map at that product repo's `.agents/skills/verify-<project>/`, where `<project>` is the repo directory's basename. The manual belongs in the product repo, not under `wheelhouse/`, because it is the project's property and travels with the code.
 
 The create skill writes the real copy; the installer writes the compatibility link. From the install root, set `repo` to the actual product repo path from question 1 (`.` for a single repo), then run:
 
@@ -720,10 +724,21 @@ Run each of these and paste what it prints:
   ```bash
   bun seats/manual.ts check --repo "$repo" || { echo "FAIL verification manual — stop" >&2; exit 1; }
   test -L "$repo/.claude/skills/verify-$project" && test -f "$repo/.claude/skills/verify-$project/SKILL.md" || { echo "FAIL verification manual link — stop" >&2; exit 1; }
-  bun seats/manual.ts features --repo "$repo" --json
+  # Compare this repo's interview record with the CLI's actual feature inventory.
+  inventory=$(bun seats/manual.ts features --repo "$repo" --json) || { echo "FAIL feature inventory — stop" >&2; exit 1; }
+  printf '%s\n' "$inventory"
+  printf '%s\n' "$inventory" | bun seats/install-features.ts "$repo" wheelhouse/interview/features.md || { echo "FAIL interview feature map — stop" >&2; exit 1; }
   ```
 
-  Require `manual ok: N features` and the resolving link. A declared `surface: none` prints `manual ok: no surface`; name that declaration, not a successful live journey. Read the feature inventory against the scan and report its count per repo. Any nonzero check or link failure stops this procedure just as a contract-integrity FAIL does; do not hand back a partial install as success.
+  Require matching per-repo counts from `wheelhouse/interview/features.md` and `manual.ts features --json` (equivalently the JSON array's `jq length`), with every recorded slug present; a mismatch is a FAIL naming the missing or unrecorded feature, even when totals happen to agree. An owner-named entry must carry the recorded reach, not invented words. Stop and reconcile the interview and map on any failure. Require `manual ok: N features` and the resolving link. A declared `surface: none` prints `manual ok: no surface`; name that declaration, not a successful live journey. Read the feature inventory against the scan and report its count per repo. Any nonzero check or link failure stops this procedure just as a contract-integrity FAIL does; do not hand back a partial install as success.
+
+- **Live manual evidence — finish this check in step 6, after Cleanup, not before the drive.** For each product repo with a runnable surface, from the install root with this repo's `project` set, run and paste:
+
+  ```bash
+  test -n "$(ls evidence/install/verify-"$project"/*/ 2>/dev/null)" || { echo "FAIL manual evidence missing after Cleanup — stop" >&2; exit 1; }
+  ```
+
+  This listing is only the presence check. Step 6 also requires `manual.ts evidence` for the selected feature and inspection of its actual end-state proof. A `surface: none` declaration is an explicit skip, never a successful live drive.
 
 - **Check `GRAPH.md`'s version-stamped claims against the CLI you actually have.** It states that this build has no `in_review` status, so the review queue is a `needs-review` label instead.
 
@@ -961,24 +976,45 @@ No commands, and it is a legitimate choice — but state the consequence rather 
 
 Do not infer push policy from bd's generated agent profile. Push, PR, and deploy authority is whatever `wheelhouse/INTEGRATOR.md`'s project section records from question 4b; workers still do not push their own branches.
 
-## 6. Close the loop — the smoke dispatch that proves the install
+## 6. Close the loop — prove the manual, then the smoke dispatch that proves the fleet
 
 You are a session in the directory whose `CLAUDE.md` you just wrote, and that file says a session in this directory is a commander session. So you are the commander already, and the first commander action is yours to perform rather than to recommend. An install that ends on a reading list gives the principal the standards, the procedure and the homework, and leaves the loop unstarted — which is the one thing the install exists to start. Observed on a real install, 2026-08-21: every file was correct and nothing was running.
 
-Step 5's checks verified the FILES. This step verifies the FLEET, by the only measure that means anything: one bead travels the whole loop — dispatched through the adapter to a real seat, worked, reported with evidence, and judged by the reviewer — and the verdict lands where the graph can read it. Until that has happened once, "the install works" is a claim about bytes on disk.
+Step 5's checks verified the FILES. This step first proves one live journey per runnable product manual, then verifies the FLEET, by the only measure that means anything: one bead travels the whole loop — dispatched through the adapter to a real seat, worked, reported with evidence, and judged by the reviewer — and the verdict lands where the graph can read it. Until that has happened once, "the install works" is a claim about bytes on disk.
 
-Five things, in this order.
+Six things, in this order. The manual proof needs no seat and is not waived by the smoke loop's no-seat skip.
 
-**Hand back what is now true.** Plainly, and with the two halves kept apart, because a principal who cannot tell them apart will trust the stubs:
+**1. Hand back what is now true.** Plainly, and with the two halves kept apart, because a principal who cannot tell them apart will trust the stubs:
 
 For any `surface: none` repo, list its two-sentence manual and empty feature index as stubbed, not live-proven; the first surface-naming work owes the five manual sections (including Launch and Drive) and that surface's map entry.
 
 - what exists — the files, each product repo's verification-manual path and number of mapped features, the graph, the shape you installed and where worktrees go, the merge policy, the fleet's push/PR/deploy authority, and the reserved actions in the principal's own words, and anything you corrected on the way through: the `wheelhouse/AGENTS.md` override from step 5, any `GRAPH.md` status correction from its verification, and which `.beads/` durability shape you found at its commit and what was chosen about it;
 - what is deliberately STUBBED and therefore not yet true — any repo declaring `surface: none` has no live journey yet (name each one), `wheelhouse/crew/bench.sh` exits non-zero on purpose, the worker's gotchas section is empty because gotchas are earned rather than invented, and the ISA's claims are empty for the same reason.
 
-**Read the loop you are about to run.** `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, now, before the dispatch below — you are executing its first stage in the next paragraph, not filing it for someone to read later. The contracts say what each role owes; that runbook says what the sequence looks like and what to do on the days it does not go straight through, and whoever has the contracts and not the runbook has the standards and no procedure. The role contracts are then read at the stage that needs them — `wheelhouse/fleet/WORKER.md` when you dispatch, `wheelhouse/crew/REVIEWER.md` when a branch lands, `wheelhouse/INTEGRATOR.md` when one is approved, `wheelhouse/GRAPH.md` for the review queue — and the runbook's closing table says which is which. That is the reading list, and it is a step inside this action rather than a parting gift.
+**2. Read the loop you are about to run.** `wheelhouse/runbooks/RUNNING_THE_LOOP.md`, now, before the dispatch below — you are executing its first stage later in this step, not filing it for someone to read later. The contracts say what each role owes; that runbook says what the sequence looks like and what to do on the days it does not go straight through, and whoever has the contracts and not the runbook has the standards and no procedure. The role contracts are then read at the stage that needs them — `wheelhouse/fleet/WORKER.md` when you dispatch, `wheelhouse/crew/REVIEWER.md` when a branch lands, `wheelhouse/INTEGRATOR.md` when one is approved, `wheelhouse/GRAPH.md` for the review queue — and the runbook's closing table says which is which. That is the reading list, and it is a step inside this action rather than a parting gift.
 
-**Run the smoke loop — the install's own verification, and the fleet's first revolution.** It runs whenever step 4 left at least one worker seat with a passing probe; the one legitimate skip is below.
+**3. Prove the manual — one mapped feature live, not the whole map.** Repeat for each product repo from question 1. Read its `.agents/skills/verify-<project>/SKILL.md` and `features/README.md`. If it declares `surface: none`, name the repo and skip only this live proof. Otherwise choose the **first feature listed in that map's README**, using its linked file's slug as `feature`; an empty runnable map stops the install, not an implicit skip. Do not substitute the easiest feature or merely re-run a build.
+
+Follow the manual itself, in its five-section order, pasting commands, exit statuses and observed output into the install transcript:
+
+1. **Launch:** use isolated scratch state and a non-production port/socket, never an installed service. Set a finite run bound and teardown for every helper and any app you start before launching; retain PID/identity ownership so cleanup stops only your instance. Observe and paste the manual's ready condition; a live process alone is not ready.
+2. **Doctor:** run its checks against that test instance and paste their output. Require the manual's passing result before driving.
+3. **Drive:** follow the selected feature's `How to get to it` and `How to drive it`. Paste the actions and what you actually observed; require the exact end state in `What proves it works`. One mapped feature per repo is sufficient; the other features are not claimed driven.
+4. **Evidence:** follow the manual's capture recipe, directing retained proof to the absolute install-root path `evidence/install/verify-<project>/<feature>/` (the manual's evidence base is `evidence/install/verify-<project>`). Keep this outside disposable run state, even for an umbrella product repo. Retain the response/screenshot or equivalent end-state proof, commands/statuses and launch/doctor output, not just a ready line. Do not put secrets in captures. This is retained, git-excluded install evidence, not product source: transcribe the scrubbed decisive output onto the graph before citing it, per `wheelhouse/GRAPH.md`.
+5. **Cleanup:** always run the manual's teardown, **including after a failed Launch, Doctor, Drive or Evidence step**. Do not delete the retained proof. Confirm no owned app/helper remains running; on a partial launch, join the failed child and retain both output streams/status even if later-step files were never created. Never signal a replacement or unrelated process.
+
+After Cleanup, return to the **install root**, set `repo` to this product repo's path, `project` to its basename and `feature` to the selected slug, and run:
+
+```bash
+bun seats/manual.ts evidence "$feature" --repo "$repo" --dir "evidence/install/verify-$project" || { echo "STOP: the manual's Evidence step failed: proof missing after Cleanup" >&2; exit 1; }
+test -n "$(ls evidence/install/verify-"$project"/*/ 2>/dev/null)" || { echo "STOP: the manual's Evidence step failed: empty retained proof" >&2; exit 1; }
+```
+
+Paste the retained file listing and inspect its contents against the feature's named end state **after** teardown: `manual.ts evidence` checks file presence, not whether the journey worked. In the hand-back name each repo, the feature driven and its evidence path; do not say the proof exists until these post-cleanup checks pass.
+
+**A failed proof STOPS the install before the smoke loop.** A Launch that never reaches ready, a failing Doctor, a Drive ending anywhere other than the entry names, an Evidence capture failure or evidence missing after Cleanup is a failed install. Name the step and observed output, for example `the manual's Launch step failed: <observed output>`. Run Cleanup even on that path, report any cleanup failure too, and do not continue to the smoke loop or report the install finished. Fix the named failure and repeat the proof before proceeding.
+
+**4. Run the smoke loop — the install's own verification, and the fleet's first revolution.** It runs whenever step 4 left at least one worker seat with a passing probe; the one legitimate skip is below.
 
 1. **Spawn what the smoke needs**, per `wheelhouse/STARTUP.md`: the worker seat (`bun seats/adapter.ts spawn <worker-seat>`), and confirm with `bun seats/adapter.ts status`. The reviewer used for `seats/verify.ts` needs no spawn — the dispatcher starts its one-shot verdict process at the moment of judgment. The verifier/walker also needs no spawn; `seats/walk.ts` starts it when a claim walk is due.
 2. **File the smoke bead**, sized to prove plumbing and nothing else:
@@ -1057,7 +1093,7 @@ project manual/map files must remain visible.
 
 **The one legitimate skip.** If step 4 provisioned no seat that passed its probe — every optional managed seat declined, or every provisioning attempt failed and was recorded — the smoke loop has nothing to run on. Skip it SAYING SO, with the reason, in the hand-back and on the record (the declined-seats section already carries it): the solo-install doctrine holds, the commander plus its required producer subagent is a working install, and the first real bead below then runs the loop's solo path as its own de-facto smoke. What is not legitimate is skipping it quietly, or skipping it while a probed seat sits idle.
 
-**Make the first real dispatch.** Read the graph rather than your memory of it:
+**5. Make the first real dispatch.** Read the graph rather than your memory of it:
 
 ```bash
 bd ready                                 # the graph you are dispatching into
@@ -1080,7 +1116,7 @@ Where that dispatch goes depends on the per-seat answers from step 3's questions
 
 Then check the roster for the reviewer, whichever branch you took. The one role the author of a change may not also hold is the reviewer's for that same change — `wheelhouse/crew/REVIEWER.md` forbids author-review, and it is the one merge that care cannot recover afterwards. If no reviewer seat is on the roster, say now how this bead WILL be reviewed, while there is a whole bead's worth of time to arrange it rather than at the moment the branch is ready to merge. An empty roster is not an empty bench of reviewers: `wheelhouse/runbooks/RUNNING_THE_LOOP.md`'s "When one human holds every seat" section is the solo path — the principal reviews an agent-authored change themselves, or a fresh session that did not author the change is dispatched as its reviewer, and the verdict lands on the bead in the same format either way. Name which of those this install will use, or which reviewer seat will be filled instead.
 
-**Run the loop you just started.** The dispatch was `wheelhouse/runbooks/RUNNING_THE_LOOP.md`'s stage 1, and stage 1 is not a finish line: an install that ends on a dispatch hands the principal a fleet with one message in flight and nobody carrying it forward, which is the reading-list failure again with a better opening move. You are the commander for as long as this session lasts, so carry the bead through the runbook's stages yourself. What carrying looks like depends on the same roster read as the dispatch:
+**6. Run the loop you just started.** The dispatch was `wheelhouse/runbooks/RUNNING_THE_LOOP.md`'s stage 1, and stage 1 is not a finish line: an install that ends on a dispatch hands the principal a fleet with one message in flight and nobody carrying it forward, which is the reading-list failure again with a better opening move. You are the commander for as long as this session lasts, so carry the bead through the runbook's stages yourself. What carrying looks like depends on the same roster read as the dispatch:
 
 - **Managed worker/reviewer seats are on the roster.** Command them. The worker's report arrives on the bead as a comment plus the `needs-review` label — that is where you read it, not in a message, and the worker does not close the bead. When it lands, dispatch the reviewer seat the same stage-1 way: the bead id, the branch, a way to read it that changes nothing, `wheelhouse/crew/REVIEWER.md` as its brief. When the verdict lands, integrate per `wheelhouse/INTEGRATOR.md` — confirm the tip you merge equals the head that was reviewed, act on the PUSH line rather than the VERDICT line for anything leaving the machine, and carry merge/push/PR/deploy as far as question 4b recorded — then close the bead per the runbook's last stage, dropping the review-queue label in the same breath. If the action is on the reserved list from question 4, or if two product-intent readings lead to different work, ask once with a recommendation and default; otherwise the install interview's standing authority is the record.
 - **No managed seats — you took the worker seat above, with a required producer subagent still on the roster.** Take it in earnest, in this session: the dispatch was addressed to you, and describing how you would implement the bead is not implementing it. The bench bead is sized for a first session — one script against a written brief. Do the work under the dispatch's own terms; the claim, the worktree and the evidence-carrying report are already in the bullet that took the seat, and the branch name and everything else a worker owes are in `wheelhouse/fleet/WORKER.md`, the contract that bullet named. Then route the review down the solo path you just named. The principal reads the diff and writes the verdict on the bead, or a fresh session that holds nothing of this conversation is dispatched as reviewer per the runbook's "When one human holds every seat" section — and that section's subagent form means the fresh session needs no second terminal, provided its dispatch is composed from the bead and the branch and carries nothing of this session's account of the work; the section says why the empty context is the whole point, and what to check before trusting it. When the verdict is on the bead, change hats once more and integrate exactly as the roster case above: tip equals reviewed head, question 4b's authority, question 5's merge policy, close and drop the label.
@@ -1092,5 +1128,7 @@ Either way, say which seat you are sitting in and what you are waiting for. Once
 ## Failure behavior
 
 Any step that cannot complete: stop, and report where you got to and what blocked you. Do not improvise around it, and do not report success on a partial install.
+
+A manual proof failure in step 6 is a STOP before the smoke loop: name the failed Launch, Doctor, Drive, Evidence or Cleanup step and paste the observed output (for example, `the manual's Launch step failed: <observed output>`). Launch not reaching ready, Doctor failing, Drive not reaching the mapped end state, or evidence missing after Cleanup cannot be reported as a finished install. Always attempt the manual's Cleanup after a failed step; confirm no owned processes remain, retain diagnostics and proof, and report cleanup failure rather than hiding it.
 
 A half-installed wheelhouse that claims to be finished is worse than no install, because the next session inherits it as if it were sound.

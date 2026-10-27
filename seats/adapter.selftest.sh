@@ -1861,6 +1861,7 @@ RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1
 phase "6e. captured process census — capacity and unavailable observations"
 if bash "$HERE/fixtures/adapter-census-run.sh" "$FIX/census-cases" "$ADAPTER"; then
   pass 'captured large census reports real duplicate; failed/invalid census is UNVERIFIED with healthy rows visible'
+  pass 'status census reads command lines with line separators'
 else fail 'captured process census lost data or silently guessed absence'; fi
 
 phase "7. host build budget — opt-in PATH shim serializes cargo and allows re-entrant children"

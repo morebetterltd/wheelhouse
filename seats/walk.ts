@@ -29,6 +29,7 @@ import { hasPool } from "./pool";
 import { liveLineCandidates } from "./final-assistant-message";
 import { readManual, type VerificationManual } from "./manual";
 import { checkBeadContract, contractRemedy, parseContract, type Contract } from "./contract";
+import { initialTestLock, testLockPath, waitForInitialTestLock, spawnWorkWalker } from "./walk-test-lock";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -421,8 +422,8 @@ function spawnWalker(oneShot: ReturnType<typeof oneShotCommandForHarness>, scrat
   });
 }
 
-function main(): void {
-  if (process.argv.slice(2).includes("--work")) { workMain(process.argv.slice(2)); return; }
+async function main(): Promise<void> {
+  if (process.argv.slice(2).includes("--work")) { await workMain(process.argv.slice(2)); return; }
   let phase = "parse arguments";
   const argv = process.argv.slice(2);
   const positional: string[] = [];
@@ -655,7 +656,7 @@ function workPrompt(contract: Contract, tip: string, manual: VerificationManual 
   ].join("\n");
 }
 
-function workMain(args: string[]): void {
+async function workMain(args: string[]): Promise<void> {
   const values = new Map<string, string>();
   const usage = "usage: walk.ts --work <bead> --branch <ref> --author <seat> [--repo <path>] [--out <dir>] [--verifier <seat>] (no claim-ref, --surface or --baseline)";
   for (let i = 0; i < args.length; i++) {
@@ -671,6 +672,8 @@ function workMain(args: string[]): void {
   const author = validateSegment("seat name", values.get("--author")!);
   const verifierArg = values.has("--verifier") ? validateSegment("seat name", values.get("--verifier")!) : undefined;
   workRefusalBead = bead;
+  const testLock = testLockPath();
+  const alreadyHeld = initialTestLock(testLock);
   setVerifierGateBead(bead, "seats/walk.ts");
   const checked = checkBeadContract(ROOT, bead);
   if (checked.errors.length) refuse(contractRemedy(bead, checked.errors));
@@ -712,17 +715,19 @@ function workMain(args: string[]): void {
   const oneShot = oneShotCommandForHarness(harness, brief, entry.provider, entry.model, prompt, entry.allowedTools, entry.disallowedTools);
   const oneShotPath = readonlyBdPath(ROOT, `${helperBin}${path.delimiter}${hostBudgetPath(ROOT)}`, cwd);
   const env = oneShotEnvForHarness(harness, verifierDir, { ...process.env, PATH: oneShotPath, WHEELHOUSE_ROOT: ROOT,
-    WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper, RUN_DIR: path.join(outDir, "runtime"), EVIDENCE_DIR: path.join(outDir, "evidence") });
+    WHEELHOUSE_WALK_CAPTURE_HELPER: captureHelper, WHEELHOUSE_SELFTEST_SWEEP_LOCK: testLock,
+    RUN_DIR: path.join(outDir, "runtime"), EVIDENCE_DIR: path.join(outDir, "evidence") });
   const markerFile = path.join(ROOT, "seats", "run", `walk.${verifierSeat}.json`);
   fs.mkdirSync(path.dirname(markerFile), { recursive: true });
   fs.writeFileSync(markerFile, JSON.stringify({ pid: process.pid, bead, startedAt: new Date().toISOString() }) + "\n");
-  const res = spawnWalker(oneShot, cwd, env);
+  await waitForInitialTestLock(alreadyHeld);
+  const res = await spawnWorkWalker(oneShot.bin, oneShot.args, cwd, env, TIMEOUT_MS, testLock);
   try { fs.unlinkSync(markerFile); } catch {}
   const stdout = res.stdout ?? "", stderr = res.stderr ?? "";
   scrubToFile([`$ ${oneShot.display}`, `$ cwd ${cwd}`, `--- stdout ---`, stdout, `--- stderr ---`, stderr].join("\n"), transcriptFile);
   let rows: OutcomeRow[], parsed: ReturnType<typeof parseWalkVerdict>;
   if (res.error && (res.error as any).code === "ETIMEDOUT") {
-    const reason = `dispatcher timed out after ${TIMEOUT_MS}ms during run verifier walk`;
+    const reason = `dispatcher timed out after ${TIMEOUT_MS}ms during run verifier walk${res.queued ? `; ${res.queued}` : ""}`;
     rows = contract.outcomes.map(outcome => ({ id: outcome.id, result: "UNREACHED", detail: reason }));
     parsed = { verdict: "COULD-NOT-WALK", detail: `${rows[0].id}: ${reason}`, line: `VERDICT: COULD-NOT-WALK — ${rows[0].id}: ${reason}` };
   } else {
@@ -733,11 +738,12 @@ function workMain(args: string[]): void {
   }
   const rowLines = rows.map(row => `OUTCOME: ${row.id} ${row.result} — ${row.detail}`);
   fs.writeFileSync(metaFile, JSON.stringify({ mode: "work", bead, branch, tip: tip!, repo: rootRelative(repoRoot), productSubdirectory,
-    outcomes: rows, verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, transcript: transcriptRel }, null, 2));
+    outcomes: rows, verdict: parsed.verdict, detail: parsed.detail, line: parsed.line, transcript: transcriptRel,
+    ...(res.error && (res.error as any).code === "ETIMEDOUT" ? { reason: rows[0].detail } : {}) }, null, 2));
   appendVerifierGateInbox(bead, "settle", `verifier work verdict — ${bead}`,
     [parsed.line, ...rowLines, `out: ${rootRelative(outDir)}`, `transcript: ${transcriptRel}`, `metadata: ${metaRel}`].join("\n"), "verifier-walk", "seats/walk.ts", Infinity);
   console.log([...rowLines, parsed.line, `transcript: ${transcriptRel}`, `metadata: ${metaRel}`].join("\n"));
   process.exit(parsed.verdict === "WALKED-DONE" ? 0 : parsed.verdict === "WALKED-NOT-DONE" ? 2 : 3);
 }
 
-if (import.meta.main) main();
+if (import.meta.main) main().catch(error => die(error.message));

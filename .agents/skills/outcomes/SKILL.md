@@ -1,7 +1,7 @@
 ---
 name: outcomes
 description: 'Turn an intent into consumer-checkable outcomes when asked to "write the outcomes", "definition of done", "what does done look like", or "acceptance criteria".'
-version: 1.1.0
+version: 1.2.0
 ---
 
 # Outcomes
@@ -160,10 +160,47 @@ For the format check, assemble a temporary complete contract from the
 supplied header lines (`Trace:`, optional `Integration:`, `Signal:` and
 `Skills:`), the unchanged `Intent:` section and these `Outcomes:`. Use the
 actual signal reference and skill versions, not invented identifiers.
-Run `bun seats/contract.ts check --file <contract>` until it exits 0;
-fix each named error and repeat the consumer check. Then run
+### Signal-backed drafts (`sig-`)
+
+Obtain the actual task/bead id through the producer's normal graph workflow
+before checking the draft; neither its filename nor the signal's disposition
+supplies that identity to the file checker. Read `seats/seats.json` for the
+seat whose role is `producer`. Record the intake row's `produced` disposition
+naming that task **before the first format check**, using that roster seat's
+name as the actor (also when the producer runs as an external subagent):
+
+```bash
+BEADS_ACTOR=<producer-seat> bun seats/intake.ts dispose <sig-id> produced --work <bead-id>
+bun seats/contract.ts check --file <contract> --bead <bead-id>
+```
+
+For this sig- path, repeat `bun seats/contract.ts check --file <contract> --bead <bead-id>`
+until it exits 0, fixing each named draft error and repeating the consumer
+check. A format retry does not repair missing provenance: the signal must
+already be posted, disposed `produced`, name this same task in `work`, and
+name a roster producer in `by`. A missing ledger or producer roster must be
+resolved before checking, not bypassed with invented identifiers or actors.
+If the row is already correctly disposed, reuse it without disposing again.
+If it is completed as parked/dropped, names another task or records another
+actor, stop and route the discrepancy to the producer; do not rewrite a
+completed disposition or post a duplicate signal merely to make the gate pass.
+
+### Other signal kinds
+
+For `isa-gap:` and `install-procedure` drafts only, no intake disposition or
+file-check bead flag is required. Run `bun seats/contract.ts check --file <contract>`
+until it exits 0; fix each named error and repeat the consumer check. Their
+other contract requirements and existing install-procedure carve-outs remain.
+
+### Map check and return
+
+After the applicable format check exits 0, run
 `bun seats/manual.ts lint-contract --file <contract> --repo <repo>`;
 require `map outcomes: expected <n>, found <n>` and exit 0. A missing,
 duplicate, unrelated or wrong-project map outcome must be corrected;
 a format/count match is not proof of the unbuilt feature. Return the outcomes,
 not build steps or a claim that the unbuilt result has already been proven.
+
+Version 1.2.0 adds the sig- authoring-order rule. For contracts stamped with
+outcomes@1.1.0 or earlier, see [the stamp migration](migrations/1.2.0.md);
+do not bulk-restamp historical contracts.
