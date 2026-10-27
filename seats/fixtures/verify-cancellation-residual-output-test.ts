@@ -32,13 +32,14 @@ async function main() {
   assert(!fs.existsSync(ledger));
   for (const name of ['ordinary', 'writer']) {
     const copy = path.join(root, `review-copy-${name}`), evidence = path.join(copy, 'verdicts');
-    fs.mkdirSync(evidence, { recursive: true });
+    const temporary = path.join(root, `child-tmp-${name}`);
+    fs.mkdirSync(evidence, { recursive: true }); fs.mkdirSync(temporary);
     // A sibling root keeps the driver's existing writer ledger visible to the
     // suite's teardown. Only this simulated copy's verdicts are removed below.
-    const subject = path.join(path.dirname(root), `retention-output-${name}-driver`);
+    const subject = path.join(path.dirname(root), `${path.basename(root)}-${name}-driver`);
     assert(!fs.existsSync(subject));
     const args = [driver, subject, canary, fixture, runtime, name === 'ordinary' ? '--ordinary-retention-control' : '--writer-output-control'];
-    const child = spawn('bun', args, { env: { ...process.env, WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT: evidence }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const child = spawn('bun', args, { env: { ...process.env, TMPDIR: temporary, WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT: evidence }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let stdout = '', stderr = '', expired = false;
     child.stdout!.on('data', b => stdout += b); child.stderr!.on('data', b => stderr += b);
     if (child.pid) fs.writeFileSync(ledger, child.pid + '\n', { flag: 'wx', mode: 0o600 });
@@ -63,6 +64,8 @@ async function main() {
     assert.equal(lines.length, 1, 'entire residual record must survive copy deletion as one output line');
     assert.deepEqual(JSON.parse(lines[0].slice('RETENTION_RESIDUAL '.length)), record);
     assert.equal(record.scratchGone, false); assert(record.residual);
+    assert.equal(typeof record.retainedDiagnostics, 'string', 'isolate retention destination from the child TMPDIR');
+    assert(!record.stderr.includes('UNAVAILABLE:'), 'test must not plant a diagnostics storage refusal');
     assert.equal(record.subject.code, 37); assert.equal(native.code, 1);
     if (name === 'ordinary') {
       assert.equal(result.code, 1, 'ordinary real failure must fail the suite');
