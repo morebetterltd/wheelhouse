@@ -4,6 +4,8 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { completedCommand } from "../completed-command.ts";
+import { resolveRoleBrief } from "../briefs.ts";
+const reviewerBrief = resolveRoleBrief(path.resolve(import.meta.dir, "../.."), "reviewer");
 const [implementation, scratch, selected = "all"] = process.argv.slice(2);
 const runtime = path.dirname(implementation), reference = path.join(import.meta.dir, "verification/five-features");
 assert(["all", "unscoped", "scoped", "untouched", "bounce"].includes(selected));
@@ -35,7 +37,7 @@ function setup(layout: string) {
   const root = path.join(base, layout), repo = layout === "single" ? root : path.join(root, "product"), bin = path.join(root, "bin"), home = path.join(root, "home");
   for (const d of [root, repo, bin, home, path.join(root, "contracts")]) fs.mkdirSync(d, { recursive: true });
   runtimeCopy(root); if (repo !== root) runtimeCopy(repo);
-  fs.copyFileSync(path.join(import.meta.dir, "../../contracts/REVIEWER.md"), path.join(root, "contracts/REVIEWER.md"));
+  fs.copyFileSync(reviewerBrief, path.join(root, "contracts/REVIEWER.md"));
   const seats: any = {};
   for (const [name, role] of [["author", "worker"], ["reviewer", "reviewer"]]) {
     const dir = path.join(home, name); fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "auth.json"), '{"fixture":true}\n');
