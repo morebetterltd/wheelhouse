@@ -45,11 +45,34 @@ fi
 
 }
 
+# Graph exports never escape these per-command subshells, including HOME/XDG.
+prune_graph_run(){
+  local graph_env="$1"; shift
+  (
+    unset WHEELHOUSE_SELFTEST_BD_ROOT
+    eval "$graph_env"
+    case "${WHEELHOUSE_SELFTEST_BD_ROOT:-}" in "$FIX"/*) ;; *) echo 'STOP: prune command lacks its fixture helper graph' >&2; exit 1 ;; esac
+    [ "$(command -v bd)" = "$WHEELHOUSE_SELFTEST_BD_ROOT/bin/bd" ] || { echo 'STOP: prune bd is not the helper wrapper' >&2; exit 1; }
+    "$@"
+  )
+}
+prune_graph_guard(){ bun "$HERE/fixtures/prune-graph.ts" guard "$1" "$2" || exit 1; }
+prune_graph_assert(){
+  local label="$1" graph_env="$2"; shift 2
+  if prune_graph_run "$graph_env" bun "$HERE/fixtures/prune-graph.ts" assert "$label" "$@"; then
+    pass "$label tasks were written to the selftest scratch graph only"
+  else
+    fail "$label tasks were written to the selftest scratch graph only"; return 1
+  fi
+}
+
 prune_wait_regression(){
-  local source="$FIX/prune-wait-source"
+  local source="$FIX/prune-wait-source" graph="$FIX/prune-wait-graph" graph_env
+  prune_graph_guard waitcase "$HERE/fixtures/prune-wait.ts"
+  graph_env="$(selftest_scratch_graph "$graph")" || return 2
   mkdir -p "$source"
   selftest_copy_seat_runtime "$source" "$(dirname "$PRUNE")" || return 2
-  bun "$HERE/fixtures/prune-wait.ts" "$FIX/prune-wait" "$source" "$PRUNE" "$HERE/fixtures/prune-wait-clock.ts" "${WHEELHOUSE_PRUNE_WAIT_MODE:-fixed}"
+  prune_graph_run "$graph_env" bun "$HERE/fixtures/prune-wait.ts" "$FIX/prune-wait" "$source" "$PRUNE" "$HERE/fixtures/prune-wait-clock.ts" "${WHEELHOUSE_PRUNE_WAIT_MODE:-fixed}" "$graph"
 }
 
 prune_init_git_fixture(){
@@ -71,6 +94,7 @@ prune_init_git_fixture(){
 
 # Common reviewed-scan corpus. Both suites build exactly these rows.
 prune_fixture_reviewed(){
+prune_graph_guard 'reviewed fixture' "$HERE/fixtures/prune-fixture.sh"
 reviewed_tsv_header(){ printf '# wheelhouse-prune-scan-v1\t["%s"]\ncategory\tsafe\trepo\tpath\tbranch\tsize_bytes\tsize_human\taction\treason\n' "$1"; }
 
 prune_init_git_fixture || exit 2
@@ -79,23 +103,26 @@ git -C "$PROD" init --bare -q -b main "$BARE"
 git -C "$PROD" remote add origin "$BARE"
 git -C "$PROD" push -q -u origin main
 
-( cd "$ROOT" && bd init --non-interactive --skip-agents -p prune >/dev/null 2>&1 ) || { echo "selftest: bd init failed" >&2; exit 2; }
-CLOSED_ID=$(cd "$ROOT" && bd create 'closed merged worktree' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
-OPEN_ID=$(cd "$ROOT" && bd create 'seat anchored worktree' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
-OPEN_LIVE_ID=$(cd "$ROOT" && bd create 'open live cwd anchor' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
-LIVE_ID=$(cd "$ROOT" && bd create 'closed live cwd anchor' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
-CLOSED_LIVE_ID=$(cd "$ROOT" && bd create 'closed live cwd needs-review' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
-HIST_ID=$(cd "$ROOT" && bd create 'closed session history anchor' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
-STALE_ID=$(cd "$ROOT" && bd create 'closed stale branch no worktree' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
-UNMERGED_ID=$(cd "$ROOT" && bd create 'closed unmerged branch must survive' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
-GOAL_CHILD_ID=$(cd "$ROOT" && bd create 'closed child merged only to goal branch' --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
-cd "$ROOT" && bd close "$CLOSED_ID" >/dev/null 2>&1
-cd "$ROOT" && bd close "$LIVE_ID" >/dev/null 2>&1
-cd "$ROOT" && bd close "$CLOSED_LIVE_ID" >/dev/null 2>&1
-cd "$ROOT" && bd close "$HIST_ID" >/dev/null 2>&1
-cd "$ROOT" && bd close "$STALE_ID" >/dev/null 2>&1
-cd "$ROOT" && bd close "$UNMERGED_ID" >/dev/null 2>&1
-cd "$ROOT" && bd close "$GOAL_CHILD_ID" >/dev/null 2>&1
+REVIEWED_GRAPH="$FIX/reviewed-graph"
+REVIEWED_GRAPH_ENV="$(selftest_scratch_graph "$REVIEWED_GRAPH")" || exit 2
+ln -s "$REVIEWED_GRAPH/.beads" "$ROOT/.beads" || exit 2
+REVIEWED_HOME="$(prune_graph_run "$REVIEWED_GRAPH_ENV" bash -c 'printf "%s" "$HOME"')" || exit 2
+reviewed_bead(){
+  local id
+  id=$(prune_graph_run "$REVIEWED_GRAPH_ENV" bd create "$1" --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)') || return 1
+  if [ "$2" = closed ]; then prune_graph_run "$REVIEWED_GRAPH_ENV" bd close "$id" >/dev/null || return 1; fi
+  printf '%s\n' "$id"
+}
+CLOSED_ID=$(reviewed_bead 'closed merged worktree' closed) || exit 2
+OPEN_ID=$(reviewed_bead 'seat anchored worktree' open) || exit 2
+OPEN_LIVE_ID=$(reviewed_bead 'open live cwd anchor' open) || exit 2
+LIVE_ID=$(reviewed_bead 'closed live cwd anchor' closed) || exit 2
+CLOSED_LIVE_ID=$(reviewed_bead 'closed live cwd needs-review' closed) || exit 2
+HIST_ID=$(reviewed_bead 'closed session history anchor' closed) || exit 2
+STALE_ID=$(reviewed_bead 'closed stale branch no worktree' closed) || exit 2
+UNMERGED_ID=$(reviewed_bead 'closed unmerged branch must survive' closed) || exit 2
+GOAL_CHILD_ID=$(reviewed_bead 'closed child merged only to goal branch' closed) || exit 2
+prune_graph_assert 'reviewed fixture' "$REVIEWED_GRAPH_ENV" "$ROOT" "$REVIEWED_GRAPH" "$CLOSED_ID:closed" "$OPEN_ID:open" "$OPEN_LIVE_ID:open" "$LIVE_ID:closed" "$CLOSED_LIVE_ID:closed" "$HIST_ID:closed" "$STALE_ID:closed" "$UNMERGED_ID:closed" "$GOAL_CHILD_ID:closed" || exit 1
 
 make_closed_worktree(){
   local id="$1" msg="$2"
@@ -185,10 +212,10 @@ OPEN_TMP_BEFORE=$(shasum -a 256 "$OPEN_TMP/file.txt" | awk '{print $1}')
 FAKEBIN="$FIX/fakebin"
 SIMDATA_CLOSED="$FIX/simdata-closed"
 SIMDATA_OPEN="$FIX/simdata-open"
-mkdir -p "$FAKEBIN" "$SIMDATA_CLOSED" "$SIMDATA_OPEN" "$HOME/Library/Developer/XCTestDevices"
+mkdir -p "$FAKEBIN" "$SIMDATA_CLOSED" "$SIMDATA_OPEN" "$REVIEWED_HOME/Library/Developer/XCTestDevices"
 printf 'closed simulator bytes\n' > "$SIMDATA_CLOSED/payload"
 printf 'open simulator bytes\n' > "$SIMDATA_OPEN/payload"
-printf 'xctest device bytes\n' > "$HOME/Library/Developer/XCTestDevices/payload"
+printf 'xctest device bytes\n' > "$REVIEWED_HOME/Library/Developer/XCTestDevices/payload"
 cat > "$FAKEBIN/pgrep" <<'SH'
 #!/usr/bin/env bash
 [ "$1" = "-x" ] && [ "$2" = "xcodebuild" ] && exit 1
@@ -241,7 +268,7 @@ cat > "$ROOT/seats/integration-refs.txt" <<'EOF'
 fleet/goal-x
 fleet/never-created
 EOF
-( cd "$ROOT" && bun seats/prune.ts scan > "$SCAN" ) || { echo "selftest: scan failed" >&2; exit 2; }
+( cd "$ROOT" && prune_graph_run "$REVIEWED_GRAPH_ENV" bun seats/prune.ts scan > "$SCAN" ) || { echo "selftest: scan failed" >&2; exit 2; }
 }
 
 prune_fixture_cleanup_helpers(){
@@ -267,10 +294,19 @@ mk_install(){ # $1 root: container git repo, nested product repo with a bare ori
 }
 
 prune_fixture_ext(){
+prune_graph_guard 'extended fixture' "$HERE/fixtures/prune-fixture.sh"
 EXT="$FIX/ext"; EPROD="$EXT/product"; EWTS="$EXT/.wheelhouse-worktrees"; ERUNS="$EXT/.wheelhouse-runs"; ELOG="$EXT/seats/logs/cleanup.log"
 mk_install "$EXT"; mkdir -p "$EWTS" "$ERUNS"
-( cd "$EXT" && bd init --non-interactive --skip-agents -p ext >/dev/null 2>&1 ) || { echo "selftest: bd init failed in $EXT" >&2; exit 2; }
-ext_bead(){ local id; id=$(cd "$EXT" && bd create "$1" --json | json_id); [ "${2:-closed}" = closed ] && ( cd "$EXT" && bd close "$id" >/dev/null 2>&1 ); printf '%s\n' "$id"; }
+EXT_GRAPH="$FIX/ext-graph"
+EXT_GRAPH_ENV="$(selftest_scratch_graph "$EXT_GRAPH")" || exit 2
+ln -s "$EXT_GRAPH/.beads" "$EXT/.beads" || exit 2
+ext_bead(){
+  local id status="${2:-closed}"
+  id=$(prune_graph_run "$EXT_GRAPH_ENV" bd create "$1" --json | json_id) || return 1
+  if [ "$status" = closed ]; then prune_graph_run "$EXT_GRAPH_ENV" bd close "$id" >/dev/null || return 1; fi
+  prune_graph_run "$EXT_GRAPH_ENV" bun "$HERE/fixtures/prune-graph.ts" assert 'extended fixture' "$EXT" "$EXT_GRAPH" "$id:$status" >/dev/null || return 1
+  printf '%s\n' "$id"
+}
 ext_wt(){ # $1 bead id, $2 optional dir: worktree on fleet/<id> with one commit touching <id>.txt
   local dir="${2:-$EWTS/$1}"
   git -C "$EPROD" worktree add -q -b "fleet/$1" "$dir" main || { fail "worktree add failed for $dir"; return 1; }
@@ -278,16 +314,16 @@ ext_wt(){ # $1 bead id, $2 optional dir: worktree on fleet/<id> with one commit 
   printf '%s\n' "$1" > "$dir/$1.txt"; git -C "$dir" add "$1.txt" && git -C "$dir" commit -q -m "work $1"
 }
 ext_merge(){ git -C "$EPROD" checkout -q main; git -C "$EPROD" merge -q --no-ff "fleet/$1" -m "merge $1"; git -C "$EPROD" push -q origin main; git -C "$EPROD" push -q origin "fleet/$1"; }
-ext_scan(){ ( cd "$EXT" && bun seats/prune.ts scan --format jsonl > "$FIX/ext-scan.jsonl" 2>/dev/null ); }
+ext_scan(){ ( cd "$EXT" && prune_graph_run "$EXT_GRAPH_ENV" bun seats/prune.ts scan --format jsonl > "$FIX/ext-scan.jsonl" 2>/dev/null ); }
 ext_row(){ grep -F "\"path\":\"$1\"" "$FIX/ext-scan.jsonl"; }
 ext_registered(){ git -C "$EPROD" worktree list --porcelain | grep -xF >/dev/null "worktree $1"; }
-ext_cleanup(){ ( cd "$EXT" && bun seats/prune.ts cleanup "$@" 2>&1 ); }
+ext_cleanup(){ ( cd "$EXT" && prune_graph_run "$EXT_GRAPH_ENV" bun seats/prune.ts cleanup "$@" 2>&1 ); }
 # This case asserts eventual progress, not expiry at a host-speed-dependent 30s.
 # Keep only these progress clients' budget clock stationary; ordinary cleanup
 # and the separate immediate lock-refusal case retain the native clock.
-ext_wait_cleanup(){ ( cd "$EXT" && bun --preload "$HERE/fixtures/prune-wait-clock.ts" seats/prune.ts cleanup "$@" 2>&1 ); }
+ext_wait_cleanup(){ ( cd "$EXT" && prune_graph_run "$EXT_GRAPH_ENV" bun --preload "$HERE/fixtures/prune-wait-clock.ts" seats/prune.ts cleanup "$@" 2>&1 ); }
 ext_record_run(){
-  ( cd "$EXT" && bun -e 'import {recordCleanupScratch} from "./seats/cleanup-identity.ts"; recordCleanupScratch(process.argv[1],process.argv[2],process.argv[3]);' "$EXT" "$1" "$2" ) || exit 2
+  ( cd "$EXT" && prune_graph_run "$EXT_GRAPH_ENV" bun -e 'import {recordCleanupScratch} from "./seats/cleanup-identity.ts"; recordCleanupScratch(process.argv[1],process.argv[2],process.argv[3]);' "$EXT" "$1" "$2" ) || exit 2
 }
 
 }

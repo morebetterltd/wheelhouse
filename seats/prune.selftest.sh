@@ -47,12 +47,12 @@ fi
 
 prune_fixture_reviewed
 phase 'categories verb'
-CATS=$(cd "$ROOT" && bun seats/prune.ts categories 2>&1)
+CATS=$(cd "$ROOT" && prune_graph_run "$REVIEWED_GRAPH_ENV" bun seats/prune.ts categories 2>&1)
 if printf '%s\n' "$CATS" | grep >/dev/null 'merged-worktree' && printf '%s\n' "$CATS" | grep >/dev/null 'seat-anchor' && printf '%s\n' "$CATS" | grep >/dev/null 'bench-junk' && printf '%s\n' "$CATS" | grep >/dev/null 'run-scratch' && printf '%s\n' "$CATS" | grep >/dev/null 'bead-tmp' && printf '%s\n' "$CATS" | grep >/dev/null 'bead-simulator' && printf '%s\n' "$CATS" | grep >/dev/null 'xctest-devices'; then pass 'categories names worktree, bench-junk, scratch, simulator, xctest, and seat safety categories'; else fail "categories output missing expected categories: $CATS"; fi
 
 phase 'scan classifies fixture rows'
 SCAN="$FIX/scan.tsv"
-( cd "$ROOT" && bun seats/prune.ts scan > "$SCAN" ) || { echo "selftest: scan failed" >&2; exit 2; }
+( cd "$ROOT" && prune_graph_run "$REVIEWED_GRAPH_ENV" bun seats/prune.ts scan > "$SCAN" ) || { echo "selftest: scan failed" >&2; exit 2; }
 if awk -F '\t' -v p="$WTS/$CLOSED_ID" '$1=="merged-worktree" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed merged clean worktree is safe merged-worktree'; else fail "closed merged worktree row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v b="fleet/$STALE_ID" '$1=="stale-branch" && $2=="1" && $5==b && $6=="0" && $7=="0.0B" {found=1} END{exit found?0:1}' "$SCAN"; then pass 'safe stale-branch reports zero reclaimed size'; else fail "stale-branch zero-size row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$UNMERGED_ID" '$1=="needs-review" && $2=="0" && $4==p && $5 ~ /^fleet\// && $9 ~ /not merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed but unmerged fleet worktree is needs-review'; else fail "unmerged branch guard row missing:\n$(cat "$SCAN")"; fi
@@ -63,7 +63,7 @@ cat > "$ROOT/seats/integration-refs.txt" <<'EOF'
 fleet/goal-x
 fleet/never-created
 EOF
-( cd "$ROOT" && bun seats/prune.ts scan > "$SCAN" ) || { echo "selftest: scan with integration-refs failed" >&2; exit 2; }
+( cd "$ROOT" && prune_graph_run "$REVIEWED_GRAPH_ENV" bun seats/prune.ts scan > "$SCAN" ) || { echo "selftest: scan with integration-refs failed" >&2; exit 2; }
 if awk -F '\t' -v p="$WTS/$GOAL_CHILD_ID" '$1=="merged-worktree" && $2=="1" && $4==p && $5 ~ /^fleet\// {found=1} END{exit found?0:1}' "$SCAN"; then pass 'goal-branch child becomes safe merged-worktree when its goal branch is listed'; else fail "goal child merged-worktree row missing after integration-refs:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v b="fleet/goal-x" '$1=="needs-review" && $2=="0" && $5==b && $9 ~ /listed integration ref/ {found=1} $1=="stale-branch" && $5==b {bad=1} END{exit found && !bad ? 0 : 1}' "$SCAN"; then pass 'listed goal branch is needs-review, never stale-branch'; else fail "listed goal branch guard row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' -v p="$WTS/$UNMERGED_ID" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /not merged/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'listed goal ref does not widen matching to unrelated fleet branches'; else fail "unrelated unmerged branch was widened by integration-refs:\n$(cat "$SCAN")"; fi
@@ -87,7 +87,7 @@ if awk -F '\t' -v p="$CLOSED_TMP" '$1=="bead-tmp" && $2=="1" && $4==p {found=1} 
 if awk -F '\t' -v p="$OPEN_TMP" '$1=="needs-review" && $2=="0" && $4==p && $9 ~ /which is open/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'open bead tmp scratch is needs-review'; else fail "open bead-tmp guard row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' '$1=="bead-simulator" && $2=="1" && $4=="simctl:11111111-1111-1111-1111-111111111111" {found=1} END{exit found?0:1}' "$SCAN"; then pass 'closed bead simctl device is safe bead-simulator'; else fail "closed bead-simulator row missing:\n$(cat "$SCAN")"; fi
 if awk -F '\t' '$1=="needs-review" && $2=="0" && $4=="simctl:22222222-2222-2222-2222-222222222222" && $9 ~ /which is open/ {found=1} END{exit found?0:1}' "$SCAN"; then pass 'open bead simctl device is needs-review'; else fail "open bead-simulator guard row missing:\n$(cat "$SCAN")"; fi
-if awk -F '\t' -v p="$HOME/Library/Developer/XCTestDevices" '$1=="xctest-devices" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'idle XCTestDevices set is safe xctest-devices'; else fail "xctest-devices row missing:\n$(cat "$SCAN")"; fi
+if awk -F '\t' -v p="$REVIEWED_HOME/Library/Developer/XCTestDevices" '$1=="xctest-devices" && $2=="1" && $4==p {found=1} END{exit found?0:1}' "$SCAN"; then pass 'idle XCTestDevices set is safe xctest-devices'; else fail "xctest-devices row missing:\n$(cat "$SCAN")"; fi
 
 phase 'active bench lock makes caches review-only'
 BUSY_SCAN="$FIX/busy-scan.tsv"
@@ -97,13 +97,16 @@ if awk -F '\t' -v p="$BUSY/product/.wheelhouse-build" '$1=="needs-review" && $2=
 [ -d "$BUSY/product/.wheelhouse-build" ] && pass 'active-bench cache remains after prune --yes' || fail 'active-bench cache was removed'
 
 phase 'dry-run does not touch rows'
-( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune-dry.out" )
-if [ -d "$WTS/$CLOSED_ID" ] && [ -d "$WTS/orphaned-checkout" ] && [ -d "$PROD/.wheelhouse-build" ] && [ -d "$PROD/dist" ] && [ -d "$PROD/node_modules/pkg/dist" ] && [ -d "$PROD/node_modules/.bin" ] && [ -d "$ROOT/.wheelhouse-bench.lock.stale.12345" ] && [ -d "$ROOT/.wheelhouse-runs/$CLOSED_ID-build" ] && [ -d "$CLOSED_TMP" ] && [ -d "$HOME/Library/Developer/XCTestDevices" ]; then pass 'prune without --yes is dry-run only'; else fail 'dry-run removed a fixture path'; fi
-( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --categories stale-branch > "$FIX/stale-branch-dry.out" )
+( cd "$ROOT" && prune_graph_run "$REVIEWED_GRAPH_ENV" bun seats/prune.ts prune --from-file "$SCAN" --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune-dry.out" )
+if [ -d "$WTS/$CLOSED_ID" ] && [ -d "$WTS/orphaned-checkout" ] && [ -d "$PROD/.wheelhouse-build" ] && [ -d "$PROD/dist" ] && [ -d "$PROD/node_modules/pkg/dist" ] && [ -d "$PROD/node_modules/.bin" ] && [ -d "$ROOT/.wheelhouse-bench.lock.stale.12345" ] && [ -d "$ROOT/.wheelhouse-runs/$CLOSED_ID-build" ] && [ -d "$CLOSED_TMP" ] && [ -d "$REVIEWED_HOME/Library/Developer/XCTestDevices" ]; then pass 'prune without --yes is dry-run only'; else fail 'dry-run removed a fixture path'; fi
+( cd "$ROOT" && prune_graph_run "$REVIEWED_GRAPH_ENV" bun seats/prune.ts prune --from-file "$SCAN" --categories stale-branch > "$FIX/stale-branch-dry.out" )
 if grep -q 'DRY-RUN branch stale-branch' "$FIX/stale-branch-dry.out" && grep -q 'reclaimed_bytes=0 reclaimed_human=0.0B' "$FIX/stale-branch-dry.out"; then pass 'stale-branch dry-run contributes zero reclaimed bytes'; else fail "stale-branch dry-run reclaimed bytes unexpectedly: $(cat "$FIX/stale-branch-dry.out")"; fi
 
 phase 'host-budget auto_prune uses the real scanner and reviewed prune parser'
+prune_graph_guard auto-prune "$HERE/prune.selftest.sh"
 CAP_REAL="$FIX/actual-auto-prune"
+CAP_GRAPH="$FIX/cap-graph"
+CAP_GRAPH_ENV="$(selftest_scratch_graph "$CAP_GRAPH")" || exit 2
 mkdir -p "$CAP_REAL/seats/logs" "$CAP_REAL/seats/run" "$CAP_REAL/.wheelhouse-worktrees"
 selftest_copy_seat_runtime "$CAP_REAL" "$(dirname "$PRUNE")"
 git -C "$CAP_REAL" init -q -b main
@@ -111,10 +114,10 @@ git -C "$CAP_REAL" config user.email selftest@example.invalid
 git -C "$CAP_REAL" config user.name selftest
 printf 'owned cap fixture\n' > "$CAP_REAL/base.txt"
 git -C "$CAP_REAL" add base.txt && git -C "$CAP_REAL" commit -q -m base
-( cd "$CAP_REAL" && bd init --non-interactive --skip-agents -p cap >/dev/null 2>&1 ) || { echo 'selftest: cap graph init failed' >&2; exit 2; }
+ln -s "$CAP_GRAPH/.beads" "$CAP_REAL/.beads" || exit 2
 CAP_IDS=()
 for n in 1 2; do
-  id=$(cd "$CAP_REAL" && bd create "real auto-prune $n" --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
+  id=$(cd "$CAP_REAL" && prune_graph_run "$CAP_GRAPH_ENV" bd create "real auto-prune $n" --json | bun -e 'let s=""; for await (const c of Bun.stdin.stream()) s+=Buffer.from(c).toString(); console.log(JSON.parse(s).id)')
   [ -n "$id" ] || { echo 'selftest: cap bead missing' >&2; exit 2; }
   CAP_IDS+=("$id")
   wt="$CAP_REAL/.wheelhouse-worktrees/$id"
@@ -122,8 +125,9 @@ for n in 1 2; do
   printf 'work\n' > "$wt/$id.txt"
   git -C "$wt" add "$id.txt" && git -C "$wt" commit -q -m "work $id"
   git -C "$CAP_REAL" merge -q --no-ff "fleet/$id" -m "merge $id"
-  ( cd "$CAP_REAL" && bd close "$id" >/dev/null 2>&1 )
+  ( cd "$CAP_REAL" && prune_graph_run "$CAP_GRAPH_ENV" bd close "$id" >/dev/null 2>&1 )
 done
+prune_graph_assert auto-prune "$CAP_GRAPH_ENV" "$CAP_REAL" "$CAP_GRAPH" "${CAP_IDS[0]}:closed" "${CAP_IDS[1]}:closed" || exit 1
 printf '{"seats":{}}\n' > "$CAP_REAL/seats/seats.json"
 printf '{"type":"agent_end"}\n' > "$CAP_REAL/seats/logs/fixture-status.jsonl"
 printf '{"seats":{"fixture-status":{"pid":null,"role":"worker","log":"%s","fifo":"%s"}}}\n' "$CAP_REAL/seats/logs/fixture-status.jsonl" "$CAP_REAL/seats/run/fixture-status.stdin" > "$CAP_REAL/seats/state.json"
@@ -131,7 +135,7 @@ printf '{"enabled":true,"max_worktrees":1,"auto_prune":true}\n' > "$CAP_REAL/sea
 CAP_BEFORE=$(git -C "$CAP_REAL" worktree list --porcelain | grep -c '^worktree ')
 [ "$CAP_BEFORE" -eq 3 ] || { echo 'selftest: real cap subjects absent' >&2; exit 2; }
 set +e
-( cd "$CAP_REAL" && bun seats/adapter.ts status ) > "$FIX/cap-real.out" 2> "$FIX/cap-real.err"; CAP_REAL_RC=$?
+( cd "$CAP_REAL" && prune_graph_run "$CAP_GRAPH_ENV" bun seats/adapter.ts status ) > "$FIX/cap-real.out" 2> "$FIX/cap-real.err"; CAP_REAL_RC=$?
 set -e
 printf 'MEASUREMENT real-auto-prune rc=%s\n' "$CAP_REAL_RC"
 while IFS= read -r line; do printf '  adapter stdout: %s\n' "$line"; done < "$FIX/cap-real.out"
@@ -152,6 +156,7 @@ prune_fixture_ext
 phase 'install policy cleanup=off/report is honored by direct prune cleanup'
 mkdir -p "$EXT/wheelhouse"
 OFF_ID=$(ext_bead 'cleanup off direct')
+prune_graph_assert 'extended fixture' "$EXT_GRAPH_ENV" "$EXT" "$EXT_GRAPH" "$OFF_ID:closed" || exit 1
 mkdir -p "$ERUNS/$OFF_ID-run"
 printf 'keep\n' > "$ERUNS/$OFF_ID-run/file.txt"
 ext_record_run "$ERUNS/$OFF_ID-run" "$OFF_ID"
@@ -234,7 +239,7 @@ wait "$CA_PID"; CA_RC=$?; wait "$CB_PID"; CB_RC=$?
 if selftest_capture_lacks "$FIX/ext-ca.out" -q -- 'already running' && selftest_capture_lacks "$FIX/ext-cb.out" -q -- 'already running'; then pass 'neither waiting cleanup gave up on the lock'; else fail 'a --wait cleanup gave up or its capture is unavailable'; fi
 # The same live holder must outlast refusal. Observe the real lock-wait call,
 # not Bun startup/identity-check wall time; a waiting removal must fail by name.
-if bun "$HERE/fixtures/prune-refusal.ts" "$EXT" "$FIX/refusal" "${WHEELHOUSE_PRUNE_REFUSAL_MODE:-fixed}"; then
+if prune_graph_run "$EXT_GRAPH_ENV" bun "$HERE/fixtures/prune-refusal.ts" "$EXT" "$FIX/refusal" "${WHEELHOUSE_PRUNE_REFUSAL_MODE:-fixed}"; then
   pass 'cleanup refuses with only "already running" and rc 0 while the holder still holds the lock, without waiting'
 else
   fail 'cleanup lock refusal waited on the held lock or violated its refusal protocol'
@@ -264,7 +269,7 @@ mkdir -p "$EXT/seats/run"; printf '{"seat":"worker-1","branch":"fleet/%s","workt
 OUT=$(ext_cleanup --bead "$PUSH_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ -d "$EWTS/$PUSH_ID" ] && printf '%s\n' "$OUT" | grep >/dev/null "kept needs-review $EWTS/$PUSH_ID reason=deferred: push in progress" && pass 'worktree kept with "deferred: push in progress" while the push marker names a live pid' || fail "mid-push rc=$RC: $OUT"
 rm -f "$EXT/seats/run/push.worker-1.json"; kill "$PUSH_PID" >/dev/null 2>&1; wait "$PUSH_PID" 2>/dev/null
-if bun "$HERE/fixtures/prune-push-separators.ts" "$EXT" "$EWTS/$PUSH_ID" "$EXT/seats/prune.ts"; then
+if prune_graph_run "$EXT_GRAPH_ENV" bun "$HERE/fixtures/prune-push-separators.ts" "$EXT" "$EWTS/$PUSH_ID" "$EXT/seats/prune.ts"; then
   pass 'push with a line separator in its command line defers cleanup'
 else
   fail 'separator-bearing push was not deferred without a push marker'
