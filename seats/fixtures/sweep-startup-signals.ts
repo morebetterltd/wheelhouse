@@ -91,7 +91,20 @@ function instrument(removed: boolean): string {
   ps -p "$START_WATCH_PID" -o pid=,pgid=,lstart= >> "$START_IDENTITIES"
   startup_fixture_point watchdog-forked
   WATCHDOG_PID=$START_WATCH_PID`);
-  replace('  trap \'\' INT TERM HUP\n  local root="$1" dir="$2" message=""\n', '  trap \'\' INT TERM HUP\n  local root="$1" dir="$2" message=""\n  printf "read\\n" >> "$START_READS"\n');
+  // Count watchdog entries immediately before its FIFO loop, after setup.
+  // Signal lists are production policy (PIPE was added for reader loss), not
+  // fixture anchors. Scope to the named function so another loop cannot match.
+  const functions = [...s.matchAll(/^([A-Za-z_]\w*)[ \t]*\(\)[ \t]*\{/gm)];
+  const watchdog = functions.filter(match => match[1] === "suite_watchdog");
+  assert.equal(watchdog.length, 1, "startup fixture needs one suite_watchdog");
+  const start = watchdog[0].index!;
+  const end = functions.find(match => match.index! > start)?.index ?? s.length;
+  const body = s.slice(start, end);
+  const loops = [...body.matchAll(/^[ \t]*while[ \t]+:[ \t]*;[ \t]*do[ \t]*\r?$/gm)];
+  assert.equal(loops.length, 1, "startup fixture needs one watchdog FIFO loop");
+  const at = start + loops[0].index!;
+  // Slice, not a replacement string: preserve shell $$/$& bytes verbatim.
+  s = s.slice(0, at) + '  printf "read\\n" >> "$START_READS"\n' + s.slice(at);
   replace('  if [ "$mode" = stop ]; then printf \'stop\\n\' >&9; fi', '  if [ "$mode" = stop ]; then printf "stop\\n" >> "$START_STOPS"; printf \'stop\\n\' >&9; fi');
   replace('interrupt_sweep(){\n  local rc="$1"\n', 'interrupt_sweep(){\n  local rc="$1"\n  printf "%s\\n" "$rc" >> "$START_SIGNALS"\n');
   return s;
