@@ -125,7 +125,7 @@ async function preservation(kind: "transition" | "supervisor" | "sweep" | "inher
       // Isolate the inherited-watchdog path: its outer supervisor deliberately
       // has no heartbeat, so it cannot conceal a missing inherited renewal.
       let outer = named(source, "network-before");
-      const first = outer.indexOf("      renewal = setInterval(() => {"), last = outer.indexOf('      gate.end("admitted\\n");', first);
+      const first = outer.indexOf("      renewal = setInterval(() => {"), last = outer.indexOf('      gate.end(`admitted\\n${held}\\n`);', first);
       if (first >= 0) { assert(last > first); outer = outer.slice(0, first) + outer.slice(last); }
       const outerFile = path.join(dir, "outer-no-heartbeat.ts"); fs.writeFileSync(outerFile, outer);
       argv = ["bun", outerFile, "supervise", lock, ...argv];

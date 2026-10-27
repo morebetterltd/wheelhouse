@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import conditionWait from './wait-for-condition.cjs';
 const { waitForCondition } = conditionWait;
 
@@ -52,6 +52,7 @@ if(mode==='large'){
 if(mode==='exit23'){exit=23;diagnostic='fixture census native23\\n';}
 if(mode==='empty')payload=Buffer.alloc(0);
 if(mode==='malformed')payload=Buffer.from('fixture malformed census\\n');
+if(mode==='missing-fields')payload=Buffer.concat([bytes,Buffer.from(process.env.CENSUS_EXPECT_PID+' '+process.env.CENSUS_RECORDED_PID+'\\n')]);
 if(mode==='stderr')diagnostic='fixture census diagnostic despite exit0\\n';
 fs.writeFileSync(path.join(dir,'replay.json'),JSON.stringify({mode,bytes:payload.length,candidateOffset,exit,diagnostic,sha256:crypto.createHash('sha256').update(payload).digest('hex')},null,2));
 process.stdout.write(payload);if(diagnostic)process.stderr.write(diagnostic);process.exitCode=exit;
@@ -68,17 +69,26 @@ const recorded = Bun.spawn(["node", path.join(source, "fixtures/adapter-selftest
   cwd: root, env: { ...process.env, HOME: home, ADAPTER_HOLDER_READY: recordedReady, ADAPTER_HOLDER_TITLE: "census-recorded-holder" }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
 });
 const recordedOut = new Response(recorded.stdout).text(), recordedErr = new Response(recorded.stderr).text();
-const ready = path.join(evidence, "candidate.ready"), title = `pi --mode rpc census-duplicate ${account} ${root}`;
+const ready = path.join(evidence, "candidate.ready"), title = `pi --mode rpc census-duplicate ${account} ${root} newline\nend`;
 const peer = Bun.spawn(["node", path.join(source, "fixtures/adapter-selftest-holder.mjs"), title], {
   cwd: root, env: { ...process.env, HOME: home, ADAPTER_HOLDER_READY: ready, ADAPTER_HOLDER_TITLE: title }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
 });
 const peerOut = new Response(peer.stdout).text(), peerErr = new Response(peer.stderr).text();
+// Native UTF-8 ps on macOS preserves these two characters verbatim. Register
+// spawn/close listeners immediately, not sequentially after other awaits.
+const separators = ["\u2028", "\u2029"].map(separator => {
+  const child = spawn("/bin/sleep", ["60"], { argv0: `census-separator${separator}end`, cwd: root, stdio: "ignore" });
+  const started = new Promise<void>((resolve, reject) => { child.once("spawn", () => resolve()); child.once("error", reject); });
+  const done = new Promise(resolve => child.once("close", resolve));
+  return { child, started, done, separator };
+});
 function fileReady(file: string) {
   return waitForCondition({ site: 'adapter-census.fileReady', paths: [path.dirname(file)], predicate: () => fs.existsSync(file) });
 }
 const readySignal = fileReady(ready), recordedSignal = fileReady(recordedReady);
 let failures = 0; const results: any[] = [];
 try {
+  await Promise.all(separators.map(s => s.started));
   note("waiting for live subjects", { recordedPid: recorded.pid, candidatePid: peer.pid });
   const setup = await Promise.race([Promise.all([readySignal.promise, recordedSignal.promise]).then(() => "ready"), peer.exited.then(() => "exit"), recorded.exited.then(() => "exit")]);
   assert.equal(setup, "ready", "both owned siblings must establish real live-process preconditions");
@@ -92,11 +102,11 @@ try {
   const start = Date.parse(birth.stdout.trim()); assert(Number.isFinite(start));
   const seat = { pid: recorded.pid, startedAt: new Date(start).toISOString(), role: "worker", roleBrief: "fixture", accountDir: account, cwd: root, log, sessionId: "census-session", sessionFile: null, lastBead: "census-bead" };
   fs.writeFileSync(stateFile, JSON.stringify({ seats: { "worker-1": seat } }, null, 2));
-  for (const mode of ["large", "exit23", "empty", "malformed", "stderr"]) {
+  for (const mode of ["line-separators", "large", "exit23", "empty", "malformed", "missing-fields", "stderr"]) {
     const dir = path.join(evidence, mode); fs.mkdirSync(dir);
     note("running native status", { mode });
     const child = Bun.spawn(["bun", path.join(root, "seats/adapter.ts"), "status"], {
-      cwd: root, env: { ...process.env, HOME: home, WHEELHOUSE_SKIP_BD: "1", WHEELHOUSE_CLEANUP: "0", PATH: bin + path.delimiter + process.env.PATH, CENSUS_REAL_PS: realPs, CENSUS_WRAPPER_SCRIPT: wrapperScript, CENSUS_MODE: mode, CENSUS_CASE_DIR: dir, CENSUS_EXPECT_PID: String(peer.pid), WHEELHOUSE_ORPHAN_CONFIRM_MS: "0" },
+      cwd: root, env: { ...process.env, HOME: home, WHEELHOUSE_SKIP_BD: "1", WHEELHOUSE_CLEANUP: "0", PATH: bin + path.delimiter + process.env.PATH, CENSUS_REAL_PS: realPs, CENSUS_WRAPPER_SCRIPT: wrapperScript, CENSUS_MODE: mode, CENSUS_CASE_DIR: dir, CENSUS_EXPECT_PID: String(peer.pid), CENSUS_RECORDED_PID: String(recorded.pid), LC_ALL: process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8", WHEELHOUSE_ORPHAN_CONFIRM_MS: "0" },
       stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
@@ -107,6 +117,11 @@ try {
       assert.equal(captured.status, 0); assert.equal(captured.signal, null); assert.equal(captured.error, null);
       const actual = fs.readFileSync(path.join(dir, "ps.stdout"), "utf8");
       assert(actual.split("\n").some(line => new RegExp(`^\\s*${peer.pid}\\s+`).test(line) && line.includes(account)), "actual captured candidate row exists before replay");
+      for (const subject of separators) {
+        process.kill(subject.child.pid!, 0);
+        const row = actual.split("\n").find(line => new RegExp(`^\\s*${subject.child.pid}\\s+`).test(line));
+        assert(row?.includes(subject.separator), "native UTF-8 ps must preserve the separator before parsing/replay");
+      }
       process.kill(recorded.pid, 0); process.kill(peer.pid, 0);
       assert(recorded.exitCode === null && peer.exitCode === null, "both actual subjects remain live before the reporting assertion");
       const current = JSON.parse(fs.readFileSync(stateFile, "utf8")).seats["worker-1"];
@@ -116,8 +131,8 @@ try {
       assert.equal(code, 0, "status must keep its total reporting contract");
       const healthy = stdout.split("\n").find(line => line.startsWith("worker-1"));
       assert(healthy?.includes("RUNNING") && healthy.includes(`pid ${recorded.pid}`), "healthy recorded seat remains visible");
-      if (mode === "large") {
-        assert(replay.bytes > 2 * 1024 * 1024 && replay.candidateOffset > 2 * 1024 * 1024, "actual candidate is beyond every historical default pipe prefix"); assert.equal(replay.exit, 0);
+      if (mode === "large" || mode === "line-separators") {
+        if (mode === "large") assert(replay.bytes > 2 * 1024 * 1024 && replay.candidateOffset > 2 * 1024 * 1024, "actual candidate is beyond every historical default pipe prefix"); assert.equal(replay.exit, 0);
         assert(stdout.includes(`pid ${peer.pid}`) && /ORPHAN|fixture leak/.test(stdout) && stdout.includes("remedy:"), "large census must report the real captured duplicate");
         assert(!stderr.includes("UNVERIFIED orphan census"), "complete captured census is verified");
       } else {
@@ -126,7 +141,7 @@ try {
         assert(!stdout.includes(`pid ${peer.pid}`), "unverified census must not publish candidates from untrusted output");
         if (mode === "exit23") assert(stderr.includes("exit=23") && stderr.includes("fixture census native23"));
         if (mode === "empty") assert(stderr.includes("empty census"));
-        if (mode === "malformed") assert(stderr.includes("malformed census record"));
+        if (mode === "malformed" || mode === "missing-fields") assert(stderr.includes("malformed census record"));
         if (mode === "stderr") assert(stderr.includes("fixture census diagnostic despite exit0"));
       }
       process.kill(recorded.pid, 0); assert(recorded.exitCode === null, "healthy process remains live");
@@ -143,7 +158,8 @@ try {
   if (original) fs.writeFileSync(stateFile, original); else if (fs.existsSync(stateFile)) fs.unlinkSync(stateFile);
   if (peer.exitCode === null) peer.kill("SIGTERM");
   if (recorded.exitCode === null) recorded.kill("SIGTERM");
-  await Promise.all([peer.exited, peerOut, peerErr, recorded.exited, recordedOut, recordedErr]);
+  for (const { child } of separators) if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+  await Promise.all([peer.exited, peerOut, peerErr, recorded.exited, recordedOut, recordedErr, ...separators.map(s => s.done)]);
   fs.writeFileSync(path.join(evidence, "results.json"), JSON.stringify(results, null, 2));
   note("original subjects joined", { assertionsFailed: failures });
 }

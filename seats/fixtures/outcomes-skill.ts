@@ -34,7 +34,7 @@ test("layout and frontmatter", () => {
   const text = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
   const front = text.match(/^---\n([\s\S]+?)\n---\n/); assert(front, "YAML frontmatter missing");
   const fields = Bun.YAML.parse(front[1]) as Record<string, unknown>;
-  assert.equal(fields.name, "outcomes"); assert.equal(fields.version, "1.1.0");
+  assert.equal(fields.name, "outcomes"); assert.equal(fields.version, "1.2.0");
   assert.equal(typeof fields.description, "string");
   for (const trigger of ["write the outcomes", "definition of done", "what does done look like", "acceptance criteria"]) assert(String(fields.description).includes(trigger), "missing trigger " + trigger);
   const link = path.join(root, ".claude/skills/outcomes"); assert(fs.lstatSync(link).isSymbolicLink(), "compatibility path is not a symlink");
@@ -42,6 +42,31 @@ test("layout and frontmatter", () => {
   assert.equal(fs.realpathSync(path.join(link, "SKILL.md")), fs.realpathSync(path.join(skillDir, "SKILL.md")));
   const indexed = run("git", ["-C", root, "ls-files", "--stage", "--", ".claude/skills/outcomes"], process.env, "indexed-link");
   assert.equal(indexed.status, 0, indexed.stderr); assert.match(indexed.stdout, /^120000 [0-9a-f]+ 0\t\.claude\/skills\/outcomes\n$/);
+});
+test("sig authoring disposition precedes bead-naming checks", () => {
+  const text = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
+  const start = text.indexOf("### Signal-backed drafts (`sig-`)");
+  const end = text.indexOf("### Other signal kinds", start);
+  assert(start >= 0 && end > start, "sig- authoring section missing");
+  const sequence = text.slice(start, end), dispose = sequence.indexOf("bun seats/intake.ts dispose <sig-id> produced --work <bead-id>");
+  const checks = [...sequence.matchAll(/bun seats\/contract\.ts check --file <contract>[^`\n]*/g)];
+  assert(dispose >= 0 && sequence.includes("BEADS_ACTOR=<producer-seat>"), "producer disposition/actor missing");
+  assert(checks.length > 0, "sig- format check missing");
+  for (const check of checks) {
+    assert(check.index! > dispose, "sig- check precedes produced disposition");
+    assert(check[0].includes("--bead <bead-id>"), "sig- check omits explicit bead identity");
+  }
+  assert(sequence.includes("reuse it without disposing again") && sequence.includes("do not rewrite a"), "completed history rule missing");
+  assert(text.slice(end).includes("For `isa-gap:` and `install-procedure` drafts only"), "non-sig boundary missing");
+});
+test("version migration preserves historical stamps and requires revalidation", () => {
+  const text = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
+  assert(text.includes("[the stamp migration](migrations/1.2.0.md)"), "version bump lacks migration pointer");
+  const file = path.join(skillDir, "migrations/1.2.0.md");
+  assert(fs.statSync(file).isFile(), "migration note missing");
+  const note = fs.readFileSync(file, "utf8");
+  for (const fact of ["outcomes@1.1.0", "outcomes@1.2.0", "Historical contracts keep", "actually revalidates", "Do not bulk-restamp", "produced --work <bead-id>", "check --file <contract> --bead <bead-id>"])
+    assert(note.includes(fact), "migration omits " + fact);
 });
 test("neutral skill directory", () => {
   const forbidden = new RegExp(["life", "os"].join("") + /|pai\b|\.cursor|cursor|claude|codex|\bpi\b|chatgpt|openai|anthropic|gemini/.source, "i");

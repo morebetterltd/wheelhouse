@@ -35,9 +35,19 @@ for (const [label, adapter, expectedNative] of [
   const stdout = fs.readFileSync(stdoutFile, "utf8"), stderr = fs.readFileSync(stderrFile, "utf8");
   assert.equal(code, expectedNative, `actual census invocation: ${stdout}\n${stderr}`);
   assert(stderr.includes("selftest-sweep: CLEAN "), "real canonical cleanup must finish before retention assertions");
+  // Count actual case observations, not a second inventory that drifts when
+  // the census fixture adds modes. Check the summary against those records.
+  const observations = [...stdout.matchAll(/^(PASS|FAIL) adapter-census (\S+): .*$/gm)]
+    .map(match => ({ mode: match[2], failed: match[1] === "FAIL" }));
+  assert(observations.length > 0, "actual census cases must run before retention assertions");
+  assert.equal(new Set(observations.map(row => row.mode)).size, observations.length, "each case runs exactly once");
+  const summaries = [...stdout.matchAll(/^adapter-census: (\d+)\/(\d+) passed;.*$/gm)];
+  assert.equal(summaries.length, 1, "actual census must publish exactly one summary");
+  assert.equal(Number(summaries[0][2]), observations.length);
+  assert.equal(Number(summaries[0][1]), observations.filter(row => !row.failed).length);
   const artifacts = fs.readdirSync(tmp).filter(name => name.startsWith("wheelhouse-adapter-census."));
   if (label === "success") {
-    assert(stdout.includes("adapter-census: 5/5 passed"), "healthy actual subject/control must run first");
+    assert(observations.every(row => !row.failed), "healthy actual subject/control must run first");
     assert.equal(artifacts.length, 0, "successful census removes its own default evidence allocation");
     console.log("PASS census success removes its owned default evidence after native success");
     continue;
@@ -46,7 +56,8 @@ for (const [label, adapter, expectedNative] of [
   // catch. A missing import, observer, actor, wrong fault or cleanup error
   // cannot be credited as the planted large-census assertion.
   assert(stdout.includes("large census must report the real captured duplicate"));
-  assert(stdout.includes("adapter-census: 4/5 passed"));
+  assert.deepEqual(observations.filter(row => row.failed).map(row => row.mode).sort(), ["large", "line-separators"],
+    "only the verified-census reporting cases may reject the planted duplicate-reporting fault");
   assert.equal(artifacts.length, 1, "failed census evidence must survive canonical CLEAN");
   const evidence = path.join(tmp, artifacts[0]);
   assert.equal(fs.statSync(evidence).mode & 0o777, 0o700, "raw process/path evidence stays private");
@@ -58,8 +69,8 @@ for (const [label, adapter, expectedNative] of [
   const progress = fs.readFileSync(path.join(evidence, "progress.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
   assert(progress.some(row => row.stage === "original subjects joined"));
   const results = JSON.parse(fs.readFileSync(path.join(evidence, "results.json"), "utf8"));
-  assert.equal(results.length, 5);
-  assert.equal(results.filter((r: any) => r.failure !== null).length, 1);
+  assert.deepEqual(results.map((result: any) => ({ mode: result.mode, failed: result.failure !== null })), observations,
+    "retained results must match every emitted case and its outcome");
   for (const result of results) {
     const mode = path.join(evidence, result.mode);
     const capture = JSON.parse(fs.readFileSync(path.join(mode, "capture.json"), "utf8"));
@@ -72,9 +83,10 @@ for (const [label, adapter, expectedNative] of [
     assert.deepEqual(saved, result);
     assert.equal(result.code, 0);
     assert.deepEqual(result.subject, { recordedAlive: true, candidateAlive: true, contextUnchanged: true });
-    if (result.mode === "large") {
+    if (result.mode === "large" || result.mode === "line-separators") {
       assert(!result.stderr.includes("UNVERIFIED orphan census"), "only the planted reporting fault may cause this rejection; native census must be verified");
-      assert(replay.bytes > 2 * 1024 * 1024 && replay.candidateOffset > 2 * 1024 * 1024);
+      if (result.mode === "large") assert(replay.bytes > 2 * 1024 * 1024 && replay.candidateOffset > 2 * 1024 * 1024);
+      else assert.equal(replay.sha256, capture.sha256, "separator replay keeps the actual native bytes");
       assert(bytes.toString("utf8").split("\n").some(line => new RegExp(`^\\s*${result.candidatePid}\\s+`).test(line)));
       assert(result.failure.includes("large census must report the real captured duplicate"));
     } else assert.equal(result.failure, null);

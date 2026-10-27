@@ -1725,7 +1725,7 @@ function processRows(): ProcessRowsSnapshot {
     const rows = new Map<number, ProcessRow>();
     for (const [index, line] of result.stdout.split(/\n/).entries()) {
       if (!line.trim()) continue;
-      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.*)$/);
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.*)$/s);
       if (!m) return { rows: null, error: `ps returned a malformed census record at line ${index + 1}` };
       const start = Date.parse(m[3]);
       rows.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), startMs: Number.isFinite(start) ? start : null, command: m[4] || "" });
