@@ -532,10 +532,11 @@ before waiting for the response. The stdin holder is the direct `0<>` FIFO
 redirection, not a line-splitting relay.
 
 The seat's process cwd is the seat's own worktree by construction, not a
-prompt telling it to `cd` there. A worker seat owns ONE persistent git
-worktree at `<root>/.wheelhouse-worktrees/<seat-name>` (for example
-`.wheelhouse-worktrees/worker-1`), not one per bead, and two seats never
-share one. `bun seats/adapter.ts dispatch <seat> <bead> <text> [--base <ref>]`
+prompt telling it to `cd` there. A worker seat's ordinary persistent git
+worktree is `<root>/.wheelhouse-worktrees/<seat-name>` (for example
+`.wheelhouse-worktrees/worker-1`), not one per bead. When that anchor belongs to
+a product repository, umbrella tasks get the separate persistent
+`umbrella-<seat-name>` anchor described below. Two live seats never share one. `bun seats/adapter.ts dispatch <seat> <bead> <text> [--base <ref>]`
 prepares it before the seat sees the bead: `git switch -c fleet/<bead> <base>`
 for a new bead, or `git switch fleet/<bead>` for a reopened one so its old
 commits are kept. The base is `--base` if given, else the bead's
@@ -546,7 +547,7 @@ previous bead's branch to origin; a failed push is written to the seat log as
 "push failed" and blocks the move, and so do real uncommitted changes in the
 seat worktree (deletions of once-committed build output under
 `.cargo-target-shared/` or `car-rs/.wt-target/` do not count). New worktrees
-are capped at the number of seats in `seats/seats.json` plus two. Seats in
+are capped per repository at the number of seats in `seats/seats.json` plus two. Seats in
 non-worker roles — reviewer, verifier, producer, researcher — run from the
 project root and take no slot; a roster entry may set `"worktree": true|false`
 to override its role's default. A `.pruned-placeholder` directory left by
