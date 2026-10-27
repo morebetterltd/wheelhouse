@@ -199,22 +199,40 @@ function pushIntegrationBaseCandidate(root: string, candidates: string[], ref: s
   candidates.push(ref);
 }
 
-/** Which base a bead branches from. Explicit wins, then the bead's own
- * `Integration:` line (via bd, when available), then the install's env
- * default, then the install's recorded merge target, then the remote's default
- * branch, then local main/master/HEAD. */
-export function resolveBase(root: string, beadId: string, explicit?: string | null, bdRoot: string = root): string {
-  const candidates: string[] = [];
-  if (explicit) candidates.push(explicit);
+/** Explicit wins. An Integration: ref is used unless it is strictly behind
+ * the resolved default line; no goal ref is created, moved or published here.
+ * Default precedence remains env, recorded merge target, origin HEAD,
+ * origin/main, origin/master, main, master, HEAD. */
+export function resolveBase(root: string, beadId: string, explicit?: string | null, bdRoot: string = root, note: (line: string) => void = () => {}): string {
+  if (explicit && refExists(root, explicit)) return explicit;
+  const integration: string[] = [];
   const fromBead = integrationLineFor(bdRoot, beadId);
-  if (fromBead) pushIntegrationBaseCandidate(root, candidates, fromBead);
-  if (process.env.WHEELHOUSE_WORKTREE_BASE) candidates.push(process.env.WHEELHOUSE_WORKTREE_BASE);
-  pushBaseCandidate(candidates, templateSourceValue(bdRoot, "merge-target"));
+  if (fromBead) pushIntegrationBaseCandidate(root, integration, fromBead);
+  const goal = integration.find(ref => refExists(root, ref));
+  const defaults: string[] = [];
+  if (process.env.WHEELHOUSE_WORKTREE_BASE) defaults.push(process.env.WHEELHOUSE_WORKTREE_BASE);
+  pushBaseCandidate(defaults, templateSourceValue(bdRoot, "merge-target"));
   const originHead = git(root, ["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"]);
-  if (originHead.ok && originHead.out) candidates.push(originHead.out);
-  candidates.push("origin/main", "origin/master", "main", "master", "HEAD");
-  for (const c of candidates) if (refExists(root, c)) return c;
-  refuse(`no base ref resolves for bead ${beadId} (tried ${candidates.join(", ")}); pass --base <ref>`);
+  if (originHead.ok && originHead.out) defaults.push(originHead.out);
+  defaults.push("origin/main", "origin/master", "main", "master", "HEAD");
+  const defaultRef = defaults.find(ref => refExists(root, ref));
+  if (goal) {
+    if (defaultRef) {
+      const goalSha = git(root, ["rev-parse", `${goal}^{commit}`]);
+      const defaultSha = git(root, ["rev-parse", `${defaultRef}^{commit}`]);
+      if (goalSha.ok && defaultSha.ok && goalSha.out !== defaultSha.out &&
+          git(root, ["merge-base", "--is-ancestor", goal, defaultRef]).ok) {
+        const unique = git(root, ["rev-list", "--count", `${defaultRef}..${goal}`]);
+        if (unique.ok && unique.out === "0") {
+          note(`Integration: ${fromBead} (${goal} at ${goalSha.out}) holds nothing the default line lacks; using ${defaultRef} at ${defaultSha.out} instead`);
+          return defaultRef;
+        }
+      }
+    }
+    return goal;
+  }
+  if (defaultRef) return defaultRef;
+  refuse(`no base ref resolves for bead ${beadId} (tried ${[...(explicit ? [explicit] : []), ...integration, ...defaults].join(", ")}); pass --base <ref>`);
 }
 
 function beadText(root: string, beadId: string): string {
@@ -653,7 +671,7 @@ export function ensureSeatWorktree(o: EnsureOptions): EnsureResult {
     fs.rmdirSync(target);
   }
 
-  const base = resolveBase(repo, o.beadId, o.base, root);
+  const base = resolveBase(repo, o.beadId, o.base, root, note);
   const baseTip = git(repo, ["rev-parse", `${base}^{commit}`]).out;
   const elsewhere = registeredWorktrees(repo).find((w) => (w.branch === branch || w.branch === beadBranch(o.beadId)) && !samePath(w.path, target));
   if (elsewhere) refuse(`branch ${elsewhere.branch} is already checked out at ${elsewhere.path}; cannot prepare target ${target}: a branch can be in one worktree at a time`);
