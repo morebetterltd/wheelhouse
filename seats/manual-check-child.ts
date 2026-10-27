@@ -3,9 +3,9 @@ import { spawn } from "node:child_process";
 // Only the process group made by this direct detached child is owned here.
 // Policy expiry and native close are separate facts; never turn a signal into
 // a guessed shell status. Includes teardown on normal close for inherited fds.
-export async function manualCheckChild(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, budget: number) {
+export async function manualCheckChild(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, budget: number, stdin: string) {
   if (!Number.isSafeInteger(budget) || budget <= 0) throw new Error("invalid manual-check helper time limit");
-  const child = spawn(bin, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(bin, args, { cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   let stdout = "", stderr = "", spawnError: string | undefined, policy: string | undefined;
   let term: ReturnType<typeof setTimeout> | undefined, kill: ReturnType<typeof setTimeout> | undefined;
   const alive = () => { if (!child.pid) return false; try { process.kill(-child.pid, 0); return true; } catch (e: any) { if (e.code === "ESRCH") return false; throw e; } };
@@ -23,6 +23,10 @@ export async function manualCheckChild(bin: string, args: string[], cwd: string,
   child.stderr.on("data", b => { stderr += b.toString(); if (stderr.length > 8*1024*1024) stop("stderr limit exceeded"); });
   child.once("error", e => { spawnError = e.message; });
   child.once("spawn", () => { term = setTimeout(() => stop(`helper timed out after ${budget}ms`), budget); });
+  // end() queues the whole prompt with backpressure, then delivers EOF. A child
+  // that exits before reading must produce a failed run, not an unhandled EPIPE.
+  child.stdin.on("error", e => { spawnError ??= `stdin: ${e.message}`; });
+  child.stdin.end(stdin);
   try {
     const native = await new Promise<{status:number|null;signal:NodeJS.Signals|null}>((resolve,reject) => {
       const hard = setTimeout(() => { signal("SIGKILL"); child.stdout.destroy(); child.stderr.destroy(); reject(new Error("manual-check helper close bound exceeded")); }, budget+7000);

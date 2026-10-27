@@ -14,7 +14,13 @@ fs.writeFileSync(agent+'/auth.json','{"stub":true}');
 const roster={seats:{verifier:{role:'verifier',harness:'pi',provider:'openai',model:'fixture',account:{dir:agent}}}};fs.writeFileSync(factory+'/seats/seats.json',JSON.stringify(roster));
 const findings='FINDINGS:\n- drift — counter — The reach step returns 404 at /countr.\n- unmapped — /search — A recent hand commit adds an unmapped search route.\n- break — about — The mapped about endpoint returns HTTP 500.\n';
 const stub=`#!/usr/bin/env node
-const fs=require('fs');let slot=null,slotLive=false;const marker=process.env.WHEELHOUSE_MANUAL_CHECK_ROOT+'/seats/run/walk.verifier.json';if(fs.existsSync(marker)){slot=JSON.parse(fs.readFileSync(marker,'utf8'));process.kill(slot.pid,0);slotLive=true;}fs.appendFileSync(process.env.MANUAL_CALLS,JSON.stringify({pid:process.pid,cwd:process.cwd(),slot,slotLive,argv:process.argv.slice(2),prompt:process.argv.at(-1)})+'\\n');
+const fs=require('fs'),path=require('path'),assert=require('assert/strict');
+const argv=process.argv.slice(2),prompt=fs.readFileSync(0,'utf8');
+const promptFile=path.join(path.dirname(process.env.EVIDENCE_DIR),'prompt.txt'),expected=fs.readFileSync(promptFile,'utf8');
+let slot=null,slotLive=false;const marker=process.env.WHEELHOUSE_MANUAL_CHECK_ROOT+'/seats/run/walk.verifier.json';if(fs.existsSync(marker)){slot=JSON.parse(fs.readFileSync(marker,'utf8'));process.kill(slot.pid,0);slotLive=true;}fs.appendFileSync(process.env.MANUAL_CALLS,JSON.stringify({pid:process.pid,cwd:process.cwd(),slot,slotLive,argv,prompt,promptFile,expected})+'\\n');
+assert(prompt.length>0,'manual-check stdin prompt is empty');
+assert(!argv.includes(prompt),'manual-check prompt found in argv');
+assert.equal(prompt,expected,'manual-check stdin differs from prompt.txt');
 if(process.env.MANUAL_MODE==='edited')fs.writeFileSync('changed-by-stub','not allowed');
 const reply=process.env.MANUAL_MODE==='none'?'FINDINGS: none\\n':process.env.MANUAL_MODE==='bad'?'not a findings block\\n':${JSON.stringify(findings)};
 if(process.env.MANUAL_MODE==='utf8'){process.stdout.write(Buffer.concat([Buffer.from('FINDINGS:\\n- drift '),Buffer.from([0xe2])]));process.stderr.write(Buffer.from([0x63,0x61,0x66,0xc3]));setTimeout(()=>{process.stdout.write(Buffer.concat([Buffer.from([0x80,0x94]),Buffer.from(' counter — Split stream is intact.\\n')]));process.stderr.write(Buffer.from([0xa9,0x0a]));},400);}else if(process.env.MANUAL_MODE==='slow'){process.on('SIGTERM',()=>{});setTimeout(()=>{process.stdout.write('FINDINGS: none\\n');process.exit(0)},3000);}else process.stdout.write(reply);
@@ -41,6 +47,20 @@ function run(name:string,mode='three',extra:Record<string,string>={}){
 }
 function leg(name:string,fn:()=>void){let error=null;try{fn();}catch(e:any){error=e.message;}legs.push({name,error});console.log((error?'FAIL ':'PASS ')+name+(error?': '+error:''));save();}
 leg('manual check three rows, no branch, clean tree',()=>{const r=run('three');assert.equal(r.status,0,r.stderr);assert.equal(r.added,3);assert.deepEqual(r.rows.map(x=>x.source),['manual-check:drift:counter','manual-check:unmapped:/search','manual-check:break:about']);assert(r.rows.every(x=>x.kind==='finding'&&x.text.includes(tip)));assert.equal(r.tree,'');assert.equal(r.branches,branches);});
+leg('manual check stdin prompt equals prompt.txt and pi tools are a standalone flag pair',()=>{
+ for(const model of ['fixture',undefined]) {
+  fs.writeFileSync(factory+'/seats/seats.json',JSON.stringify({seats:{verifier:{...roster.seats.verifier,model}}}));
+  try {
+   const r=run(model?'stdin-model':'stdin-no-model','none');assert.equal(r.status,0,r.stderr);
+   const call=JSON.parse(fs.readFileSync(calls,'utf8').trim().split('\n').at(-1)!);
+   assert(call.prompt.length>0);assert.equal(call.prompt,call.expected);assert(!call.argv.includes(call.prompt));
+   assert.equal(call.argv.filter((x:string)=>x==='--tools').length,1);assert.equal(call.argv[call.argv.indexOf('--tools')+1],'read,bash');
+   assert.equal(call.argv[call.argv.indexOf('--provider')+1],'openai');
+   if(model)assert.equal(call.argv[call.argv.indexOf('--model')+1],model);else assert(!call.argv.includes('--model'));
+   assert.equal(call.argv[call.argv.indexOf('--append-system-prompt')+1],path.join(path.dirname(call.promptFile),'maintain-brief.md'));
+  } finally {fs.writeFileSync(factory+'/seats/seats.json',JSON.stringify(roster));}
+ }
+});
 leg('manual check dedupe',()=>{const r=run('dedupe');assert.equal(r.status,0,r.stderr);assert.equal(r.added,0);assert.match(r.stdout,/deduped=3/);});
 leg('manual check edited-tree refusal',()=>{const r=run('edited','edited');assert.equal(r.status,3,r.stderr);assert.equal(r.added,0);assert.equal(r.inbox.at(-1).class,'manual-check-failed');assert.match(r.stderr,/edited tree/);assert.equal(r.tree,'');});
 leg('manual check none',()=>{const r=run('none','none');assert.equal(r.status,0,r.stderr);assert.equal(r.added,0);});
