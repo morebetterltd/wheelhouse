@@ -1113,6 +1113,51 @@ the prompt supplies. Source paths not named by the bead are not mounted;
 if the reviewer needs one, the verdict routes that missing source instead
 of reaching around the dispatcher.
 
+## Daily manual check
+
+`bun seats/manual-check.ts [--repo <product>] [--verifier <seat>] [--out <evidence-dir>]`
+runs the maintain skill once on a free roster verifier (never a reviewer). With
+no `--repo`, it reads configured `product-repo`/`product-repos` entries, or the
+install root; missing manuals and `surface: none` are skipped. Install's manual
+creation/proof step supplies the manual; the scheduled check does not write one.
+The supervisor starts it once per local day at **05**, configurable with
+`WHEELHOUSE_MANUAL_CHECK_HOUR=00..23`. `.template-source` has `manual_check=on`
+by default; `manual_check=off` disables the tick. This upgrade does not restart
+or replace an installed supervisor/service: adopt the copied code through the
+install's normal approved restart procedure.
+
+The pass pins the product's default line (origin/HEAD, then main/master), uses a
+detached scratch worktree and linked factory skills, reads the validated manual
+through `manual.ts`, attempts **every mapped feature** using Launch, Doctor,
+Drive, Evidence and Cleanup, and scans changes since the last successful pass
+(or seven days). It is read-only on product code/manual/map: never branches,
+commits, publishes or opens a PR. Read-only command shims and before/after HEAD,
+status, diff and branch/ref snapshots reject an edited tree before any findings
+are posted. These fences are not an OS privilege sandbox; a failed integrity
+check is an alert, not permission to repair the tree or publish partial findings.
+Use only isolated instances and non-production endpoints and stop owned helpers.
+
+The trailing, unfenced answer is `FINDINGS: none`, or `FINDINGS:` followed by
+`- drift|unmapped|break — <feature or path> — <one sentence>` (choose one kind).
+The coordinator—not the verifier—posts one `finding` intake row per result for
+the producer. Sources are `manual-check:<kind>:<feature-or-path>`; an undisposed
+row with that source suppresses a repeat, not a new branch/PR. Disposition and
+fixes remain producer work. Inspect with `bun seats/intake.ts list --open`.
+
+Evidence defaults to ignored `seats/verdicts/manual-check/<stamp>/`; fleet/ad-hoc
+runs pass their exact task scratch path via `--out`. Per-product prompt, native
+status/signal, separate stdout/stderr, before/after snapshots and drive evidence
+stay there after scratch cleanup. Runtime locations are caller-owned and must
+be outside product source or explicitly git-ignored. The output log is
+`seats/logs/manual-check.out.log`; the last successful tip/counts/time are in
+`seats/run/manual-check.last.json`. A refusal exits2; edited tree, helper failure
+or missing/malformed FINDINGS exits3 and appends one `manual-check-failed` inbox
+row, with no findings from that failed pass. Clean/posted/deduped/none runs exit0.
+The one-shot policy is at most30minutes (`WHEELHOUSE_MANUAL_CHECK_TIMEOUT_MS`,
+1..1800000); metadata/intake helpers have10second limits, and owned one-shot
+groups are terminated/reaped on expiry (TERM then KILL after1.5seconds). Rerun
+with a fresh `--out` after resolving a refusal; no installed service is changed.
+
 ## Walking a consumer surface
 
 ```bash
