@@ -10,7 +10,7 @@ import { completedCommand } from '../completed-command';
 import { withPerRefreshWorkers } from './desk-legacy-worker';
 const [kind, seats, fixture, control = 'fixed'] = process.argv.slice(2);
 assert(['herald','desk'].includes(kind));
-assert((kind==='herald'?['fixed','no-log-prune','no-pane-trim','no-seen-reuse','no-seen-cap']:['fixed','per-refresh-workers','no-refresh-cap']).includes(control));
+assert((kind==='herald'?['fixed','no-log-prune','no-pane-trim','no-seen-reuse','no-seen-cap']:['fixed','per-refresh-workers','no-refresh-cap','no-exit-guard-release']).includes(control));
 assert(fs.lstatSync(path.join(fixture,'.wheelhouse-selftest-fixture')).isFile());
 const stub=process.env.WHEELHOUSE_MEMORY_BD_STUB;
 assert(stub&&fs.lstatSync(stub).isFile(),'launch through daemon-memory.sh before Bun caches executable discovery');
@@ -115,8 +115,9 @@ if(kind==='herald') {
 } else {
   if(control==='per-refresh-workers')source=withPerRefreshWorkers(source);
   if(control==='no-refresh-cap') replace(' || digestRefreshing.size >= DIGEST_REFRESH_MAX','');
+  if(control==='no-exit-guard-release')replace('digestStops.delete(stopChild);','/* fix removed: completed job cancellation closures stay retained */');
   const entry='const args=process.argv.slice(2);';assert.equal(source.split(entry).length,2);
-  source=source.slice(0,source.indexOf(entry))+'\nexport {refreshBoard,digestWindow,digestFor,scheduleDigestRefresh,digestRefreshing,digestCache,bdCache,handle};\n';fs.writeFileSync(file,source);
+  source=source.slice(0,source.indexOf(entry))+'\nexport {refreshBoard,digestWindow,digestFor,scheduleDigestRefresh,digestRefreshing,digestCache,digestStops,bdCache,handle};\n';fs.writeFileSync(file,source);
   fs.writeFileSync(path.join(root,'seats/needs.jsonl'),JSON.stringify({type:'opened',id:'need-memory',at:new Date().toISOString(),kind:'question',title:'Memory fixture question',body:'Fixed input across cycles',options:[],machine:{}})+'\n');
   const create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL),NativeWorker=Worker,nativeSpawn=Bun.spawn.bind(Bun);
   let created=0,revoked=0,lastURL='',createdWorkers=0,createdProcesses=0,exitedProcesses=0,aliveProcesses=0,peakProcesses=0;
@@ -149,7 +150,7 @@ if(kind==='herald') {
     }
   }
   await drive(control==='fixed'?48:2);warm=await memory();peakRawFootprint=warm.rawFootprint;rawSamples=1;await drive(control==='fixed'?1440:16);end=await memory();
-  facts={boardCycles,digestCycles,peakPending,createdWorkers,createdProcesses,exitedProcesses,aliveProcesses,peakProcesses,httpRequests:(digestCycles-peakPending)*3,createdBlobURLs:created,revokedBlobURLs:revoked,unreleasedBlobURLs:created-revoked,lastBlobStillResolves:!!resolveObjectURL(lastURL),digestCache:d.digestCache.size,inFlight:d.digestRefreshing.size,bdCache:d.bdCache.size};
+  facts={boardCycles,digestCycles,peakPending,createdWorkers,createdProcesses,exitedProcesses,aliveProcesses,peakProcesses,httpRequests:(digestCycles-peakPending)*3,createdBlobURLs:created,revokedBlobURLs:revoked,unreleasedBlobURLs:created-revoked,lastBlobStillResolves:!!resolveObjectURL(lastURL),digestCache:d.digestCache.size,inFlight:d.digestRefreshing.size,exitGuards:d.digestStops.size,bdCache:d.bdCache.size};
   } finally { server.stop(true); URL.createObjectURL=create;URL.revokeObjectURL=revoke;globalThis.Worker=NativeWorker;Bun.spawn=nativeSpawn; }
 }
 peakRawFootprint=Math.max(peakRawFootprint,end.rawFootprint);rawSamples++;
@@ -164,6 +165,7 @@ if(kind==='herald'){
   oracle(facts.createdWorkers<=2,'per-refresh Worker runtime allocations exceed the lifetime budget: '+facts.createdWorkers);
   oracle(facts.createdProcesses===facts.exitedProcesses&&facts.aliveProcesses===0&&facts.peakProcesses<=2,'digest process lifetime/concurrency exceeds the budget');
   oracle(facts.unreleasedBlobURLs===0&&!facts.lastBlobStillResolves,'Blob URL registry retained completed worker sources');
+  oracle(facts.exitGuards===0,'digest exit guards retained completed jobs: '+facts.exitGuards);
   oracle(facts.digestCache<=16&&facts.inFlight===0&&facts.bdCache<=5,'desk caches/refreshes exceed their bounds');
 }
 oracle(result.rawFootprintGrowth<=FOOTPRINT_LIMIT,'natural physical footprint grew beyond 32 MiB after warm-up');
@@ -186,15 +188,25 @@ if(control==='fixed'&&kind==='desk'){
     console.log((expected?'EXPECTED_REJECTION ':'PASS ')+'desk digest '+mode+' native_rc='+r.status+(expected?' cleanup removed':''));
   }
 }
+if(control==='fixed'&&kind==='desk'){
+  const cleanup='installDigestExitCleanup();',src=fs.readFileSync(file,'utf8'),broken=path.join(root,'seats/desk-no-exit-cleanup.ts');
+  assert.equal(src.split(cleanup).length,2);fs.writeFileSync(broken,src.replace(cleanup,'/* fix removed: detached job trees outlive the parent */'));
+  for(const mode of ['exit','signal','SIGINT','SIGHUP'])for(const [candidate,expected] of [[file,0],[broken,1]] as const){
+    const record=path.join(root,'shutdown-'+mode+'-'+expected+'.json');
+    const r=completedCommand('bun',[path.join(seats,'fixtures/desk-digest-shutdown.ts'),candidate,mode,record]);assert.ifError(r.error);assert.equal(r.signal,null);assert.equal(r.status,expected,r.stderr);
+    assert(fs.statSync(record).isFile());const measured=JSON.parse(fs.readFileSync(record,'utf8'));assert.equal(measured.mode,mode);assert.equal(measured.success,expected===0);
+    console.log('DIGEST_SHUTDOWN '+JSON.stringify({candidate:path.basename(candidate),nativeCode:r.status,...measured}));
+  }
+}
 if(control==='fixed'){
-  const controls=kind==='herald'?['no-log-prune','no-pane-trim','no-seen-reuse','no-seen-cap']:['per-refresh-workers','no-refresh-cap'];
+  const controls=kind==='herald'?['no-log-prune','no-pane-trim','no-seen-reuse','no-seen-cap']:['per-refresh-workers','no-refresh-cap','no-exit-guard-release'];
   for(const change of controls){
     const r=completedCommand('bun',[import.meta.path,kind,seats,fixture,change]);
     assert.ifError(r.error);assert.equal(r.signal,null);assert.equal(r.status,1,r.stderr);
     const record=path.join(fixture,'memory-'+kind+'-'+change,'oracle-rejection.json');
     assert(fs.statSync(record).isFile(),'control must reach the retention oracle, not fail fixture setup');
     const rejected=JSON.parse(fs.readFileSync(record,'utf8'));assert.equal(rejected.kind,kind);assert.equal(rejected.control,change);
-    const reasons:Record<string,string>={'no-log-prune':'retired log offsets','no-pane-trim':'pane histories','no-seen-reuse':'seen table copies','no-seen-cap':'invalid seen horizon','per-refresh-workers':'per-refresh Worker runtime allocations','no-refresh-cap':'digest refresh admission'};
+    const reasons:Record<string,string>={'no-log-prune':'retired log offsets','no-pane-trim':'pane histories','no-seen-reuse':'seen table copies','no-seen-cap':'invalid seen horizon','per-refresh-workers':'per-refresh Worker runtime allocations','no-refresh-cap':'digest refresh admission','no-exit-guard-release':'digest exit guards retained completed jobs'};
     assert(rejected.reason.startsWith(reasons[change]),'control must reject its own removed fix: '+rejected.reason);
     fs.writeFileSync(path.join(root,change+'.stdout'),r.stdout);fs.writeFileSync(path.join(root,change+'.stderr'),r.stderr);
     const stats=path.join(path.dirname(record),'result.json');

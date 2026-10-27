@@ -41,6 +41,16 @@ const DIGEST_CACHE_MAX = Number.isFinite(RAW_DIGEST_CACHE_MAX) ? Math.max(1, Mat
 const digestCache = new Map<string, CacheEntry<Digest>>();
 const digestRefreshing = new Set<string>();
 const DIGEST_REFRESH_MAX = 2;
+const digestStops = new Set<() => void>();
+function installDigestExitCleanup(){
+  const stop = () => { for(const cancel of digestStops) cancel(); };
+  process.once("exit", stop);
+  for(const signal of ["SIGTERM","SIGINT","SIGHUP"] as const){
+    const handler = () => { stop(); process.off(signal,handler); process.kill(process.pid,signal); };
+    process.once(signal,handler);
+  }
+}
+installDigestExitCleanup();
 
 function fnv1a(s: string): number { let h = 0x811c9dc5; for (let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h >>> 0; }
 function namespace(): string { try { const m = fs.readFileSync(TEMPLATE_SOURCE,"utf8").match(/^namespace=(.+)$/m); if (m?.[1]?.trim()) return m[1].trim(); } catch {} return path.basename(ROOT); }
@@ -134,6 +144,7 @@ function scheduleDigestRefresh(win = digestWindow()){
         // must not outlive the digest process and accumulate orphan queries.
         try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
       };
+      digestStops.add(stopChild);
       try {
         // Bun 1.2.22 on Darwin retained allocations when Worker VMs were recreated,
         // even after termination/revocation. Native process exit ends that
@@ -153,6 +164,7 @@ function scheduleDigestRefresh(win = digestWindow()){
       } catch {} finally {
         if(deadline) clearTimeout(deadline);
         if(child && !completed) { stopChild(); await child.exited.catch(() => {}); }
+        digestStops.delete(stopChild);
         digestRefreshing.delete(win.key);
       }
     })();
