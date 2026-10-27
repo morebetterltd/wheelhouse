@@ -5,10 +5,14 @@ import { pathToFileURL } from "node:url";
 const [moduleFile, root, bead, action] = process.argv.slice(2);
 try {
   const lib = await import(pathToFileURL(moduleFile).href);
-  if (action === "prepare") {
+  if (action === "load") {
+    console.log(JSON.stringify({ loaded: true }));
+  } else if (action === "prepare") {
     const result = lib.prepareTaskScratch(root, bead);
     const marker = JSON.parse(fs.readFileSync(path.join(result.target, lib.SCRATCH_MARKER), "utf8"));
-    console.log(JSON.stringify({ owned: result.owned, version: marker.version, hostId: marker.hostId, hostname: marker.hostname }));
+    const identity = (p: string) => { const st = fs.statSync(p, { bigint: true }); return `${st.dev}:${st.ino}`; };
+    console.log(JSON.stringify({ owned: result.owned, version: marker.version, hostId: marker.hostId, hostname: marker.hostname,
+      observedRootIdentity: identity(root), observedTargetIdentity: identity(result.target) }));
   } else if (action === "read") {
     lib.scratchOwnership(root, path.join(root, ".wheelhouse-runs", bead), bead);
     console.log(JSON.stringify({ accepted: true }));
