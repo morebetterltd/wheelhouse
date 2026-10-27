@@ -145,6 +145,7 @@ if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); proc
 const args = process.argv.slice(2);
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(args));
+fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const sessDir = path.join(agentDir, "sessions");
 fs.mkdirSync(sessDir, { recursive: true });
 let sessionFile, sessionId;
@@ -152,11 +153,16 @@ const si = args.indexOf("--session");
 if (si !== -1) {
   sessionFile = args[si + 1];
   sessionId = path.basename(sessionFile, ".jsonl");
+  const header = JSON.parse(fs.readFileSync(sessionFile, "utf8").split("\n")[0]);
+  if (header.type === "session" && header.cwd && !fs.existsSync(header.cwd)) {
+    process.stderr.write("Stored session working directory does not exist: " + header.cwd + "\nSession file: " + sessionFile + "\nCurrent working directory: " + process.cwd() + "\n");
+    process.exit(1); // Captured pi refusal before get_state.
+  }
   fs.appendFileSync(sessionFile, JSON.stringify({ type: "resumed" }) + "\n");
 } else {
   sessionId = crypto.randomUUID();
   sessionFile = path.join(sessDir, sessionId + ".jsonl");
-  fs.writeFileSync(sessionFile, JSON.stringify({ type: "session-start" }) + "\n");
+  fs.writeFileSync(sessionFile, JSON.stringify({ type: "session", version: 3, id: sessionId, cwd: process.cwd() }) + "\n");
 }
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 function handle(cmd) {
@@ -281,7 +287,7 @@ else fail "could not kill the stub seat"; fi
 recover_run
 if [ $RC -eq 0 ]; then pass "recover exits 0"
 else fail "recover exited ${RC}: $OUT"; fi
-if seat_line worker-1 | grep >/dev/null 'DEAD'; then pass "killed seat classified DEAD"
+if seat_line worker-1 | grep >/dev/null 'DEAD.*session intact'; then pass "killed seat classified DEAD"
 else fail "worker-1 not classified DEAD: $OUT"; fi
 if seat_line worker-1 | grep >/dev/null 'bead bead-98m'; then pass "the unfinished bead is named on the seat line"
 else fail "lastBead bead-98m not named: $OUT"; fi
@@ -305,6 +311,42 @@ else fail "session file changed or did not record the resume"; fi
 if [ "$(state_get worker-1 lastBead)" = "bead-98m" ]; then
   pass "lastBead survived the kill/resume cycle"
 else fail "lastBead lost across the forced kill"; fi
+
+phase "1b. recovery sees the session header cwd, not just the state cwd (GH#88)"
+adapter_run stop worker-1
+GONE_SESSION_CWD="$FIX/gone session cwd"
+RECORDED_RESUME_CWD="$(state_get worker-1 cwd)"
+OLD_HEADER_SESSION="$(state_get worker-1 sessionFile)"
+bun - "$OLD_HEADER_SESSION" "$GONE_SESSION_CWD" <<'JS'
+import fs from 'node:fs';
+const [file,cwd]=process.argv.slice(2);
+fs.mkdirSync(cwd);fs.rmdirSync(cwd);
+const text=fs.readFileSync(file,'utf8'),end=text.indexOf('\n');
+const header=JSON.parse(text.slice(0,end));header.cwd=cwd;
+fs.writeFileSync(file,JSON.stringify(header)+text.slice(end));
+JS
+cp -f "$STATE" "$FIX/state.before-session-cwd-recovery"
+RECOVERY_PI_BEFORE="$(pi_count)"
+recover_run
+printf 'CAPTURE gone session-file cwd recovery native=%s output=%s\n' "$RC" "$OUT"
+if [ "$RC" = 0 ] && seat_line worker-1 | grep -F -- "session-file cwd is gone: $GONE_SESSION_CWD" >/dev/null \
+   && ! seat_line worker-1 | grep -F 'session intact' >/dev/null \
+   && says "resume: bun $PROJ/seats/adapter.ts resume worker-1" \
+   && cmp -s "$STATE" "$FIX/state.before-session-cwd-recovery" && [ "$(pi_count)" = "$RECOVERY_PI_BEFORE" ]; then
+  pass "recover names a gone session-file cwd"
+else fail "recover did not name the gone session-file cwd without acting: $OUT"; fi
+RESUME_CMD="$(printf '%s\n' "$OUT" | sed -n 's/^  resume: \(.*\)   #.*$/\1/p' | sed -n '1p')"
+RC=0; OUT="$(env HOME="$HOME_FIX" PATH="$RUN_PATH" sh -c "$RESUME_CMD" 2>&1)" || RC=$?
+printf 'CAPTURE gone session-file cwd recommended command native=%s output=%s\n' "$RC" "$OUT"
+RECOMMENDED_RC="$RC"; RECOMMENDED_OUT="$OUT"
+adapter_run status
+if [ "$RECOMMENDED_RC" = 0 ] && [[ "$RECOMMENDED_OUT" == *"session continuity intentionally dropped"* ]] \
+   && [ "$RC" = 0 ] && says RUNNING && kill -0 "$(state_get worker-1 pid)" 2>/dev/null \
+   && [ "$(state_get worker-1 cwd)" = "$RECORDED_RESUME_CWD" ] && [ "$(cat "$SEATDIR/cwd.txt")" = "$RECORDED_RESUME_CWD" ] \
+   && [ "$(state_get worker-1 sessionFile)" != "$OLD_HEADER_SESSION" ] && [ -f "$(state_get worker-1 sessionFile)" ] \
+   && selftest_capture_lacks "$ARGV" -q -- '"--session"'; then
+  pass "recover's gone session-file cwd recommendation starts fresh in the recorded cwd"
+else fail "recover's gone session-file cwd command failed (resume=$RECOMMENDED_RC $RECOMMENDED_OUT status=$OUT)"; fi
 
 phase "2. commander-restart simulation — fresh process, state.json only, all classes correct"
 (cd "$FIX" && exec bun "$HERE/fixtures/adapter-selftest-signals.ts" hold "$FIX/foreign.release" "$FIX/foreign.ready") & SLEEP_PID=$!

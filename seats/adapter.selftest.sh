@@ -250,6 +250,13 @@ const si = args.indexOf("--session");
 if (si !== -1) {
   sessionFile = args[si + 1];
   sessionId = path.basename(sessionFile, ".jsonl");
+  if (fs.existsSync(sessionFile)) {
+    const header = JSON.parse(fs.readFileSync(sessionFile, "utf8").split("\n")[0]);
+    if (header.type === "session" && header.cwd && !fs.existsSync(header.cwd)) {
+      process.stderr.write("Stored session working directory does not exist: " + header.cwd + "\nSession file: " + sessionFile + "\nCurrent working directory: " + process.cwd() + "\n");
+      process.exit(1); // Captured pi refusal: before answering get_state.
+    }
+  }
   if (process.env.STUB_PIN_SESSION_CWD) {
     const meta = JSON.parse(fs.readFileSync(sessionFile + ".cwd.json", "utf8"));
     process.chdir(meta.cwd);
@@ -258,7 +265,7 @@ if (si !== -1) {
 } else {
   sessionId = crypto.randomUUID();
   sessionFile = path.join(sessDir, sessionId + ".jsonl");
-  fs.writeFileSync(sessionFile, JSON.stringify({ type: "session-start", cwd: process.cwd() }) + "\n");
+  fs.writeFileSync(sessionFile, JSON.stringify({ type: "session", version: 3, id: sessionId, cwd: process.cwd() }) + "\n");
   if (process.env.STUB_PIN_SESSION_CWD) fs.writeFileSync(sessionFile + ".cwd.json", JSON.stringify({ cwd: process.cwd() }));
 }
 let matchingChild, matchingChildReady;
@@ -1609,8 +1616,8 @@ check_resume() {   # $1 = label; expects a stopped seat with a recorded session
   local label="$1" sess
   sess="$(state_get sessionFile)"
   run resume worker-1
-  if [ $RC -eq 0 ]; then pass "${label}: resume exits 0"
-  else fail "${label}: resume exited ${RC}: $OUT"; fi
+  if [ $RC -eq 0 ] && ! says "session continuity intentionally dropped"; then pass "${label}: resume exits 0"
+  else fail "${label}: resume exited ${RC} or dropped an intact session: $OUT"; fi
   if grep -q "\"--session\",\"$sess\"" "$ARGV" 2>/dev/null; then
     pass "${label}: relaunch attached the recorded session via --session"
   else fail "${label}: --session with the recorded file is not in pi's argv"; fi
@@ -1628,6 +1635,32 @@ assert_state_cwd_is_live_cwd "resume"
 if [ "$(state_get lastBead)" = "bead-y" ]; then
   pass "lastBead survives the stop/resume cycle"
 else fail "lastBead was lost across resume"; fi
+
+phase "6. session header cwd differs from the existing recorded cwd (GH#88)"
+run stop worker-1
+GONE_SESSION_CWD="$FIX/gone session cwd"
+RECORDED_RESUME_CWD="$(state_get cwd)"
+OLD_HEADER_SESSION="$(state_get sessionFile)"
+bun - "$OLD_HEADER_SESSION" "$GONE_SESSION_CWD" <<'JS'
+import fs from 'node:fs';
+const [file,cwd]=process.argv.slice(2);
+fs.mkdirSync(cwd); fs.rmdirSync(cwd);
+const text=fs.readFileSync(file,'utf8'),end=text.indexOf('\n');
+const header=JSON.parse(text.slice(0,end));header.cwd=cwd;
+fs.writeFileSync(file,JSON.stringify(header)+text.slice(end));
+JS
+cp -f "$OLD_HEADER_SESSION" "$FIX/session-before-cold-resume.jsonl"
+run resume worker-1
+printf 'CAPTURE gone session-file cwd resume native=%s output=%s\n' "$RC" "$OUT"
+SESSION_CWD_RESUME_RC="$RC"; SESSION_CWD_RESUME_OUT="$OUT"
+run status
+if [ "$SESSION_CWD_RESUME_RC" = 0 ] && [[ "$SESSION_CWD_RESUME_OUT" == *"session-file cwd is gone: $GONE_SESSION_CWD; session continuity intentionally dropped; resuming fresh in $RECORDED_RESUME_CWD"* ]] \
+   && [ "$RC" = 0 ] && says RUNNING && [ -d "$RECORDED_RESUME_CWD" ] \
+   && [ "$(state_get cwd)" = "$RECORDED_RESUME_CWD" ] && [ "$(cat "$CWD_FILE")" = "$RECORDED_RESUME_CWD" ] \
+   && kill -0 "$(state_get pid)" 2>/dev/null && [ -f "$(state_get sessionFile)" ] && [ "$(state_get sessionFile)" != "$OLD_HEADER_SESSION" ] \
+   && selftest_capture_lacks "$ARGV" -q -- '"--session"' && cmp -s "$OLD_HEADER_SESSION" "$FIX/session-before-cold-resume.jsonl"; then
+  pass "resume with a gone session-file cwd starts fresh in the recorded cwd"
+else fail "gone session-file cwd resume did not fresh-start safely (resume=$SESSION_CWD_RESUME_RC $SESSION_CWD_RESUME_OUT status=$OUT argv=$(cat "$ARGV"))"; fi
 run reset worker-1
 if [ $RC -eq 0 ]; then pass "reset exits 0"
 else fail "reset exited ${RC}: $OUT"; fi

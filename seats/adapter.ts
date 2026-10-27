@@ -67,6 +67,7 @@ import { completedExecFileSync as execFileSync } from "./native-command";
 import { resolveRoleBrief, workerDispatchPrompt, assembleBrief } from "./briefs";
 import { hostBudgetAutoPrune, hostBudgetMaxWorktrees, hostBudgetPath } from "./host-budget";
 import { harnessNameForSeat, requirePiHarness } from "./harness";
+import { missingPiSessionCwd } from "./pi-session-cwd";
 import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
@@ -1444,6 +1445,12 @@ async function cmdResume(name: string): Promise<void> {
     );
     await driverForSeat(name, entry, "adapter resume").launch(name, entry, null, fallbackCwd);
     return;
+  }
+  const missingSessionCwd = harnessNameForSeat(name, entry) === "pi" ? missingPiSessionCwd(rec.sessionFile, resumeCwd) : null;
+  if (missingSessionCwd) {
+    console.log(`seat ${name}: session-file cwd is gone: ${missingSessionCwd}; session continuity intentionally dropped; resuming fresh in ${resumeCwd}`);
+    await driverForSeat(name, entry, "adapter resume").launch(name, entry, null, resumeCwd);
+    return; // No interrupted-turn continuation can be sent into the new session.
   }
   const interrupted = !rec.lastCapacityEvent && logHasInterruptedTurn(rec.log);
   await driverForSeat(name, entry, "adapter resume").launch(name, entry, rec.sessionFile, resumeCwd);
