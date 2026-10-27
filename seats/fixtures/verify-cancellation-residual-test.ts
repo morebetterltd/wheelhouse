@@ -37,6 +37,7 @@ async function run(args: string[], env: NodeJS.ProcessEnv) {
   } finally { clearTimeout(timer); }
 }
 const ledger = path.join(path.dirname(root), 'groups.retention-residual');
+let allJudged = true;
 const cases = ['ordinary', 'writer', 'lsof-error', 'ps-error', 'lsof-timeout', 'ps-timeout'];
 if (ordinaryControl) cases.splice(1);
 else if (outputControl === '--writer-output-control') cases.splice(0, cases.length, 'writer');
@@ -58,19 +59,33 @@ for (const name of cases) {
       fs.appendFileSync(ledger, writer.pid + '\n');
       await waitFor(() => fs.existsSync(path.join(control, 'waiting')), writer, 'writer readiness');
     }
-    const preload = writer ? seam : ordinaryControl ? path.join(import.meta.dir, 'verify-cancellation-residual-output-test.ts') : null;
-    const result = await run([...(preload ? ['--preload', preload] : []), canary, target, fixture, runtime], env);
+    const outputPreload = path.join(import.meta.dir, 'verify-cancellation-residual-output-test.ts');
+    // The deterministic real-failure control must wrap the writer seam's real
+    // remove too. Only these test fixtures read the explicit preload flag.
+    const preloads = writer ? [...(env.WHEELHOUSE_TEST_RETENTION_SKIP_REMOVAL === '1' ? [outputPreload] : []), seam] : ordinaryControl ? [outputPreload] : [];
+    const result = await run([...preloads.flatMap(file => ['--preload', file]), canary, target, fixture, runtime], env);
     fs.writeFileSync(path.join(proof, 'test-exit.json'), JSON.stringify({ name, writerPid: writer?.pid ?? null, ...result }, null, 2) + '\n', { mode: 0o600 });
-    // A real ordinary failure belongs to the canary, not a second assertion in
-    // this driver. Keep both native streams (including its JSON record), finish
-    // the planted checks, and return failure to the suite.
-    if (name === 'ordinary' && result.code !== 0) {
+    const record = JSON.parse(fs.readFileSync(path.join(proof, 'result.json'), 'utf8'));
+    // If the original directory survived, nothing about the deliberate
+    // recreation/capture-failure seam can be judged. Preserve the canary's
+    // record and failure once rather than asserting that the seam took effect.
+    if (record.scratchGone === false && record.residual?.sameInode === true) {
       process.stdout.write(result.stdout);
       process.stderr.write(result.stderr);
+      console.log(`RETENTION_REAL_FAILURE ${name}: original scratch survived deletion (sameInode true, ${record.residual.entries.length} paths retained); planted ${name} assertions not judged`);
+      allJudged = false;
       process.exitCode = 1;
       continue;
     }
-    const record = JSON.parse(fs.readFileSync(path.join(proof, 'result.json'), 'utf8'));
+    // A different ordinary failure also belongs to the canary, not a second
+    // assertion in this driver. Continue collecting the remaining cases.
+    if (name === 'ordinary' && result.code !== 0) {
+      process.stdout.write(result.stdout);
+      process.stderr.write(result.stderr);
+      allJudged = false;
+      process.exitCode = 1;
+      continue;
+    }
     assert.equal(record.code, 1); assert.equal(record.subject.code, 37); assert.equal(record.subject.stdoutEOF, true); assert.equal(record.subject.stderrEOF, true);
     if (name === 'ordinary') {
       assert.equal(result.code, 0, result.stderr); assert.equal(record.scratchGone, true); assert.equal(record.failure, null);
@@ -122,4 +137,4 @@ for (const name of cases) {
     if (writer?.pid) { try { process.kill(-writer.pid, 'SIGKILL'); } catch (error: any) { if (error.code !== 'ESRCH') throw error; } await writerClosed; fs.unlinkSync(ledger); }
   }
 }
-if (!ordinaryControl) console.log('  ok    retention canary records the residual scratch and its writer when deletion does not hold');
+if (!ordinaryControl && allJudged) console.log('  ok    retention canary records the residual scratch and its writer when deletion does not hold');
