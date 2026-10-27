@@ -4,6 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { constants } from "node:os";
+import { dlopen, FFIType, read } from "bun:ffi";
 
 const [here, base, source] = process.argv.slice(2);
 assert(here && base && source);
@@ -17,7 +19,13 @@ fs.mkdirSync(base);
 const root = path.join(base, "project"), seats = path.join(root, "seats"), bin = path.join(root, "bin");
 for (const d of [seats, bin, path.join(seats, "run"), path.join(seats, "logs"), path.join(root, "wheelhouse"), path.join(root, "home")]) fs.mkdirSync(d, { recursive: true });
 for (const f of fs.readdirSync(here)) if (/\.(ts|sh)$/.test(f) && !f.endsWith(".selftest.sh")) fs.copyFileSync(path.join(here, f), path.join(seats, f));
-const implementation = fs.readFileSync(source, "utf8"), file = path.join(seats, "alerts.ts");
+const original = fs.readFileSync(source, "utf8"), file = path.join(seats, "alerts.ts");
+// Trace the actual private CLI observation, not a second racy probe. No hook or
+// changed behavior is installed in production alerts; all mutation anchors stay
+// in the real implementation and every consumer assertion is unchanged.
+const observationFile = path.join(base, "observation.json"), observationAnchor = "const testLane=testLaneInfo();";
+assert.equal(original.split(observationAnchor).length, 2);
+const implementation = original.replace(observationAnchor, observationAnchor + ` fs.writeFileSync(${JSON.stringify(observationFile)},JSON.stringify(testLane));`);
 fs.writeFileSync(file, implementation);
 fs.writeFileSync(path.join(bin, "bd"), "#!/bin/sh\nprintf '[]\\n'\n", { mode: 0o700 });
 fs.writeFileSync(path.join(seats, "template-drift.sh"), '#!/bin/sh\nprintf \'{"modified":[],"localOnly":[],"missing":[],"aheadBy":0}\\n\'\n', { mode: 0o700 });
@@ -67,14 +75,51 @@ function supervise(label: string, args: string[], cwd: string) {
   }, 110000);
   const run = { child, done, output, timer }; supervised.push(run); return run;
 }
+// The real waiter polls acquire() under an EXCLUSIVE parent-directory flock.
+// observeTestLane intentionally uses SH|NB and returns unknown while that writer
+// owns it. Resetting the snapshot and checking once in that window yields zero
+// rows, not a missing FIRE_DETAIL. Hold a SH reader lease across each CLI check:
+// writers wait, the CLI takes its own SH lease, and no observation is retried or
+// synthesized. This touches ONLY this fixture's private parent, never host locks.
+const darwin = process.platform === "darwin";
+assert(darwin || process.platform === "linux");
+const flock = dlopen(darwin ? "/usr/lib/libSystem.B.dylib" : "libc.so.6", {
+  flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+  [darwin ? "__error" : "__errno_location"]: { args: [], returns: FFIType.ptr },
+});
+const SH = 1, EX = 2, NB = 4;
+let writerBlocked: (() => void) | undefined;
+async function parentLease(mode: number) {
+  const parent = path.dirname(lock);
+  assert(parent === path.join(seats, "run") && parent.startsWith(base + path.sep));
+  const fd = fs.openSync(parent, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+  try {
+    await until("private parent reader/writer lease", () => {
+      if (flock.symbols.flock(fd, mode | NB) === 0) return true;
+      const errno = read.i32(flock.symbols[darwin ? "__error" : "__errno_location"]() as number);
+      assert(errno === constants.errno.EWOULDBLOCK || errno === constants.errno.EAGAIN, "native private flock errno=" + errno);
+      if (mode === SH) writerBlocked?.();
+      return false;
+    });
+    return fd;
+  } catch (e) { fs.closeSync(fd); throw e; }
+}
 const json = (f: string) => JSON.parse(fs.readFileSync(f, "utf8"));
 const alertRows = () => fs.existsSync(inbox) ? fs.readFileSync(inbox, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)).filter(r => r.class === "alert") : [];
 const rows = () => alertRows().filter(r => r.source?.name === "test-lane-held");
 const active = () => json(snapshot).alerts["test-lane-held"]?.active === true;
 function reset() { for (const f of [snapshot, inbox, log]) fs.rmSync(f, { force: true }); }
 async function check(at: number) {
-  const r = await command("bun", ["--preload", clock, file, "check", "--json"], root, { LANE_NOW: String(at) });
-  const value = JSON.parse(r.stdout); assert.deepEqual(value, json(snapshot), "published snapshot equals actual CLI output"); return value;
+  const reader = await parentLease(SH);
+  try {
+    const r = await command("bun", ["--preload", clock, file, "check", "--json"], root, { LANE_NOW: String(at) });
+    const value = JSON.parse(r.stdout); assert.deepEqual(value, json(snapshot), "published snapshot equals actual CLI output");
+    const observed = json(observationFile);
+    const evidence = { at, nativeCode: r.code, observed, active: value.alerts["test-lane-held"]?.active, alertNames: alertRows().map(r => r.source?.name), laneRows: rows().length };
+    fs.appendFileSync(path.join(base, "checks.jsonl"), JSON.stringify(evidence) + "\n");
+    console.log("CAPTURE lane check " + JSON.stringify(evidence));
+    return value;
+  } finally { fs.closeSync(reader); }
 }
 function mutate(needle: string, replacement: string) {
   assert.equal(implementation.split(needle).length, 2, "unique actual lane source: " + needle);
@@ -83,13 +128,29 @@ function mutate(needle: string, replacement: string) {
 async function sensitive(name: string, needle: string, replacement: string, at: number, oracle: () => void | Promise<void>, preserve = false) {
   if (!preserve) reset();
   mutate(needle, replacement);
+  let writer = -1, blocked = false;
+  // Reproduce the formerly accidental input race on EVERY fixture execution.
+  // An independent native EX lease is released only after the reader actually
+  // observes contention, not after a guessed delay. Removing the SH barrier
+  // leaves this writer present during the CLI and reproduces the original FIRE
+  // failure (CLI0, observation busy, zero rows), never FIRE_DETAIL credit.
+  if (needle === 'heldMs=${heldMs}; ') {
+    writer = await parentLease(EX);
+    writerBlocked = () => { if (writer >= 0) { blocked = true; fs.closeSync(writer); writer = -1; } };
+  }
   try {
     await check(at); // A parse, import, or command failure is NOT sensitivity.
     let red = "";
     try { await oracle(); } catch (e: any) { red = e.message; }
     assert(red.includes(name), `source control must fail the actual ${name} oracle: ${red}`);
+    if (needle === 'heldMs=${heldMs}; ') assert(blocked, "native writer must overlap the observation attempt");
     console.log(`REJECT lane ${name}: actual check exit=0; consumer assertion fails with source control ${JSON.stringify(needle)}`);
-  } finally { fs.writeFileSync(file, implementation); }
+    if (blocked) console.log("CAPTURE lane contention: actual EX writer blocked SH reader; writer released before CLI; FIRE_DETAIL still rejects its missing field");
+  } finally {
+    writerBlocked = undefined;
+    if (writer >= 0) fs.closeSync(writer);
+    fs.writeFileSync(file, implementation);
+  }
 }
 function fired() { assert(active() && rows().length === 1 && alertRows().length === 1, "FIRE: exactly one active inbox alert row required"); }
 function running(marker: any, before: string) {
@@ -215,6 +276,6 @@ try {
   for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   if (process.env.WHEELHOUSE_TEST_LANE_EVIDENCE) {
     const target = process.env.WHEELHOUSE_TEST_LANE_EVIDENCE; fs.mkdirSync(target, { recursive: true });
-    for (const f of fs.readdirSync(base)) if (f.endsWith(".log")) fs.copyFileSync(path.join(base, f), path.join(target, f));
+    for (const f of fs.readdirSync(base)) if (f.endsWith(".log") || f === "checks.jsonl" || f === "observation.json") fs.copyFileSync(path.join(base, f), path.join(target, f));
   }
 }
