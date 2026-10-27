@@ -72,6 +72,20 @@ grep '^merge-target=' wheelhouse/.template-source
 
 The `seat_push`, `seat_worktrees`, and `cleanup` lines are install policy switches read by the copied seat machinery from this same committed file. Omit them to keep today's template defaults: `seat_push=on` lets cross-bead dispatch publish the previous branch before moving; `seat_worktrees=per-seat` lets the adapter create and switch `.wheelhouse-worktrees/<seat>`; `cleanup=on` runs automatic closed-bead cleanup. Installs whose recorded authority forbids one of those actions may set the independent opt-outs: `seat_push=off` means the adapter never pushes, `seat_worktrees=per-task` means the adapter does not create, move, or switch worktrees and instead uses the cwd already recorded by the install, and `cleanup=off` disables automatic cleanup while `cleanup=report` writes the would-remove cleanup report without deleting anything.
 
+### Nightly full-tier configuration
+
+New supervisors run `bun seats/nightly-sweep.ts` once per local day at `sweep-hour=` (default `03`); `sweep=off` disables it. Append visible defaults to older `.template-source` records without overwriting existing choices:
+
+```bash
+grep -q '^sweep=' wheelhouse/.template-source || echo 'sweep=on' >> wheelhouse/.template-source
+grep -q '^sweep-hour=' wheelhouse/.template-source || echo 'sweep-hour=03' >> wheelhouse/.template-source
+grep -E '^sweep(-hour)?=' wheelhouse/.template-source
+```
+
+Choose an available local hour (`00`–`23`), outside any pause window. `WHEELHOUSE_SUPERVISOR_SWEEP_HOUR` overrides the hour; presence of `seats/run/paused` skips the nightly, with `WHEELHOUSE_SUPERVISOR_PAUSE_FILE` as an absolute/install-relative marker override. A busy host lock also skips without queueing. Copy the new `nightly-sweep.ts` and `nightly-state.ts` with the normal seats refresh, plus the updated supervisor/verifier/alerts/runner. An old running supervisor does not run the nightly until restarted through the install's normal approved procedure; this requires no replacement of its installed service definition. Do not manipulate production services merely to verify the upgrade.
+
+The completed result is `seats/run/nightly-sweep.json`; a missed attempt is recorded separately and cannot clear a prior red. While the completed result is red, every review requires full and no merge may rely on a core receipt. A later green releases the brake. Logs and both named alerts are described in `seats/README.md`, “Nightly full tier”.
+
 ## 0.5. Check local drift before copying
 
 Run `bash seats/template-drift.sh` before you copy from the template. Every `MODIFIED` line is a local fix the upgrade may overwrite; file it upstream first as a template issue/report, or decide deliberately to carry it. `LOCAL-ONLY` lines are install-owned tools the template does not know about. `MISSING` lines are template files absent from the install. A `DRIFT: cannot compare` result is not clean; fix `.template-source` or the cache before upgrading.
@@ -639,6 +653,16 @@ rm -f wheelhouse/.template-source.bak
 **Leave `installed=` alone, or `adopted=` if this project was adopted rather than freshly installed.** It records when this project first took the contracts, which is a different fact from when it last upgraded, and re-running the install block would overwrite it with today's date and lose that.
 
 ## 7. Sweep what the contracts do not cover
+
+Existing seat worktrees get the factory skill links under both `.agents/skills`
+and `.claude/skills` on their next dispatch (or bead-bound spawn); nothing needs
+linking by hand. After preparation run `bun seats/adapter.ts skills-check <seat>`
+for each standing seat whose worktree exists; stop on a refusal naming the seat
+and skill. Project-owned directories and committed links are preserved. The
+adapter adds exact per-entry Git excludes **without trailing slashes**: Git
+regards a symlink as a file entry, so a trailing-slash directory rule leaves it
+visible. Never exclude the entire skills directory; new manual/map files must
+remain visible.
 
 An upgrade re-copies the contracts and the runbooks and reaches nothing else. If the change altered a convention — a path form, a command name, a label — then your generated files and your existing beads still speak the old one:
 

@@ -112,7 +112,36 @@ tick_digest(){
   (cd "$ROOT" && exec </dev/null >> "$LOGS/digest.out.log" 2>> "$LOGS/digest.stderr.log"; WHEELHOUSE_DIGEST_ROOT="$ROOT" bun seats/digest.ts --notify) &
   printf '%s digest started for %s (pid %s)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$day" "$!" >> "$OUT_LOG"
 }
-tick(){ HERALD_RETIRED_THIS_TICK=0; tick_scan_health; tick_daemon herald; tick_daemon desk; tick_daemon courier; tick_recovery; tick_isa_signals; tick_cleanup; tick_digest; }
+# Nightly full tier only. Keep this independent of cleanup/digest scheduling.
+sweep_enabled(){ v="$(sed -n 's/^sweep=//p' "$ROOT/wheelhouse/.template-source" 2>/dev/null | tail -1)"; [ "$v" != off ]; }
+tick_sweep(){
+  local ms day hour want raw check rc
+  sweep_enabled || return 0
+  [ -f "$SEATS/nightly-sweep.ts" ] && [ -f "$SEATS/nightly-state.ts" ] || return 0
+  command -v bun >/dev/null 2>&1 || return 0
+  ms="$(now_ms)"; day="$(local_day "$ms")"; hour="$(local_hour "$ms")"
+  raw="${WHEELHOUSE_SUPERVISOR_SWEEP_HOUR:-$(sed -n 's/^sweep-hour=//p' "$ROOT/wheelhouse/.template-source" 2>/dev/null | tail -1)}"
+  want="$(bun -e 'const s=process.argv[1]||"03",n=Number(s); if(!/^[0-9]{1,2}$/.test(s)||!Number.isInteger(n)||n<0||n>23) process.exit(2); console.log(String(n).padStart(2,"0"));' "$raw")" || {
+    if [ "$(supervisor_state_get lastSweepDay)" != "$day" ]; then
+      supervisor_state_set lastSweepDay "$day"
+      WHEELHOUSE_NIGHTLY_ROOT="$ROOT" bun "$SEATS/nightly-state.ts" --missed 'invalid sweep-hour (expected 00-23)' >> "$OUT_LOG" 2>&1 || true
+    fi
+    return 0
+  }
+  [ "$hour" = "$want" ] || return 0
+  [ "$(supervisor_state_get lastSweepDay)" != "$day" ] || return 0
+  supervisor_state_set lastSweepDay "$day"
+  check="$(WHEELHOUSE_NIGHTLY_ROOT="$ROOT" bun "$SEATS/nightly-state.ts" --check 2>&1)"; rc=$?
+  if [ "$rc" != 0 ]; then
+    printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${check:-nightly sweep preflight failed (exit $rc)}" >> "$OUT_LOG"
+    return 0
+  fi
+  (cd "$ROOT" && exec </dev/null >> "$LOGS/nightly-sweep.out.log" 2>> "$LOGS/nightly-sweep.stderr.log";
+    unset WHEELHOUSE_SELFTEST_SWEEP_PATTERN WHEELHOUSE_SELFTEST_SWEEP_TIER
+    WHEELHOUSE_NIGHTLY_ROOT="$ROOT" bun seats/nightly-sweep.ts) &
+  printf '%s nightly sweep started for %s (pid %s)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$day" "$!" >> "$OUT_LOG"
+}
+tick(){ HERALD_RETIRED_THIS_TICK=0; tick_scan_health; tick_daemon herald; tick_daemon desk; tick_daemon courier; tick_recovery; tick_isa_signals; tick_cleanup; tick_digest; tick_sweep; }
 status(){ for d in herald desk courier; do if ! should_run "$d"; then echo "$d SKIPPED"; continue; fi; rec="$(state_get "$d")"; crash="$(printf '%s' "$rec" | grep -q '"crashLoop":true' && echo 1 || echo 0)"; if [ "$crash" = 1 ]; then since="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); console.log((j.restarts||[])[0]||"")})')"; echo "$d CRASH-LOOP since $since"; elif daemon_starting "$d"; then echo "$d STARTING pid $(cat "$RUN/$d.starting.pid")"; elif daemon_alive "$d"; then if [ "$d" = herald ] && [ -f "$SEATS/scan-health.ts" ]; then scan_health --herald-status; else echo "$d RUNNING pid $(cat "$RUN/$d.pid")"; fi; else echo "$d DEAD"; fi; done; if [ -f "$SEATS/scan-health.ts" ]; then scan_health --alerts-status; else echo 'alerts NONE yet'; fi; }
 resetd(){ d="$1"; state_set "$d" '{"restarts":[],"crashLoop":false}'; restart_cmd "$d"; }
 supervisor_holder_alive(){
