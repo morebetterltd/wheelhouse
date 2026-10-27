@@ -203,6 +203,7 @@ for (const kind of cases) {
         const request=cli(kind==='steer-budget'?['steer','reviewer-1','owned fixture steer']:['dispatch','reviewer-1','new-bead',kind],true,budgeted?{WHEELHOUSE_RPC_GIVE_UP_AFTER_MS:'40000'}:{});
         const beforeExit=(event:Promise<any>)=>Promise.race([event,request.finished.then(result=>{throw Error('client exited before held barrier: '+JSON.stringify(result));})]);
         const held=await beforeExit(barrier);
+        if(!budgeted)fs.writeFileSync(path.join(clock,'advance'),'60001 legacy-clock ms\n');
         const armed=fileSignal(path.join(clock,'armed'),()=>fs.existsSync(path.join(clock,'armed'))&&Number(fs.readFileSync(path.join(clock,'armed'),'utf8'))>=(kind==='prompt-budget'?2:1));try{await beforeExit(armed.promise);}finally{armed.close();}
         fs.writeFileSync(path.join(clock,'observe'),'native WAIT observation\n');
         let logical=0,observations=0,named=false;
@@ -211,8 +212,15 @@ for (const kind of cases) {
           logical=nextLogical;fs.writeFileSync(path.join(clock,'step'),String(logical));
           try{await beforeExit(wait.promise);}finally{wait.close();}
           const progress=JSON.parse(fs.readFileSync(path.join(clock,'progress'),'utf8'));observations=progress.observations;
+          if(!budgeted)assert.equal(progress.virtualAdvanceMs,60001,'legacy elapsed-budget witness remains advanced');
           if(observations<6)assert(!progress.message.includes('has not answered'),progress.message);
-          if(progress.message.includes('has not answered')){assertFacts(progress.message);named=true;}
+          if(progress.message.includes('has not answered')){
+            if(!named){
+              assert.match(progress.message,/has not answered (get_state|prompt) across 6 reports/);
+              assert.match(progress.message,/CPU time delta 0 ms; seat log byte size \d+ unchanged/);
+            }
+            assertFacts(progress.message);named=true;
+          }
           else assert.match(progress.message,/pipe open; process alive; waiting for a signal, not a timeout/);
           return progress;
         }
@@ -223,9 +231,7 @@ for (const kind of cases) {
             const progress=await tick();assert(!progress.message.includes('has not answered'),'working seat must not be named');
           }
           assert.equal(named,false);assert.equal(notes().length,0);
-        } else if(budgeted) {
-          for(let i=0;i<6;i++)await tick();
-        } else {
+        } else if(!budgeted) {
           for(let i=0;i<20&&!named;i++)await tick();
           assert(named,'six consecutive no-progress reports must name the seat');
           await tick();await tick(); // no duplicate note while still unanswered
@@ -233,12 +239,12 @@ for (const kind of cases) {
           assert(logical>60000,'unset-budget control must pass old 20s/60s budgets');
         }
         if(budgeted) {
-          const forbidden=fileSignal(path.join(clock,'progress'),()=>JSON.parse(fs.readFileSync(path.join(clock,'progress'),'utf8')).observations>observations);
+          const forbidden=fileSignal(path.join(clock,'progress'),()=>fs.existsSync(path.join(clock,'progress'))&&JSON.parse(fs.readFileSync(path.join(clock,'progress'),'utf8')).observations>observations);
           fs.writeFileSync(path.join(clock,'step'),'60001');
           try {
             const outcome=await Promise.race([request.finished.then(result=>({result})),forbidden.promise.then(()=>({continued:true}))]);
             if('continued' in outcome){request.child.kill('SIGTERM');await request.finished;throw Error('budget ignored: native WAIT after 60001ms, before owned-client cancellation');}
-            assert.equal(outcome.result.rc,3,outcome.result.err);assert.match(outcome.result.err,/^STOP: seat "reviewer-1" \(pid \d+\) has not answered (get_state|prompt)/m);assertFacts(outcome.result.err);
+            assert.equal(outcome.result.rc,3,outcome.result.err);assert(outcome.result.err.startsWith(`STOP: seat "reviewer-1" (pid ${pid}) has not answered ${commandType}`),outcome.result.err);assertFacts(outcome.result.err);
             const after=JSON.parse(fs.readFileSync(stateFile,'utf8'));
             if(kind==='prompt-budget'){
               assert.equal(after.seats['reviewer-1'].pid,pid);assert.equal(after.seats['reviewer-1'].sessionFile,state.seats['reviewer-1'].sessionFile);
@@ -258,8 +264,8 @@ for (const kind of cases) {
             const pair=notes().filter(row=>row.rpc.id===held.id);assert.equal(pair.length,2);
             assert(pair[0].message.startsWith('rpc unanswered:'));assert(pair[1].message.startsWith('rpc answered late:'));
             assert.equal(pair[0].rpc.command,'get_state');assert.equal(pair[0].rpc.noProgressReports,6);assert.equal(pair[0].rpc.cpuDeltaMs,0);
-            assert.equal(typeof pair[0].rpc.logBytes,'number');assert('fifoUnreadBytes' in pair[0].rpc);assert(pair[0].rpc.fd0.includes(String(pid)));assert(pair[0].rpc.fd1.includes(String(pid)));
-            assert(pair[1].rpc.reports>=pair[0].rpc.reports);assertFacts(result.err);
+            assert.equal(typeof pair[0].rpc.logBytes,'number');assert.equal(typeof pair[0].rpc.reports,'number');assert([0,null].includes(pair[0].rpc.fifoUnreadBytes));assert(pair[0].rpc.fd0.includes(String(pid)));assert(pair[0].rpc.fd1.includes(String(pid)));
+            assert.equal(typeof pair[1].rpc.reports,'number');assert(pair[1].rpc.reports>=pair[0].rpc.reports);assertFacts(result.err);
           }
         }
         assert(!events.some(event=>event.type==='term'||event.type==='signal'),'diagnosis/budget never signals the seat');
