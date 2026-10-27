@@ -37,7 +37,8 @@ if (process.argv[2] === '--writer') {
     // from obscuring this deliberate DIFFERENT-directory control.
     oldDirectories.push(fs.openSync(work, 'r'));
     remove(target, options);
-    assert(!fs.existsSync(work), 'real deletion must precede the writer recreation');
+    // The canary owns the once-only existence check and its failure record.
+    // An extra assertion here could abort before it records unexpected state.
     fs.writeFileSync(path.join(control, 'recreate'), 'after real rmSync\n');
     const deadline = Date.now() + 10000, wait = new Int32Array(new SharedArrayBuffer(4));
     while (!fs.existsSync(path.join(control, 'ready'))) {
