@@ -17,11 +17,17 @@ assert.equal(bytes, 2097152);
 const stub = `#!/usr/bin/env node
 const fs=require('fs'),crypto=require('crypto');
 const input=fs.readFileSync(0),argv=process.argv.slice(2);
-fs.writeFileSync(process.env.HARNESS_PROMPT_RECORD,JSON.stringify({argv,stdinKind:fs.fstatSync(0).isFile()?'file':fs.fstatSync(0).isFIFO()?'pipe':'other',bytes:input.length,sha256:crypto.createHash('sha256').update(input).digest('hex')}));
+fs.writeFileSync(process.env.HARNESS_PROMPT_RECORD,JSON.stringify({argv,stdinKind:fs.fstatSync(0).isFile()?'file':fs.fstatSync(0).isFIFO()?'pipe':fs.fstatSync(0).isSocket()?'socket':'other',bytes:input.length,sha256:crypto.createHash('sha256').update(input).digest('hex')}));
 console.log('fixture consumed stdin through EOF');
 `;
 for (const name of ["pi", "claude", "codex"]) fs.writeFileSync(path.join(bin, name), stub, { mode: 0o755 });
 const records: any[] = [];
+const evidence = process.env.WHEELHOUSE_HARNESS_PROMPT_EVIDENCE;
+function save() {
+  fs.writeFileSync(path.join(root, "native.json"), JSON.stringify(records, null, 2) + "\n");
+  // Retain native captures before assertions, including a positive-case failure.
+  if (evidence) { fs.mkdirSync(evidence, { recursive: true }); fs.copyFileSync(path.join(root, "native.json"), path.join(evidence, "native.json")); }
+}
 for (const harness of HARNESS_VALUES) {
   const cmd = oneShotCommandForHarness(harness, brief, "fixture-provider", "fixture-model", prompt, "Read", "Write");
   assert.equal(cmd.stdin, prompt); assert(!cmd.args.includes(prompt));
@@ -38,10 +44,10 @@ for (const harness of HARNESS_VALUES) {
     } catch (error) { spawnError = error; }
     const captured = fs.existsSync(record) ? JSON.parse(fs.readFileSync(record, "utf8")) : null;
     const native = { harness, mode, status: result?.status ?? null, signal: result?.signal ?? null, errorCode: spawnError?.code ?? result?.error?.code ?? null, error: spawnError?.message ?? result?.error?.message ?? null, stdout: result?.stdout ?? null, stderr: result?.stderr ?? null, record: captured };
-    records.push(native); fs.writeFileSync(path.join(root, "native.json"), JSON.stringify(records, null, 2) + "\n");
+    records.push(native); save();
     const delivery = () => {
       assert.ifError(spawnError); assert.ifError(result?.error); assert.equal(result?.status, 0); assert.equal(result?.signal, null);
-      assert(captured, "missing stdin record"); assert.equal(captured.stdinKind, "pipe"); assert(!captured.argv.includes(prompt), "prompt in argv");
+      assert(captured, "missing stdin record"); assert(["pipe", "socket"].includes(captured.stdinKind), "async stdin must be a piped stream"); assert(!captured.argv.includes(prompt), "prompt in argv");
       assert.equal(captured.bytes, bytes, "stdin length"); assert.equal(captured.sha256, sha256, "stdin sha256");
     };
     if (mode === "fixed") {
@@ -64,11 +70,12 @@ for (const harness of HARNESS_VALUES) {
     const result = kind === "surface" ? spawnWalker(command, root, env) : await spawnWorkWalker(command.bin, command.args, root, env, 10000, path.join(root, "unused-private.lock"), command.stdin);
     const captured = fs.existsSync(record) ? JSON.parse(fs.readFileSync(record, "utf8")) : null;
     records.push({ harness, mode: `${kind}-${removed ? "stdin-removed" : "fixed"}`, status: result.status, signal: result.signal, errorCode: result.error?.code ?? null, stdout: result.stdout, stderr: result.stderr, record: captured });
-    fs.writeFileSync(path.join(root, "native.json"), JSON.stringify(records, null, 2) + "\n");
+    save();
     const delivery = () => {
       assert.ifError(result.error); assert.equal(result.status, 0); assert.equal(result.signal, null);
       assert(captured, "missing stdin record"); assert(!captured.argv.includes(prompt));
-      assert.equal(captured.stdinKind, kind === "surface" ? "file" : "pipe");
+      if (kind === "surface") assert.equal(captured.stdinKind, "file");
+      else assert(["pipe", "socket"].includes(captured.stdinKind), "async stdin must be a piped stream");
       assert.equal(captured.bytes, bytes, "stdin length"); assert.equal(captured.sha256, sha256, "stdin sha256");
     };
     if (removed) {
@@ -78,6 +85,4 @@ for (const harness of HARNESS_VALUES) {
     } else { delivery(); console.log(`  ok    ${harness} ${kind} walk prompt of ${bytes} bytes arrives on stdin (${captured.stdinKind})`); }
   }
 }
-const evidence = process.env.WHEELHOUSE_HARNESS_PROMPT_EVIDENCE;
-if (evidence) { fs.mkdirSync(evidence, { recursive: true }); fs.copyFileSync(path.join(root, "native.json"), path.join(evidence, "native.json")); }
 console.log("harness prompt: PASS (9 exact-byte deliveries; 3 argv and 9 dropped-stdin removals)");
