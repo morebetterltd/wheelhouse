@@ -22,14 +22,14 @@ The main files here:
   dispatch, pushes the previous bead's branch before a move, enforces the
   worktree cap. Install policy in `wheelhouse/.template-source` may opt out
   with `seat_push=off` or `seat_worktrees=per-task`.
-- `herald.ts` — non-LLM Dispatch Office daemon and delivery carrier: tails logs from their saved cursor (first cursorless sight starts at EOF), appends deduplicated inbox records, and supplies identity-guarded `--hook` delivery. Manual `--drain` is the fallback/test seam for unwired installs.
+- `herald.ts` — non-LLM Dispatch Office daemon and delivery carrier: tails logs from their saved cursor (first cursorless sight starts at EOF), appends deduplicated inbox records, and supplies identity-guarded `--hook` delivery. Manual `--drain` is the fallback/test seam for unwired installs. The cursor catalog drops retired log paths; a recreated cursorless path is adopted at EOF. Pane cooldown/defer history keeps at most 128 pane ids, retaining the current target. The seen-id horizon defaults to 5000 (finite `WHEELHOUSE_HERALD_MAX_SEEN` values of at least 1 override it, rounded down); idle polls reuse that bounded set instead of copying it.
 - `needs.ts` — append-only human-needs ledger: opens, lists, answers, shows, and closes durable requests in `seats/needs.jsonl`.
 - `intake.ts` — durable signal intake: post, dispose, list, show and audit signals in `seats/intake.jsonl`.
 - `channels.ts` — reads and validates install-owned `seats/channels.json` declarations for principal/stakeholder channels.
 - `comms.ts` — the single declared-channel send gate; sends by channel name, confirms read-back, and records refs in ignored `seats/comms.jsonl`.
 - `report-issues.ts` — commander-run, opt-in publisher for `template-report` tasks: dry-runs or files routed GitHub issues with scrubbed bodies, dedupe, and `external-ref` writeback.
 - `digest.ts` — read-only fleet digest for a time window: shipped work, open/cleared needs, review/sent-back work, failures, and alerts in commander, human, or JSON form.
-- `desk.ts` — local web desk for `/needs` and the read-only `/board` kanban.
+- `desk.ts` — local web desk for `/needs` and the read-only `/board` kanban. Digest refreshes admit at most two windows concurrently and use the existing read-only digest JSON CLI in short-lived processes, avoiding retained native allocations from recreated Worker VMs. The bounded digest LRU is unchanged. Each job is reaped before its slot is released; timeout/error cleanup kills its isolated process group. Additional windows keep their cached/empty response until a later request can schedule them; page handlers do not wait for digest work.
 - `inbox-hook.sh` — anchored, quiet Claude Code SessionStart/UserPromptSubmit/PostToolUse(Bash) inbox wrapper; starts no Bun when the inbox is absent or already read.
 - `inbox-hook.selftest.sh` — proves context formats, write-before-bookkeeping, budgeted rows, identity guard and manual-path deduplication on owned fixtures.
 - `principal-sentinel.sh` — Claude Code Stop hook that turns final assistant `@principal:` lines into durable needs.

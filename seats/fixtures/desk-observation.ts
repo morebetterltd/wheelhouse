@@ -5,12 +5,21 @@ export function observeDesk(source:string):string {
  const replace=(old:string,value:string)=>{if(source.split(old).length!==2)throw Error('desk observation anchor changed: '+old);source=source.replace(old,value);};
  replace('type Issue =',`function fixtureDeskEvent(kind:string,key:string,success:boolean,details:Record<string,unknown>={}) { fs.appendFileSync(path.join(RUN,"fixture-desk-events.jsonl"),JSON.stringify({kind,key,success,...details})+String.fromCharCode(10)); }\ntype Issue =`);
  replace('finally { boardRefreshing=false; }','finally { boardRefreshing=false; fixtureDeskEvent("board","",boardSnapshot.generatedAt!==new Date(0).toISOString()); }');
- replace('const worker = new Worker(','fixtureDeskEvent("digest-start",win.key,true,{since:win.since,until:win.until}); const worker = new Worker(');
- replace('const mod = await import(event.data.module); self.postMessage',`const mod = await import(event.data.module); const fixtureFs = await import("node:fs"); fixtureFs.appendFileSync(event.data.root+"/seats/run/fixture-desk-events.jsonl",JSON.stringify({kind:"worker-enter",since:event.data.since,until:event.data.until})+String.fromCharCode(10)); self.postMessage`);
- replace('if(!next) return;','fixtureDeskEvent("digest",win.key,!!next); if(!next) return;');
+ replace('child = Bun.spawn(','fixtureDeskEvent("digest-start",win.key,true,{since:win.since,until:win.until}); child = Bun.spawn(');
+ replace('let completed = false;','let completed = false, fixtureDigestSuccess = false;');
+ replace('digestCacheSet(win.key, next);','fixtureDigestSuccess = true; digestCacheSet(win.key, next);');
+ replace('digestRefreshing.delete(win.key);','fixtureDeskEvent("digest",win.key,fixtureDigestSuccess); digestRefreshing.delete(win.key);');
  replace('fetch:handle','fetch:async(req)=>{ fixtureDeskEvent("request-enter",new URL(req.url).pathname,true,{boardRefreshing,digestKeys:[...digestRefreshing]}); const result=await handle(req); fixtureDeskEvent("request-return",new URL(req.url).pathname,true); return result; }');
  replace('function start(){ fs.mkdirSync(RUN,{recursive:true});','function start(){ fs.mkdirSync(RUN,{recursive:true}); fs.writeFileSync(path.join(RUN,"fixture-desk-events.jsonl"),"");');
  return source;
+}
+// Preserve the historical worker-enter event name: it observes actual digest
+// execution, now in the read-only CLI child rather than a retained Worker VM.
+export function observeDigest(source:string):string {
+ const anchor='const d=buildDigest(iso(since),iso(until));';
+ if(source.includes('kind:"worker-enter"'))return source;
+ if(source.split(anchor).length!==2)throw Error('digest observation anchor changed');
+ return source.replace(anchor,'fs.appendFileSync(path.join(SEATS,"run/fixture-desk-events.jsonl"),JSON.stringify({kind:"worker-enter",since:iso(since),until:iso(until)})+String.fromCharCode(10)); '+anchor);
 }
 export function events(root:string):any[]{try{const s=fs.readFileSync(path.join(root,'seats/run/fixture-desk-events.jsonl'),'utf8'),lines=s.split('\n');lines.pop();return lines.filter(Boolean).map(JSON.parse);}catch(e:any){if(e.code==='ENOENT')return [];throw e;}}
 function alive(pid:number){try{process.kill(pid,0);return true;}catch(e:any){if(e.code==='ESRCH')return false;throw e;}}
@@ -18,7 +27,7 @@ export async function completion(root:string,kind:string,key:string,pid:number){
 export async function http(url:string,file:string,pid:number){for(;;){try{const response=await fetch(url,{signal:AbortSignal.timeout(1000)});if(response.ok){const data=Buffer.from(await response.arrayBuffer()),temp=file+'.pending';fs.writeFileSync(temp,data);fs.renameSync(temp,file);return;}}catch{}if(!alive(pid))throw Error('desk exited before HTTP readiness');await Bun.sleep(50);}}
 if(import.meta.main){
  const [mode,...args]=process.argv.slice(2);
- if(mode==='install'){const p=path.join(args[0],'seats/desk.ts');fs.writeFileSync(p,observeDesk(fs.readFileSync(p,'utf8')));}
+ if(mode==='install'){for(const [name,observe] of [['desk.ts',observeDesk],['digest.ts',observeDigest]] as const){const p=path.join(args[0],'seats',name);fs.writeFileSync(p,observe(fs.readFileSync(p,'utf8')));}}
  else if(mode==='http')await http(args[0],args[1],Number(args[2]));
  else if(mode==='event')await completion(args[0],args[1],args[2],Number(args[3]));
  else if(mode==='board'||mode==='digest'){

@@ -5,5 +5,7 @@ const workerSchedule = "function scheduleDigestRefresh(win = digestWindow()){\n 
 export function withPerRefreshWorkers(source:string):string {
   const start=source.indexOf("function scheduleDigestRefresh("),end=source.indexOf("\nfunction digestFor(",start);
   if(start<0||end<0)throw Error("legacy Worker capture anchors changed");
-  return 'import { pathToFileURL } from "node:url";\n'+source.slice(0,start)+workerSchedule+source.slice(end);
+  const importAnchor='import * as path from "node:path";';
+  if(source.split(importAnchor).length!==2)throw Error('legacy Worker import anchor changed');
+  return (source.slice(0,start)+workerSchedule+source.slice(end)).replace(importAnchor,importAnchor+'\nimport { pathToFileURL } from "node:url";');
 }
