@@ -36,6 +36,8 @@ export function oneShotEnvForHarness(harness: HarnessName, accountDir: string, b
   return env;
 }
 
+/** Keep the growing user prompt out of argv. Every caller must forward stdin
+ * and close it at EOF; bounded brief/model/tool flags remain in args. */
 export function oneShotCommandForHarness(harness: HarnessName, brief: string, provider: string | undefined, model: string | undefined, prompt: string, allowedTools?: string, disallowedTools?: string): { bin: string; args: string[]; stdin: string; display: string } {
   if (harness === "pi") {
     const args = ["-p", "--mode", "json", "--no-session", "--append-system-prompt", brief];

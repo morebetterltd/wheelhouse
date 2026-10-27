@@ -68,7 +68,7 @@ if (process.env.STUB_WALK_MANUAL_SNAPSHOT) {
 if (process.env.STUB_WORK_WALK_SNAPSHOT) require(process.env.STUB_WORK_WALK_SNAPSHOT).record(process.cwd(), agentDir);
 const clockDir = process.env.STUB_WALK_CLOCK_DIR;
 if (clockDir) {
-  fs.writeFileSync(path.join(clockDir, 'verifier.tmp'), JSON.stringify({pid:process.pid,cwd:process.cwd(),stdin:fs.fstatSync(0).isCharacterDevice()?'ignored':'open-pipe'}));
+  fs.writeFileSync(path.join(clockDir, 'verifier.tmp'), JSON.stringify({pid:process.pid,cwd:process.cwd(),stdin:fs.fstatSync(0).isFile()?'prompt-file':fs.fstatSync(0).isFIFO()?'pipe':fs.fstatSync(0).isCharacterDevice()?'ignored':'other'}));
   fs.renameSync(path.join(clockDir, 'verifier.tmp'), path.join(clockDir, 'verifier.json'));
   while (!fs.existsSync(path.join(clockDir, 'release'))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);
 }

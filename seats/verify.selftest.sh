@@ -2169,7 +2169,7 @@ if grep -q "## Evidence checks" "$VDIR/bead-8a.md" 2>/dev/null \
 else fail "evidence checks missing from the verdict record"; fi
 if grep -q "evidence/screen.png" "${VARGV%argv.json}prompt.txt" 2>/dev/null && grep -q "floor" "${VARGV%argv.json}prompt.txt" 2>/dev/null; then
   pass "the floor-check results reach the reviewer's prompt"
-else fail "evidence floor results not in the prompt argv"; fi
+else fail "evidence floor results not in the stdin prompt"; fi
 
 printf 'wheelhouse/evidence/\n' >> "$PROJ/.git/info/exclude"
 mkdir -p "$PROJ/wheelhouse/evidence/disk-ok" "$PROJ/wheelhouse/evidence/disk-bare"
