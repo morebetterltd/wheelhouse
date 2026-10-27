@@ -97,7 +97,7 @@ for (const name of ['normal', 'interrupt', 'reader-loss']) {
       // this controller runtime's own ignored-signal inheritance policy.
       runner = spawn('perl', ['-e', '$SIG{PIPE}="DEFAULT"; exec @ARGV or die "exec: $!\\n"', 'bash', path.join(seats, 'selftest-sweep.sh')], { cwd: project, detached: true,
         env: { ...process.env, TMPDIR: path.join(dir, 'tmp'), WHEELHOUSE_ADAPTER_LIFETIME_ONLY: '1', WHEELHOUSE_ADAPTER_INTERRUPT_CHILD: '1', ADAPTER_INTERRUPT_CASE: dir,
-          WHEELHOUSE_SKIP_REAL_PI: '1', WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suite, WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S: '60', WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: '1' },
+          WHEELHOUSE_SKIP_REAL_PI: '1', WHEELHOUSE_SELFTEST_SWEEP_PATTERN: suite, WHEELHOUSE_SELFTEST_SUITE_TIMEOUT_S: '60', WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S: '5' },
         stdio: ['ignore', ...descriptors], timeout: 60_000, killSignal: 'SIGKILL' });
     } finally { descriptors.forEach(fd => fs.closeSync(fd)); }
     runnerJoin = joined(runner); runner.once('exit', () => { exitAt = performance.now(); });
