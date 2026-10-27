@@ -96,6 +96,12 @@ if [ "$RC" = 1 ] && grep -Fq "$INVALID_ID: O1: surface: missing" <<<"$OUT" && ! 
 RC=0; OUT="$(env -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE WHEELHOUSE_CONTRACT_ROOT="$FIX/graph" bun "$CONTRACT" check "$VALID_ID" 2>&1)" || RC=$?
 [ "$RC" = 0 ] && pass 'read real bd show JSON from overridden root' || fail "bd JSON check rc=$RC: $OUT"
 
+mkdir -p "$FIX/produced-by"
+if bun "$HERE/fixtures/produced-by.ts" "$CONTRACT" "$FIX/produced-by" "$HERE/.."; then
+  pass 'produced-by gate: producer, parked, work mismatch and commander attribution; explicit file identity'
+else fail 'produced-by gate consumer cases failed'; fi
+if [ "${WHEELHOUSE_PRODUCED_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
+
 if bun "$HERE/fixtures/producer-stamps.ts" "$CONTRACT" "$FIX/producer-stamps" "$FIX/graph" "$HERE/.."; then
   pass 'producer stamps: default shared gate, real graph labels, pseudo-header boundary, versions and removals'
 else fail 'producer stamp consumer cases failed'; fi
@@ -144,14 +150,18 @@ const {CONTRACT,HERE,FIX}=process.env,root=path.join(FIX,'graph'),ledger=path.jo
 const {readContractSkill}=await import(path.join(HERE,'briefs.ts'));
 const installedStamp=['intent','outcomes'].map(name=>`${name}@${readContractSkill(path.join(HERE,'..'),name).version}`).join(' ');
 // This Signal/trace input is synthetic; committed historical stamps stay put.
+fs.writeFileSync(path.join(root,'seats/seats.json'),JSON.stringify({seats:{'fixture-producer':{role:'producer',external:true,runtime:'commander-subagent'}}}));
+const gateRoot=path.join(FIX,'gate-ledger');fs.mkdirSync(path.join(gateRoot,'seats'),{recursive:true});fs.copyFileSync(ledger,path.join(gateRoot,'seats/intake.jsonl'));
+const gateDispose=cp.spawnSync('bun',[path.join(HERE,'intake.ts'),'dispose','sig-abcd','produced','--work','signal-fixture'],{env:{...process.env,WHEELHOUSE_INTAKE_ROOT:gateRoot,BEADS_ACTOR:'fixture-producer'},encoding:'utf8'});assert.equal(gateDispose.status,0,gateDispose.stderr);
+const gateLedger=path.join(gateRoot,'seats/intake.jsonl');
 const valid=fs.readFileSync(path.join(HERE,'fixtures/contracts/valid.md'),'utf8').replace(/^Skills:.*$/m,`Skills: ${installedStamp}`);
-const env={...process.env,WHEELHOUSE_CONTRACT_ROOT:root};delete env.WHEELHOUSE_SKIP_BD;delete env.WHEELHOUSE_CONTRACT_FIXTURE;delete env.WHEELHOUSE_INTAKE_FIXTURE;
+const env={...process.env,WHEELHOUSE_CONTRACT_ROOT:root};delete env.WHEELHOUSE_SKIP_BD;delete env.WHEELHOUSE_CONTRACT_FIXTURE;delete env.WHEELHOUSE_INTAKE_FIXTURE;delete env.WHEELHOUSE_INTAKE_ROOT;
 let failed=0,passed=0;
 function test(name,fn){try{fn();passed++;console.log('PASS '+name);}catch(e){failed++;console.log('FAIL '+name+': '+e.message);}}
 function run(args,extra={}){return cp.spawnSync('bun',[CONTRACT,...args],{env:{...env,...extra},encoding:'utf8'});}
 function body(signal,repo){return (repo===undefined?'':`Repo: ${repo}\n`)+valid.replace(/^Signal: .*\n/m,signal===null?'':`Signal: ${signal}\n`);}
 function fixture(signal,repo){const file=path.join(FIX,'signal-contract.md');fs.writeFileSync(file,body(signal,repo));return file;}
-function check(signal,extra={}){return run(['check','signal-fixture'],{WHEELHOUSE_SKIP_BD:'1',WHEELHOUSE_CONTRACT_FIXTURE:fixture(signal),WHEELHOUSE_INTAKE_FIXTURE:ledger,...extra});}
+function check(signal,extra={}){return run(['check','signal-fixture'],{WHEELHOUSE_SKIP_BD:'1',WHEELHOUSE_CONTRACT_FIXTURE:fixture(signal),WHEELHOUSE_INTAKE_FIXTURE:gateLedger,...extra});}
 function refuses(r,needle){assert.equal(r.status,2);assert(r.stderr.includes(needle),r.stderr);assert.equal(r.stdout,'');}
 function git(repo,args){assert.equal(cp.execFileSync('git',['-C',repo,'rev-parse','--show-toplevel'],{env,encoding:'utf8'}).trim(),fs.realpathSync(repo));return cp.execFileSync('git',['-C',repo,'-c','user.email=selftest@local','-c','user.name=selftest','-c','commit.gpgsign=false',...args],{env,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();}
 function init(repo){fs.mkdirSync(repo,{recursive:true});cp.execFileSync('git',['-C',repo,'init','-q','-b','main'],{env});assert.equal(git(repo,['rev-parse','--show-toplevel']),fs.realpathSync(repo));}
@@ -159,12 +169,12 @@ function create(text){const r=cp.spawnSync('bd',['create','Trace fixture','--des
 function update(id,text){const r=cp.spawnSync('bd',['update',id,'--description',text],{env,encoding:'utf8'});assert.equal(r.status,0,r.stderr);}
 test('Signal missing refused naming the bead at the default shared gate',()=>refuses(check(null),'signal-fixture: contract: Signal: missing'));
 test('Signal unknown posted id refused naming sig-zzzz',()=>refuses(check('sig-zzzz'),'sig-zzzz is not a posted intake event'));
-test('Signal posted sig-abcd accepted',()=>{const r=check('sig-abcd');assert.equal(r.status,0,r.stderr);assert.equal(r.stderr,'');});
+test('Signal produced sig-abcd accepted',()=>{const r=check('sig-abcd');assert.equal(r.status,0,r.stderr);assert.equal(r.stderr,'');});
 for(const signal of ['isa-gap: K4','install-procedure'])test('Signal '+signal+' accepted',()=>{const r=check(signal);assert.equal(r.status,0,r.stderr);assert.equal(r.stderr,'');});
 for(const signal of ['garbage','isa-gap: k4','isa-gap: K4 extra','sig-'])test('Signal bad form '+signal+' refused',()=>refuses(check(signal),'Signal: invalid'));
 test('Signal quoted or fenced line does not supply a missing header',()=>{for(const text of ['> Signal: install-procedure\n','```\nSignal: install-procedure\n```\n']){const f=path.join(FIX,'quoted.md');fs.writeFileSync(f,text+body(null));refuses(run(['check','signal-fixture'],{WHEELHOUSE_SKIP_BD:'1',WHEELHOUSE_CONTRACT_FIXTURE:f}),'Signal: missing');}});
 test('Signal duplicate lines refused',()=>{const f=path.join(FIX,'duplicate.md');fs.writeFileSync(f,'Signal: install-procedure\n'+valid);refuses(run(['check','signal-fixture'],{WHEELHOUSE_SKIP_BD:'1',WHEELHOUSE_CONTRACT_FIXTURE:f}),'Signal: duplicate line');});
-test('skip-bd unset intake fixture warns, does not silently pass',()=>{const r=check('sig-abcd',{WHEELHOUSE_INTAKE_FIXTURE:''});assert.equal(r.status,0);assert(r.stderr.includes('intake id check skipped'));});
+test('skip-bd unset intake fixture refuses provenance',()=>refuses(check('sig-abcd',{WHEELHOUSE_INTAKE_FIXTURE:''}),'intake ledger link missing'));
 test('explicit missing intake fixture refuses instead of skipping',()=>refuses(check('sig-abcd',{WHEELHOUSE_INTAKE_FIXTURE:path.join(FIX,'missing.jsonl')}),'ledger link unreadable'));
 test('reachable empty ledger has no posted id',()=>{const f=path.join(FIX,'empty.jsonl');fs.writeFileSync(f,'');refuses(check('sig-abcd',{WHEELHOUSE_INTAKE_FIXTURE:f}),'not a posted intake event');});
 test('existing malformed ledger refuses',()=>{const f=path.join(FIX,'malformed.jsonl');fs.writeFileSync(f,'not json\n');refuses(check('sig-abcd',{WHEELHOUSE_INTAKE_FIXTURE:f}),'ledger link invalid');});
@@ -185,7 +195,7 @@ const wt=path.join(root,'worktree');git(repo,['worktree','add','-q','--detach',w
 test('trace follows an explicitly declared worktree root',()=>{update(bead,body('sig-abcd','worktree'));chain(run(['trace',sha]));});
 test('trace refuses a worktree subdirectory as a repo root',()=>{fs.mkdirSync(path.join(wt,'plain'));update(bead,body('sig-abcd','worktree/plain'));refuses(run(['trace',bead]),'not its own git root');});
 test('trace product-repo fallback',()=>{update(bead,body('sig-abcd'));chain(run(['trace',sha]));});
-test('trace missing normal ledger refuses while gate warns',()=>{fs.renameSync(ledger,ledger+'.saved');try{const r=run(['check',bead]);assert.equal(r.status,0,r.stderr);assert(r.stderr.includes('id check skipped'));refuses(run(['trace',bead]),'ledger link unreadable');}finally{fs.renameSync(ledger+'.saved',ledger);}});
+test('trace and gate both refuse a missing normal ledger',()=>{fs.renameSync(ledger,ledger+'.saved');try{refuses(run(['check',bead]),'ledger link unreadable');refuses(run(['trace',bead]),'ledger link unreadable');}finally{fs.renameSync(ledger+'.saved',ledger);}});
 for(const kind of ['directory','malformed','dangling-link'])test('normal existing '+kind+' ledger refuses',()=>{fs.renameSync(ledger,ledger+'.saved');try{if(kind==='directory')fs.mkdirSync(ledger);else if(kind==='dangling-link')fs.symlinkSync(path.join(root,'absent-ledger'),ledger);else fs.writeFileSync(ledger,'broken json\n');refuses(run(['check',bead]),'ledger link '+(kind==='malformed'?'invalid':'unreadable'));}finally{fs.rmSync(ledger,{recursive:true,force:true});fs.renameSync(ledger+'.saved',ledger);}});
 test('trace unknown sig id names missing link',()=>{update(bead,body('sig-zzzz'));refuses(run(['trace',bead]),'signal link missing: sig-zzzz');});
 test('trace missing Signal names bead',()=>{update(bead,body(null));refuses(run(['trace',bead]),`bead ${bead} has no Signal:`);});

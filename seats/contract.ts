@@ -190,12 +190,13 @@ export function readBeadText(root: string, beadId: string): BeadText {
 
 function intakeRows(root: string, strict: boolean): Map<string, IntakeRow> | null {
   const fixture = process.env.WHEELHOUSE_INTAKE_FIXTURE;
-  if (process.env.WHEELHOUSE_SKIP_BD === "1" && !fixture) {
+  const intakeRoot = process.env.WHEELHOUSE_INTAKE_ROOT;
+  if (process.env.WHEELHOUSE_SKIP_BD === "1" && !fixture && !intakeRoot) {
     if (strict) throw new Error("intake ledger link missing: WHEELHOUSE_INTAKE_FIXTURE is unset");
     console.error("Signal: intake id check skipped: WHEELHOUSE_SKIP_BD=1 and WHEELHOUSE_INTAKE_FIXTURE is unset");
     return null;
   }
-  const file = process.env.WHEELHOUSE_SKIP_BD === "1" ? fixture! : path.join(root, "seats", "intake.jsonl");
+  const file = process.env.WHEELHOUSE_SKIP_BD === "1" && fixture ? fixture : path.join(intakeRoot || root, "seats", "intake.jsonl");
   let text: string;
   try { text = fs.readFileSync(file, "utf8"); }
   catch (e: any) {
@@ -220,7 +221,20 @@ function intakeRows(root: string, strict: boolean): Map<string, IntakeRow> | nul
     return fold(events);
   } catch (e: any) { throw new Error(`intake ledger link invalid at ${file}: ${e.message}`); }
 }
-function contractErrors(root: string, text: string, requireSignal: boolean, labels: readonly string[] = [], requireSkills = REQUIRE_SKILLS): string[] {
+function producedByError(root: string, signal: string, row: IntakeRow, beadId: string): string | null {
+  const disposition = row.disposition;
+  if (disposition?.disposition !== "produced") return `refused: signal ${signal} is not disposed produced`;
+  if (disposition.work !== beadId) return `refused: signal ${signal} produced work ${disposition.work ?? "<missing>"}, not ${beadId}`;
+  const file = path.join(root, "seats", "seats.json");
+  if (!fs.statSync(file).isFile()) throw new Error(`producer roster is not a regular file: ${file}`);
+  const roster = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (!roster?.seats || typeof roster.seats !== "object" || Array.isArray(roster.seats)) throw new Error(`producer roster seats must be an object: ${file}`);
+  const producers = Object.entries(roster.seats).filter(([, seat]: [string, any]) => seat?.role === "producer").map(([name]) => name).sort();
+  if (!producers.length) return `refused: signal ${signal} has no producer seat in ${file}`;
+  if (!producers.includes(disposition.by)) return `refused: signal ${signal} was produced by ${disposition.by ?? "<missing>"}, not the producer ${producers.join(", ")}`;
+  return null;
+}
+function contractErrors(root: string, text: string, requireSignal: boolean, labels: readonly string[] = [], requireSkills = REQUIRE_SKILLS, beadId?: string): string[] {
   const parsed = parseContract(text);
   const errors = validateContract(parsed, { requireSignal, requireSkills, labels });
   const versions = stampedSkills(parsed.skills);
@@ -236,8 +250,17 @@ function contractErrors(root: string, text: string, requireSignal: boolean, labe
   }
   if (requireSignal && /^sig-[a-z0-9]+$/.test(parsed.signal)) {
     try {
-      const rows = intakeRows(root, false);
-      if (rows && !rows.has(parsed.signal)) errors.push(`contract: Signal: ${parsed.signal} is not a posted intake event`);
+      if (!beadId) {
+        errors.push(`refused: signal ${parsed.signal} requires --bead <id> for --file checks — fix: pass --bead <id>, and record the produced disposition first if it is still open, using the roster's producer actor (BEADS_ACTOR=<producer-seat> bun seats/intake.ts dispose ${parsed.signal} produced --work <id>); do not rewrite a completed disposition`);
+      } else {
+        const rows = intakeRows(root, true)!;
+        const row = rows.get(parsed.signal);
+        if (!row) errors.push(`contract: Signal: ${parsed.signal} is not a posted intake event`);
+        else {
+          const error = producedByError(root, parsed.signal, row, beadId);
+          if (error) errors.push(error);
+        }
+      }
     } catch (e: any) { errors.push(`contract: Signal: ${parsed.signal}: ${e.message}`); }
   }
   return errors;
@@ -254,7 +277,7 @@ function withSkillsRepair(errors: string[], target: readonly string[]): string[]
 export function checkBeadContract(root: string, beadId: string, options: { requireSignal?: boolean; requireSkills?: boolean } = {}): { text: string | null; errors: string[]; unreadable: boolean } {
   const read = readBeadText(root, beadId);
   return read.error !== null ? { text: null, errors: [`${beadId}: contract: unreadable: ${read.error}`], unreadable: true }
-    : { text: read.text, errors: withSkillsRepair(contractErrors(root, read.text, options.requireSignal ?? true, read.labels, options.requireSkills ?? REQUIRE_SKILLS), [beadId]).map(e => `${beadId}: ${e}`), unreadable: false };
+    : { text: read.text, errors: withSkillsRepair(contractErrors(root, read.text, options.requireSignal ?? true, read.labels, options.requireSkills ?? REQUIRE_SKILLS, beadId), [beadId]).map(e => `${beadId}: ${e}`), unreadable: false };
 }
 
 /** Shared read-only Repo: grammar: paths/lists, NAME (path/), TEMPLATE., UMBRELLA. */
@@ -362,10 +385,14 @@ function cli(): number {
     if (error) console.error(`${args[1]}: lint-intent: ${error}`);
     return error ? 2 : 0;
   } else if (command === "check") {
-    if (args[0] === "--file" && args.length === 2) {
+    if (args[0] === "--file" && (args.length === 2 || (args.length === 4 && args[2] === "--bead"))) {
+      const beadId = args.length === 4 ? args[3] : undefined;
+      if (beadId !== undefined && (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(beadId) || beadId === "." || beadId === "..")) {
+        console.error("contract: --bead requires a valid bead id"); return 2;
+      }
       const read = fixtureText(args[1]);
       if (read.error !== null) { console.error(`${args[1]}: contract: unreadable: ${read.error}`); return 3; }
-      const errors = withSkillsRepair(contractErrors(ROOT, read.text, true, read.labels), ["--file", args[1]]);
+      const errors = withSkillsRepair(contractErrors(ROOT, read.text, true, read.labels, REQUIRE_SKILLS, beadId), args);
       for (const e of errors) console.error(`${args[1]}: ${e}`);
       return errors.length ? 2 : 0;
     }
@@ -398,7 +425,7 @@ function cli(): number {
     try { console.log(traceContract(ROOT, args[0])); return 0; }
     catch (e: any) { console.error(`trace: ${e.message}`); return 2; }
   }
-  console.error("usage: contract.ts check <bead-id> | check --file <path> | audit | trace <bead-id|merge-sha> | lint-intent --file <path>");
+  console.error("usage: contract.ts check <bead-id> | check --file <path> [--bead <id>] | audit | trace <bead-id|merge-sha> | lint-intent --file <path>");
   return 3;
 }
 if (import.meta.main) process.exitCode = cli();

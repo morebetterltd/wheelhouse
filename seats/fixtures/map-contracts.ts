@@ -19,6 +19,9 @@ function fixture(name: string, text: string) { const file = path.join(root, name
 const examples = ["new-feature", "moved-button", "unchanged-surface", "chore"], counts = [1, 1, 0, 0];
 const texts = examples.map(n => fs.readFileSync(path.join(repo, ".agents/skills/outcomes/examples/map-" + n + ".md"), "utf8"));
 const env = { WHEELHOUSE_SKIP_BD: "1", WHEELHOUSE_CONTRACT_ROOT: root, WHEELHOUSE_INTAKE_FIXTURE: path.join(root, "posted.jsonl") };
+const producer = "fixture-producer";
+fs.mkdirSync(path.join(root, "seats"), { recursive: true });
+fs.writeFileSync(path.join(root, "seats/seats.json"), JSON.stringify({ seats: { [producer]: { role: "producer", external: true, runtime: "commander-subagent" } } }));
 const specs: any[] = [];
 function spec(name: string, text: string, expected: number, found: number, code = 0, needle = "") { const s = { name, text, file: fixture(name, text), expected, found, code, needle }; specs.push(s); return s; }
 async function grade(s: any, implementation = manual, removal = "", badCode?: number) {
@@ -40,9 +43,14 @@ try {
   const rows: string[] = [];
   for (let i = 0; i < examples.length; i++) {
     const nativeRoot = path.join(root, "signal-" + i), post = await native("bun", [path.join(path.dirname(contract), "intake.ts"), "post", "--kind", "report", "--source", "map-example", "--title", examples[i], "--text", "Invented map fixture signal"], { WHEELHOUSE_INTAKE_ROOT: nativeRoot }); assert.equal(post.code, 0);
-    const raw = fs.readFileSync(path.join(nativeRoot, "seats/intake.jsonl"), "utf8"), row = JSON.parse(raw); assert.equal(row.id, post.stdout.trim()); records.push({ kind: "posted-capture", raw }); save();
+    const postedRaw = fs.readFileSync(path.join(nativeRoot, "seats/intake.jsonl"), "utf8"), row = JSON.parse(postedRaw); assert.equal(row.id, post.stdout.trim()); records.push({ kind: "posted-capture", raw: postedRaw }); save();
+    const beadId = "map-example-" + examples[i];
+    const disposed = await native("bun", [path.join(path.dirname(contract), "intake.ts"), "dispose", row.id, "produced", "--work", beadId], { WHEELHOUSE_INTAKE_ROOT: nativeRoot, BEADS_ACTOR: producer }); assert.equal(disposed.code, 0, disposed.stderr);
+    const raw = fs.readFileSync(path.join(nativeRoot, "seats/intake.jsonl"), "utf8"); records.push({ kind: "produced-capture", raw, beadId }); save();
+    const events = raw.trim().split("\n").map(line => JSON.parse(line)); assert.equal(events.length, 2); assert.equal(events[0].type, "posted"); assert.equal(events[1].type, "disposed"); assert.equal(events[1].id, row.id); assert.equal(events[1].disposition, "produced"); assert.equal(events[1].by, producer); assert.equal(events[1].work, beadId);
+    // Normalize only the random signal id in a derived fixture; the owner ledger stays intact.
     const id = texts[i].match(/^Signal: (sig-[a-z0-9]+)$/m)![1]; rows.push(raw.replaceAll(row.id, id).trim()); fs.writeFileSync(env.WHEELHOUSE_INTAKE_FIXTURE, rows.join("\n") + "\n");
-    const file = path.join(repo, ".agents/skills/outcomes/examples/map-" + examples[i] + ".md"), checked = await native("bun", [contract, "check", "--file", file], env); assert.equal(checked.code, 0, checked.stderr); assert.equal(checked.stderr, "");
+    const file = path.join(repo, ".agents/skills/outcomes/examples/map-" + examples[i] + ".md"), checked = await native("bun", [contract, "check", "--file", file, "--bead", beadId], env); assert.equal(checked.code, 0, checked.stderr); assert.equal(checked.stderr, "");
     records.push({ kind: "example-check", name: examples[i], native: checked }); save(); spec(examples[i], texts[i], counts[i], counts[i]);
   }
   const noMap = texts[0].split("- O2 ")[0], counterMap = texts[1].slice(texts[1].indexOf("- O2 "));

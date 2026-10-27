@@ -36,6 +36,7 @@ const needles = [
   '10. **Stakeholder channels',
   '11. **Dynamic staffing — optional.',
   '12. **Publishing findings to GitHub:',
+  '13. **Nightly full-tier hour.',
   'a `roles.reviewers` pool means no non-external `role: "reviewer"` entries remain',
   'Keep commander, producer and researcher outside the pool.',
   'seats/seat-env.sh <namespace> --pool <entry>',
@@ -62,7 +63,7 @@ if (missing.length) {
 }
 const interview = text.split('1. **Product repos,')[1].split('### Record what the interview decided')[0];
 const numbers = [...interview.matchAll(/^(\d+)\. \*\*/gm)].map(m => Number(m[1]));
-if (JSON.stringify(numbers) !== JSON.stringify(Array.from({length:11}, (_,i) => i+2))) {
+if (JSON.stringify(numbers) !== JSON.stringify(Array.from({length:12}, (_,i) => i+2))) {
   console.log('interview numbering after question 1: '+JSON.stringify(numbers));
   process.exit(1);
 }

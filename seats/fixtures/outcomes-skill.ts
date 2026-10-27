@@ -25,8 +25,10 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv, stem: stri
   return r;
 }
 const env = { ...process.env, WHEELHOUSE_SKIP_BD: "1", WHEELHOUSE_CONTRACT_ROOT: work, WHEELHOUSE_INTAKE_FIXTURE: path.join(work, "posted-fixture.jsonl") };
+fs.mkdirSync(path.join(work, "seats"), { recursive: true });
+fs.writeFileSync(path.join(work, "seats/seats.json"), JSON.stringify({ seats: { "fixture-producer": { role: "producer", external: true, runtime: "commander-subagent" } } }));
 const posted: string[] = [];
-function check(file: string, stem: string) { return run("bun", [contract, "check", "--file", file], env, stem); }
+function check(file: string, stem: string, beadId: string) { return run("bun", [contract, "check", "--file", file, "--bead", beadId], env, stem); }
 
 test("layout and frontmatter", () => {
   const text = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
@@ -42,11 +44,12 @@ test("layout and frontmatter", () => {
   assert.equal(indexed.status, 0, indexed.stderr); assert.match(indexed.stdout, /^120000 [0-9a-f]+ 0\t\.claude\/skills\/outcomes\n$/);
 });
 test("neutral skill directory", () => {
+  const forbidden = new RegExp(["life", "os"].join("") + /|pai\b|\.cursor|cursor|claude|codex|\bpi\b|chatgpt|openai|anthropic|gemini/.source, "i");
   function walk(dir: string) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const file = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(file);
-      else { assert(entry.isFile(), "non-regular skill entry"); assert(!/lifeos|pai\b|\.cursor|cursor|claude|codex|\bpi\b|chatgpt|openai|anthropic|gemini/i.test(fs.readFileSync(file, "utf8")), "non-neutral text in " + file); }
+      else { assert(entry.isFile(), "non-regular skill entry"); assert(!forbidden.test(fs.readFileSync(file, "utf8")), "non-neutral text in " + file); }
     }
   }
   walk(skillDir);
@@ -72,14 +75,16 @@ for (const name of names) test("example " + name, () => {
   const post = run("bun", [path.join(path.dirname(contract), "intake.ts"), "post", "--kind", name === "goal" ? "goal" : name === "isa-gap" ? "isa-change" : "report", "--source", "outcomes-example", "--title", "Invented " + name, "--text", "Invented Basket Ledger example"], nativeEnv, name + "-post");
   assert.equal(post.status, 0, post.stderr); assert.equal(post.stderr, "");
   assert.match(post.stdout, /^sig-[a-z0-9]{4}\n$/);
-  // Derive the fixture from the captured owner CLI's posted JSONL row.
+  const disposed = run("bun", [path.join(path.dirname(contract), "intake.ts"), "dispose", post.stdout.trim(), "produced", "--work", name], { ...nativeEnv, BEADS_ACTOR: "fixture-producer" }, name + "-dispose");
+  assert.equal(disposed.status, 0, disposed.stderr);
+  // Derive the fixture from the captured owner CLI's posted + disposed JSONL rows.
   // Normalize only the random id into a fixture file; never rewrite intake.jsonl.
   const raw = fs.readFileSync(path.join(nativeRoot, "seats/intake.jsonl"), "utf8");
   fs.writeFileSync(path.join(work, name + "-native.jsonl"), raw);
-  const row = JSON.parse(raw); assert.equal(row.type, "posted"); assert.equal(row.id, post.stdout.trim());
+  const events = raw.trim().split("\n").map(line => JSON.parse(line)), row = events[0]; assert.equal(events.length, 2); assert.equal(row.type, "posted"); assert.equal(row.id, post.stdout.trim()); assert.equal(events[1].by, "fixture-producer"); assert.equal(events[1].work, name);
   posted.push(raw.replaceAll(row.id, parsed.signal).trimEnd());
   fs.writeFileSync(env.WHEELHOUSE_INTAKE_FIXTURE, posted.join("\n") + "\n");
-  const result = check(file, name + "-check");
+  const result = check(file, name + "-check", name);
   assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout, ""); assert.equal(result.stderr, "");
   console.log("OUTCOMES_EXAMPLE_CHECK " + JSON.stringify({ name, code: result.status, stdout: result.stdout, stderr: result.stderr }));
 });
@@ -88,7 +93,7 @@ test("user-report group/check mismatch refused", () => {
   assert.equal((text.match(/^  check: walk — /gm) ?? []).length, 1, "must mutate exactly the person-on-surface check");
   const file = path.join(work, "user-report-mismatch.md");
   fs.writeFileSync(file, text.replace("  check: walk — ", "  check: run — "));
-  const result = check(file, "mismatch-check");
+  const result = check(file, "mismatch-check", "user-report");
   assert.equal(result.status, 2, result.stderr); assert.equal(result.stdout, "");
   assert(result.stderr.includes("O1: check: person-on-surface requires walk, got run"), result.stderr);
   console.log("OUTCOMES_MISMATCH_CHECK " + JSON.stringify({ code: result.status, stdout: result.stdout, stderr: result.stderr }));
