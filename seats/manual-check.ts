@@ -70,7 +70,7 @@ function readonlyTools(out:string,cwd:string) {
   const real=command("sh",["-c","command -v git"]);
   fs.writeFileSync(path.join(bin,"git"),`#!/usr/bin/env bash\ncase "\u0024{1:-}" in\nstatus|log|show|diff|rev-parse|ls-files|ls-tree|cat-file) exec ${JSON.stringify(real)} "\u0024@";;\nbranch) [ "\u0024#" = 2 ] && [ "\u0024{2:-}" = --list ] && exec ${JSON.stringify(real)} "\u0024@";;\nesac\necho 'manual-check: read-only version-control command refused' >&2\nexit 2\n`,{mode:0o755});
   fs.writeFileSync(path.join(bin,"gh"),'#!/bin/sh\necho "manual-check: publication unavailable" >&2\nexit 2\n',{mode:0o755});
-  return readonlyBdPath(ROOT,`${bin}${path.delimiter}${hostBudgetPath(ROOT)}`,cwd);
+  return readonlyBdPath(ROOT,`${bin}${path.delimiter}${hostBudgetPath(ROOT)}`,out);
 }
 function failure(message:string) {
   fs.mkdirSync(path.join(ROOT,'seats'),{recursive:true});
