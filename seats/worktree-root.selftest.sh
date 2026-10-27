@@ -212,7 +212,7 @@ else
   fail "umbrella dispatch did not reuse product repo worktree (exit $RC): out=$OUT branch=$(git -C "$UMB_WT" branch --show-current 2>&1)"
 fi
 
-phase "umbrella declaration wins over an occupied product worktree"
+phase "umbrella declaration selects a separate anchor for a product seat"
 # Real bd show --json is an array of records. The inline declaration shape
 # reproduces a contract whose first paragraph reads 'Closes: ... . Repo: ...'.
 cat > "$BIN/bd" <<'STUB'
@@ -245,17 +245,9 @@ RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIX
 if [ "$RC" = 2 ] && printf '%s\n' "$OUT" | grep -qF 'contract: Signal: missing'; then
   pass "unchanged production gate rejects the former bare Repo fixture"
 else fail "former non-contract was not rejected for its missing Signal (exit $RC): $OUT"; fi
-for mode in occupied-line occupied-inline; do
-  bead="bead-$mode"
-  write_repo_claim "$mode" "$bead"
-  check_repo_claim "$bead" || exit 1
-  cp -f "$UMB/seats/state.json" "$FIX/$mode-before.json"
-  RC=0; OUT="$(env -u BEADS_ACTOR -u WHEELHOUSE_SKIP_BD -u WHEELHOUSE_CONTRACT_FIXTURE HOME="$HOME_FIX" PATH="$RUN_PATH" FIXTURE_REPO_CLAIM="$CLAIM" bun "$UMB/seats/adapter.ts" dispatch worker-1 "$bead" "must not prepare a product branch" 2>&1)" || RC=$?
-  printf '%s\n' "$OUT" > "$FIX/$mode-output.txt"
-  if HOME="$HOME_FIX" bun "$HERE/fixtures/dispatch-repo.mjs" "$UMB" "$bead" "$RC" "$mode" "$FIX/$mode-before.json" "$FIX/$mode-output.txt"; then
-    pass "$mode declaration refuses a product target before creating or switching a branch"
-  else fail "$mode declaration was not safely refused: $OUT"; fi
-done
+if bun "$HERE/fixtures/dispatch-umbrella.mjs" "$UMB" "$HOME_FIX" "$RUN_PATH" "$CLAIM"; then
+  pass "separate umbrella and product anchors preserve dispatch ownership"
+else fail "umbrella/product dispatch witness failed"; fi
 
 phase "inline umbrella declaration prepares a fresh seat in the correct repo"
 # A second isolated account gives this seat a genuinely absent worktree target.

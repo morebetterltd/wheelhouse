@@ -584,10 +584,15 @@ worktree's `.git` is a file, not a directory.
 
 In an umbrella install, `Repo: UMBRELLA` selects the container's Git repository
 before any existing worktree is reused. The field may start a line or follow
-another sentence (`Closes: H7. Repo: UMBRELLA`). If the selected seat worktree
-belongs to the product instead, dispatch refuses before creating or switching
-its branch; prepare an umbrella-owned seat worktree first. It does not silently
-create an empty product branch or repurpose the product worktree.
+another sentence (`Closes: H7. Repo: UMBRELLA`). When the seat's ordinary
+`.wheelhouse-worktrees/<seat>` belongs to the product, dispatch creates or reuses
+`.wheelhouse-worktrees/umbrella-<seat>` in the umbrella repository and runs the
+seat there; the product worktree is left untouched, never repurposed. An existing
+umbrella-<seat> worktree made by hand is reused too. Its previous commits remain
+on their branch, and dirty files refuse a switch through the same safety gates.
+A later product task returns to `.wheelhouse-worktrees/<seat>`, leaving the
+umbrella worktree unchanged. A fresh seat with no worktree still follows the
+ordinary primary-anchor preparation path.
 
 `probe` runs the rostered account, provider, and model through a one-shot `pi -p --no-session` liveness turn that asks only for `OK`; it does not need or create a bead worktree and writes no bead comment. A successful probe prints `OK`; a provider failure prints pi's stdout/stderr verbatim and exits with pi's status.
 
