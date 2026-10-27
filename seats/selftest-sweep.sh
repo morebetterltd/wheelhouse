@@ -216,7 +216,9 @@ contain_suite_tree(){
 suite_watchdog(){ (
   # This asynchronous child must never run the parent's lock-release traps.
   trap - EXIT
-  trap '' INT TERM HUP
+  # Cleanup must not depend on a diagnostic pipe still having a reader.
+  # Otherwise the first TERM log write can kill this watchdog before its kill.
+  trap '' INT TERM HUP PIPE
   local root="$1" dir="$2" message=""
   local deadline=$((SECONDS+SUITE_TIMEOUT_S)) remaining slice renewal_rc=0 poll_rc
   while :; do
@@ -316,8 +318,12 @@ start_suite(){
 }
 
 finish_current_suite(){
-  local mode="$1" watch_rc=0
+  local mode="$1" watch_rc=0 saved_pipe_trap
   [ -n "$CURRENT_SUITE_PID" ] || return 0
+  # Cover the synchronous survivor check/fallback too. Restore the caller's
+  # disposition before another suite is launched; suites must not inherit it.
+  saved_pipe_trap="$(trap -p PIPE)"
+  trap '' PIPE
   if [ "$mode" = stop ]; then printf 'stop\n' >&9; fi
   if [ -n "$WATCHDOG_PID" ]; then
     if [ "$mode" != stop ]; then wait "$CURRENT_SUITE_PID"; SUITE_RC=$?; printf 'done\n' >&9; fi
@@ -353,6 +359,7 @@ finish_current_suite(){
   retire_review_group || { info 'STOP: cannot retire review suite group'; SUITE_RC=2; }
   CURRENT_SUITE_PID=""; WATCHDOG_PID=""; SUITE_STATE=""
   [ "$watch_rc" = 0 ] || SUITE_RC=2
+  if [ -n "$saved_pipe_trap" ]; then eval "$saved_pipe_trap"; else trap - PIPE; fi
 }
 
 acquire_lock(){
@@ -402,6 +409,7 @@ finish_sweep(){
   # A startup allocation error must not erase a signal already accepted there.
   [ -z "$PENDING_INTERRUPT" ] || rc="$PENDING_INTERRUPT"
   trap - EXIT
+  trap '' PIPE
   if [ -n "$CURRENT_SUITE_PID" ]; then finish_current_suite stop; fi
   if [ -n "$SUITE_STATE" ]; then exec 8>&- 9>&-; rm -rf "$SUITE_STATE"; fi
   release_lock || rc=2
@@ -413,7 +421,7 @@ interrupt_sweep(){
     [ -n "$PENDING_INTERRUPT" ] || PENDING_INTERRUPT="$rc"
     return
   fi
-  trap '' INT TERM HUP
+  trap '' INT TERM HUP PIPE
   finish_current_suite stop
   exit "$rc"
 }
