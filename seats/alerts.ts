@@ -9,6 +9,7 @@ import { pidAlive } from "./seat-activity";
 import { observeSettledSeats, type SettledSeat } from "./seat-settled";
 import { acquirePidLock, releasePidLock } from "./lock";
 import { observeSeatStreams, seatStallNeedMs, type StreamHealth } from "./seat-stream-health";
+import { nightlyConditions } from "./nightly-state";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_ALERTS_ROOT || path.join(import.meta.dir, ".."));
 const SEATS = path.join(ROOT, "seats");
@@ -20,9 +21,9 @@ const ALERT_LOG = path.join(LOGS, "alerts.log");
 const DEFAULT_INTERVAL_MS = 60_000;
 export const TEMPLATE_DRIFT_ALERT_HOLD_MS = Number(process.env.WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS ?? 10 * 60_000);
 
-type AlertName = "idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"docker-cache-pressure"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed"|`seat-stalled:${string}`|`seat-unverified:${string}`;
+type AlertName = "idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"docker-cache-pressure"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed"|"nightly-sweep-red"|"nightly-sweep-missed"|`seat-stalled:${string}`|`seat-unverified:${string}`;
 type AlertState = { active:boolean; since:string|null; lastFiredAt:string|null; needId?:string|null; signature?:string; detail?:string };
-type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; docker:any; github:any; drift:any; quarantined:{count:number;names:string[]}; seatStreams:Record<string,StreamHealth>; alerts:Record<string,AlertState>; settledSeats:Record<string,SettledSeat> };
+type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; docker:any; github:any; drift:any; quarantined:{count:number;names:string[]}; seatStreams:Record<string,StreamHealth>; nightly:ReturnType<typeof nightlyConditions>; alerts:Record<string,AlertState>; settledSeats:Record<string,SettledSeat> };
 
 function now(){ return new Date().toISOString(); }
 function readJson(file:string):any{ try { return JSON.parse(fs.readFileSync(file,"utf8")); } catch { return null; } }
@@ -193,7 +194,11 @@ function needOpen(name:AlertName, title:string, body:string, stream?:StreamHealt
 function needClose(id:string){ spawnSync("bun",["seats/needs.ts","close",id,"--reason","cleared"],{cwd:ROOT,encoding:"utf8",env:{...process.env,BEADS_ACTOR:"alerts"}}); }
 function title(name:string){ return `alert — ${name.replace(/-/g," ")}`; }
 function bodyFor(name:AlertName, detail:string){ return `Alert ${name}: ${detail}. ${remedyFor(name)}`; }
-function remedyFor(name:AlertName){ if(name==="docker-cache-pressure") return "Cost: cache pressure can prevent Docker builds and benches. Next: inspect the cache and run docker builder prune -f to remove regenerable build cache when appropriate. No automatic prune was performed."; if(name.startsWith("seat-stalled:")) return "Cost: delivery is waiting, even though the process is alive. Next: inspect the seat's own stream and redispatch after diagnosis; never interrupt a legitimate tool wait. No automatic abort or restart was performed."; if(name==="template-drift-check-failed") return "Cost: $0 directly; template drift is unknown. Next: inspect the retained drift failure in seats/run/fleet-snapshot.json and repair/retry the check."; if(name==="commander-pane-invalid") return "The commander pane target is invalid. Cost: $0 while noticed, but alerts and wakes may not reach the commander. Next: run seats/cockpit.sh to re-aim the commander pane and restart the herald."; if(name==="inbox-lag") return "The fleet inbox has undrained rows for longer than the alert threshold. Cost: $0 directly, but workers may wait for attention. Next: run bun seats/herald.ts --drain in the commander pane."; if(name==="idle-fleet-ready-work") return "Ready work exists while nobody is on it. Cost: $0 directly, but delivery is stalled. Next: spawn or resume seats and dispatch work; this clears itself once a worker is busy."; return "A fleet alert became active. Cost: $0. Next: inspect seats/run/fleet-snapshot.json; no action needed when the condition clears itself."; }
+function remedyFor(name:AlertName){
+  // Report nightly coverage; never auto-stop or change the installed fleet.
+  if(name==="nightly-sweep-red") return "Cost: reviews require the full tier until a later nightly is green. Next: inspect the named sweep log and failed suites, repair them, and rerun the nightly; no core-only receipt may merge while the brake is on.";
+  if(name==="nightly-sweep-missed") return "Cost: nightly full coverage is unknown; an earlier red brake remains in force. Next: inspect the reason, pause marker and host sweep holder, and schedule a retry when available; do not bypass or signal another sweep.";
+ if(name==="docker-cache-pressure") return "Cost: cache pressure can prevent Docker builds and benches. Next: inspect the cache and run docker builder prune -f to remove regenerable build cache when appropriate. No automatic prune was performed."; if(name.startsWith("seat-stalled:")) return "Cost: delivery is waiting, even though the process is alive. Next: inspect the seat's own stream and redispatch after diagnosis; never interrupt a legitimate tool wait. No automatic abort or restart was performed."; if(name==="template-drift-check-failed") return "Cost: $0 directly; template drift is unknown. Next: inspect the retained drift failure in seats/run/fleet-snapshot.json and repair/retry the check."; if(name==="commander-pane-invalid") return "The commander pane target is invalid. Cost: $0 while noticed, but alerts and wakes may not reach the commander. Next: run seats/cockpit.sh to re-aim the commander pane and restart the herald, or run seats/cockpit.sh --claim-commander inside the pane your commander uses."; if(name==="inbox-lag") return "The fleet inbox has undrained rows for longer than the alert threshold. Cost: $0 directly, but workers may wait for attention. Next: inspect the commander's SessionStart, UserPromptSubmit and PostToolUse Bash inbox hooks (seats/inbox-hook.sh), their pane identity guard and delivery-failed log; restore hook delivery, then read the delivered records."; if(name==="idle-fleet-ready-work") return "Ready work exists while nobody is on it. Cost: $0 directly, but delivery is stalled. Next: spawn or resume seats and dispatch work; this clears itself once a worker is busy."; return "A fleet alert became active. Cost: $0. Next: inspect seats/run/fleet-snapshot.json; no action needed when the condition clears itself."; }
 function maybeHuman(name:AlertName, st:AlertState, stream?:StreamHealth){ const age=Date.now()-Date.parse(st.since||now()); const humanAfter=minutesValue("alert-human-after-minutes",15)*60_000; if(stream && age>=seatStallNeedMs(ROOT)){ if(!st.needId) st.needId=needOpen(name,"A model stream needs attention",`An assigned worker's model stream remains silent. Its last own event was at ${stream.lastEventAt}. Cost: delivery is waiting while its process remains alive. Next: ask the commander to inspect the stream and recover or redispatch the work after diagnosis. No automatic restart was performed.`,stream); } else if(name==="commander-pane-invalid" || ((name==="inbox-lag"||name==="idle-fleet-ready-work") && age>=humanAfter)){ if(!st.needId) st.needId=needOpen(name,title(name),st.detail??bodyFor(name,"condition remains active")); } }
 
 // Independent namespace/state from the unfinished-model-stream watchdog.
@@ -229,6 +234,7 @@ export async function buildSnapshot(root=ROOT):Promise<SnapshotFile>{
     for(const entry of [worker,reviewer]) if(entry){entry.busy=true;entry.identity="UNVERIFIED";}
   };
   const settledSeats=observeSettledSeats(root,snap.workers.live,prior?.settledSeats,Date.now(),unknown); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const docker=await dockerCacheInfo(); const github=githubInfo(); const drift=driftInfo();
+  const nightly=nightlyConditions(root);
   const seatStreams=observeSeatStreams(root,prior?.seatStreams??{},Date.now(),unknown);
   for(const seat of Object.keys(unverified)){delete seatStreams[seat];delete settledSeats[seat];}
   snap.workers.busy=snap.workers.live.filter(w=>w.busy).length;snap.workers.idle=snap.workers.live.length-snap.workers.busy;
@@ -241,9 +247,12 @@ export async function buildSnapshot(root=ROOT):Promise<SnapshotFile>{
     "capacity-events":{on:capacity.seats.length>0,sig:capacity.seats.join("\n"),detail:`capacity seats=${capacity.seats.join(", ")}`},
     "low-disk":{on:disk.freeBytes!==null&&disk.freeBytes<disk.thresholdBytes,sig:"",detail:`free bytes=${disk.freeBytes}; threshold bytes=${disk.thresholdBytes}`},
     "docker-cache-pressure":{on:docker.status==="ok"&&docker.cacheBytes!==null&&docker.cacheBytes>=docker.thresholdBytes,sig:"",detail:`cache pressure: build cache=${docker.cacheSize}; threshold bytes=${docker.thresholdBytes}`},
-    "commander-pane-invalid":{on:herald.target?.status?herald.target.status!=="ok":false,sig:String(herald.target?.status??""),detail:`commander target status=${herald.target?.status??"unknown"}`},
+    "commander-pane-invalid":{on:herald.target?.status?herald.target.status!=="ok":false,sig:String(herald.target?.status??""),detail:`commander target status=${herald.target?.status??"unknown"}; pane=${herald.target?.target??"unknown"}`},
     "template-drift":{on:drift.status==="drift",sig:driftFileSetSignature(drift),detail:`modified=${JSON.stringify(drift.modified)}; localOnly=${JSON.stringify(drift.localOnly)}; missing=${JSON.stringify(drift.missing)}; aheadBy=${drift.aheadBy??"unknown"}`},
     "template-drift-check-failed":{on:drift.status==="check-failed",sig:drift.reason??"",detail:drift.reason??"drift check failed without a reason"},
+    // Stable signatures refresh detail without another wake until a clear.
+    "nightly-sweep-red":nightly.red,
+    "nightly-sweep-missed":nightly.unavailable,
   };
   // Keep old keys long enough to clear their persistent condition/need when a
   // seat settles, stops, resumes progress, parks on capacity, or is removed.
@@ -262,6 +271,7 @@ export async function buildSnapshot(root=ROOT):Promise<SnapshotFile>{
     if(stream?.stalled && was?.active && was.signature!==active[name].sig){ if(was.needId) needClose(was.needId); was=undefined; }
     const next=name==="template-drift" ? heldAlertRow(active[name].on,was,active[name].sig,TEMPLATE_DRIFT_ALERT_HOLD_MS) : alertRow(active[name].on,was,active[name].sig);
     next.detail=was?.detail;
+    if(name.startsWith("nightly-sweep-") && active[name].on) next.detail=bodyFor(name,active[name].detail);
     const shouldFire = next.active&&(!was?.active||was.signature!==next.signature);
     if(shouldFire){ next.detail=bodyFor(name,active[name].detail); appendLog(`alert fired ${name}: ${next.detail}`); appendInboxAlert(name,next.detail,stream); }
     if(!next.active&&was?.active){ appendLog(`alert cleared ${name}`); if(was.needId) needClose(was.needId); next.needId=null; }
@@ -270,7 +280,7 @@ export async function buildSnapshot(root=ROOT):Promise<SnapshotFile>{
   }
   if(quarantined.count!==(prior?.quarantined?.count??0)) appendInboxAlert("quarantine",`Alert quarantine: count=${quarantined.count}; suites=${quarantined.names.join(", ")||"none"}. Cost: these suites keep running but their failures do not block review. Next: inspect each owner task and deadline in seats/selftest-quarantine.list.`);
   settledTaskAlerts(settledSeats,priorAlerts,alerts,unverified);
-  return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,docker,github,drift,quarantined,seatStreams,alerts,settledSeats};
+  return {at:now(),intervalMs:intervalMs(),snapshot:snap,herald,inbox,needs,capacity,disk,docker,github,drift,quarantined,seatStreams,nightly,alerts,settledSeats};
 }
 export async function check(json=false){ const fd=acquireLock(); if(fd===null){ console.log(json?JSON.stringify({ok:false,locked:true}):"alerts: check already running"); return; } try{ const data=await buildSnapshot(ROOT); writeAtomic(SNAP,JSON.stringify(data,null,2)+"\n"); console.log(json?JSON.stringify(data):`snapshot ${data.at} alerts=${Object.values(data.alerts).filter(a=>a.active).length}`); } catch(e:any){ appendLog(`STOP alerts check failed: ${e?.message??e}`); console.error(`STOP: alerts check failed: ${e?.message??e}`); process.exitCode=2; } finally { releaseLock(fd); } }
 if(import.meta.main){ const [cmd,...rest]=process.argv.slice(2); if(cmd==="check") await check(rest.includes("--json")); else { console.error("usage: alerts.ts check [--json]"); process.exit(2); } }

@@ -58,6 +58,8 @@ A historical `commit=unknown` may honestly record missing provenance, but cache 
 
 The `github-issue-*` lines are optional alerts configuration; append them to older `.template-source` files if you want the defaults visible before changing them. Empty is the default for each: `github-issue-watch=` means the GitHub issue watch is on (set it to `off`, `false`, `disabled`, `none`, or `0` to silence it); `github-issue-repos=` means derive the watched `owner/repo` from the product repo's `origin` remote (otherwise list `owner/repo` values separated by commas or semicolons); `github-issue-include-labels=` means no required labels (otherwise comma/semicolon-separated labels, with any one matching enough); `github-issue-exclude-labels=` means no excluded labels (otherwise comma/semicolon-separated labels, with any one matching enough to skip the issue); `github-issue-author=` means any author (otherwise one GitHub login). `seats/alerts.ts` writes the result into `seats/run/fleet-snapshot.json`; the optional fleet-gate reader only displays active alert names from that snapshot.
 
+`scan-stall-minutes=5` is optional completed-work health policy. Missing or blank uses `5`; a non-negative number overrides. Copy `seats/scan-health.ts` with herald and supervisor. The supervisor judges a live herald by `seats/run/herald.heartbeat.json`, not commander busyness, pending inbox rows or seat tool waits; a missing/foreign-pid heartbeat stays unknown until the upgraded herald starts. It retires/restarts confirmed stalls under the existing crash-loop budget, kills wedged alerts passes by snapshot age, and opens a need when a stale alerts pass has no live owner. See `seats/README.md` for status and the separate heartbeat write cadence.
+
 The `merge-target` line is the install's principal-confirmed integration branch. Fresh per-seat branches use it before `origin/HEAD`, because GitHub's default branch is not necessarily the branch this fleet merges into. Existing installs upgrading over a `.template-source` without this line must add it now:
 
 ```bash
@@ -70,6 +72,20 @@ grep '^merge-target=' wheelhouse/.template-source
 
 The `seat_push`, `seat_worktrees`, and `cleanup` lines are install policy switches read by the copied seat machinery from this same committed file. Omit them to keep today's template defaults: `seat_push=on` lets cross-bead dispatch publish the previous branch before moving; `seat_worktrees=per-seat` lets the adapter create and switch `.wheelhouse-worktrees/<seat>`; `cleanup=on` runs automatic closed-bead cleanup. Installs whose recorded authority forbids one of those actions may set the independent opt-outs: `seat_push=off` means the adapter never pushes, `seat_worktrees=per-task` means the adapter does not create, move, or switch worktrees and instead uses the cwd already recorded by the install, and `cleanup=off` disables automatic cleanup while `cleanup=report` writes the would-remove cleanup report without deleting anything.
 
+### Nightly full-tier configuration
+
+New supervisors run `bun seats/nightly-sweep.ts` once per local day at `sweep-hour=` (default `03`); `sweep=off` disables it. Append visible defaults to older `.template-source` records without overwriting existing choices:
+
+```bash
+grep -q '^sweep=' wheelhouse/.template-source || echo 'sweep=on' >> wheelhouse/.template-source
+grep -q '^sweep-hour=' wheelhouse/.template-source || echo 'sweep-hour=03' >> wheelhouse/.template-source
+grep -E '^sweep(-hour)?=' wheelhouse/.template-source
+```
+
+Choose an available local hour (`00`–`23`), outside any pause window. `WHEELHOUSE_SUPERVISOR_SWEEP_HOUR` overrides the hour; presence of `seats/run/paused` skips the nightly, with `WHEELHOUSE_SUPERVISOR_PAUSE_FILE` as an absolute/install-relative marker override. A busy host lock also skips without queueing. Copy the new `nightly-sweep.ts` and `nightly-state.ts` with the normal seats refresh, plus the updated supervisor/verifier/alerts/runner. An old running supervisor does not run the nightly until restarted through the install's normal approved procedure; this requires no replacement of its installed service definition. Do not manipulate production services merely to verify the upgrade.
+
+The completed result is `seats/run/nightly-sweep.json`; a missed attempt is recorded separately and cannot clear a prior red. While the completed result is red, every review requires full and no merge may rely on a core receipt. A later green releases the brake. Logs and both named alerts are described in `seats/README.md`, “Nightly full tier”.
+
 ## 0.5. Check local drift before copying
 
 Run `bash seats/template-drift.sh` before you copy from the template. Every `MODIFIED` line is a local fix the upgrade may overwrite; file it upstream first as a template issue/report, or decide deliberately to carry it. `LOCAL-ONLY` lines are install-owned tools the template does not know about. `MISSING` lines are template files absent from the install. A `DRIFT: cannot compare` result is not clean; fix `.template-source` or the cache before upgrading.
@@ -78,7 +94,7 @@ If the target introduces the two-skill contract gate, read **Two-skill contract 
 
 ### One-time rotation for existing oversize seat logs
 
-If an install already has very large `seats/logs/*.jsonl` files, rotate them once before relying on the copied adapter's automatic cap. Do not rename a live seat's log: either stop the seat first, or use the same copy-truncate form the adapter uses (`cp seats/logs/worker.jsonl seats/logs/worker.jsonl.1 && : > seats/logs/worker.jsonl`) so a live writer holding the log open keeps appending to the current path. Stop/restart the herald around a manual rotation so its cursor sees the rotation boundary. The automatic cap is configurable with `WHEELHOUSE_LOG_ROTATE_BYTES` (default 256 MiB) and keeps `WHEELHOUSE_LOG_ROTATE_KEEP` archives (default 3). The runtime rotation relies on `herald.ts`'s documented offset reset: when a log shrinks below the saved offset after rotation, herald resets the offset to zero and continues from the new file. Newer heralds also write `seats/run/commander-pane.json` and `seats/run/herald.target.json`; cockpit records the pane and the herald aims itself. Newer installs also replace the legacy desk and courier watchdog scripts with `seats/supervisor.sh`: delete those old watchdog scripts and `seats/run/{desk,courier}-watchdog.pid`, copy `seats/daemons.sh` and `seats/supervisor.sh`, then re-run cockpit so it starts the supervisor. The supervisor now also runs cockpit's dead-seat recovery pass every minute and schedules the nightly `bun seats/prune.ts cleanup` fleet-wide reaper (skipped when `cleanup=off`). If this install wants OS-level keep-alive after logout or reboot, run `seats/supervisor.sh install-launchd --print` on macOS or `seats/supervisor.sh print-systemd` on Linux and review/install the printed unit manually; the template command writes the plist but never loads, unloads, bootstraps, bootouts or kickstarts it.
+If an install already has very large `seats/logs/*.jsonl` files, rotate them once before relying on the copied adapter's automatic cap. Do not rename a live seat's log: either stop the seat first, or use the same copy-truncate form the adapter uses (`cp seats/logs/worker.jsonl seats/logs/worker.jsonl.1 && : > seats/logs/worker.jsonl`) so a live writer holding the log open keeps appending to the current path. Stop/restart the herald around a manual rotation so its cursor sees the rotation boundary. The automatic cap is configurable with `WHEELHOUSE_LOG_ROTATE_BYTES` (default 256 MiB) and keeps `WHEELHOUSE_LOG_ROTATE_KEEP` archives (default 3). The runtime rotation relies on `herald.ts`'s documented offset reset: when a log shrinks below the saved offset after rotation, herald resets the offset to zero and continues from the new file. Newer heralds also write `seats/run/commander-pane.json` and `seats/run/herald.target.json`; cockpit records the pane and the herald aims itself. After copying `seats/`, re-run `seats/cockpit.sh` so the live commander pane gets its `@wheelhouse_commander` mark (the install's physical root); re-runs refresh the mark and record. A commander outside cockpit claims once with `seats/cockpit.sh --claim-commander` inside its pane, or with a pane argument. This requires tmux 3.0 or newer; there is no unmarked fallback. The herald refuses an unmarked/reused/foreign-marked pane as `not-commander`, even when an override names a pane under this project. Inspect `herald.ts --status` / `seats/run/herald.target.json`; inbox collection and `--drain` continue while wake delivery is withheld. Newer installs also replace the legacy desk and courier watchdog scripts with `seats/supervisor.sh`: delete those old watchdog scripts and `seats/run/{desk,courier}-watchdog.pid`, copy `seats/daemons.sh` and `seats/supervisor.sh`, then re-run cockpit so it starts the supervisor. The supervisor now also runs cockpit's dead-seat recovery pass every minute and schedules the nightly `bun seats/prune.ts cleanup` fleet-wide reaper (skipped when `cleanup=off`). If this install wants OS-level keep-alive after logout or reboot, run `seats/supervisor.sh install-launchd --print` on macOS or `seats/supervisor.sh print-systemd` on Linux and review/install the printed unit manually; the template command writes the plist but never loads, unloads, bootstraps, bootouts or kickstarts it.
 
 ## 1. Get a clone you can actually diff
 
@@ -188,6 +204,59 @@ cp "$TEMPLATE/contracts/INTEGRATOR.md" wheelhouse/INTEGRATOR.md.new
 
 **Nine `.md` files, named individually.** Not `cp -r contracts/`, which would also copy `bench.sh.stub` over `wheelhouse/crew/bench.sh` — and if you have implemented your bench, that replaces it with a stub that exits 1. `bench.sh.stub` is install-only. It is never part of an upgrade. `RESEARCHER.md` is new in template upgrades that carry researcher seats; copy it whole, then fill only its `## This project` half if this install takes a researcher. Existing `seats/seats.json` rosters do not need a `skills` field; when present it is an optional array of skill directories that the adapter tilde-expands and passes as Pi `--skill`, stopping on a missing path. This list matches `BOOTSTRAP.md` step 2's — nine briefs plus the stub it alone copies — and step 5's integrity check is what catches the two drifting apart.
 
+### Copy the skills
+
+Run at the install root. `.agents/skills/` is a **shared namespace**, not a template-owned tree. Refresh only the skill directories the checked template ships (each has `SKILL.md`) and its top-level metadata files, including `NOTICE-pstack.md`. Replace those exact entries to remove stale files inside shipped skills; never remove the parent or infer that an unshipped directory is retired. Every other directory stays product-owned, especially `.agents/skills/verify-<project>/` and its feature map when the product and install root are the same repository. Other `.agents/` and `.claude/` contents also stay untouched. Conflicting types at shipped paths, symlinked destination parents, or a real file/directory at either compatibility-link path are **named refusals**, before any writes: preserve them and reconcile with the owner.
+
+```bash
+# Template skills upgrade
+test -f "$TEMPLATE/.agents/skills/intent/SKILL.md" && test -f "$TEMPLATE/.agents/skills/outcomes/SKILL.md" || { echo "STOP: template skills missing" >&2; exit 1; }
+for p in .agents .claude .claude/skills; do
+  [ ! -L "$p" ] && { [ ! -e "$p" ] || [ -d "$p" ]; } || { echo "STOP: skill parent is not a real directory: $p" >&2; exit 1; }
+done
+[ ! -L .agents/skills ] && { [ ! -e .agents/skills ] || [ -d .agents/skills ]; } || { echo "STOP: canonical skills path is not a real directory: .agents/skills" >&2; exit 1; }
+for skill in intent outcomes; do
+  p=".claude/skills/$skill"
+  [ ! -e "$p" ] || [ -L "$p" ] || { echo "STOP: $p exists and is not a symlink; preserve it and reconcile with the owner before continuing" >&2; exit 1; }
+done
+[ ! -L "$TEMPLATE/.agents/skills" ] || { echo "STOP: template skills source is a symlink" >&2; exit 1; }
+[ "$(cd "$TEMPLATE/.agents/skills" && pwd -P)" != "$(pwd -P)/.agents/skills" ] || { echo "STOP: template skills source is the destination" >&2; exit 1; }
+# Preflight EVERY shipped entry before refreshing any of them.
+for src in "$TEMPLATE"/.agents/skills/*; do
+  p=".agents/skills/${src##*/}"
+  [ ! -L "$src" ] && { [ -f "$src" ] || { [ -d "$src" ] && [ -f "$src/SKILL.md" ]; }; } || { echo "STOP: unsupported template skill entry: $src" >&2; exit 1; }
+  if [ -d "$src" ]; then
+    [ ! -L "$p" ] && { [ ! -e "$p" ] || [ -d "$p" ]; } || { echo "STOP: template skill destination has wrong type: $p" >&2; exit 1; }
+  else
+    [ ! -L "$p" ] && { [ ! -e "$p" ] || [ -f "$p" ]; } || { echo "STOP: template skill destination has wrong type: $p" >&2; exit 1; }
+  fi
+done
+mkdir -p .agents/skills
+for src in "$TEMPLATE"/.agents/skills/*; do
+  p=".agents/skills/${src##*/}"
+  rm -rf "$p" && cp -R "$src" "$p" || { echo "STOP: template skill refresh failed: $p" >&2; exit 1; }
+done
+mkdir -p .claude/skills
+ln -sfn ../../.agents/skills/intent .claude/skills/intent
+ln -sfn ../../.agents/skills/outcomes .claude/skills/outcomes
+test -f .claude/skills/intent/SKILL.md && test -f .claude/skills/outcomes/SKILL.md
+```
+
+Read back only the shipped entries, not the shared parent: product manuals must neither be deleted to satisfy a diff nor treated as template drift. Expect empty output and exit 0; stop on any failure. The compatibility targets must remain exactly `../../.agents/skills/intent` and `../../.agents/skills/outcomes`. Re-running the refresh replaces the same shipped entries without nesting and preserves all unshipped directories.
+
+```bash
+# Template skills readback
+for skill in intent outcomes; do
+  test -f "$TEMPLATE/.agents/skills/$skill/SKILL.md" || { echo "FAIL template skill missing: $skill" >&2; exit 1; }
+done
+for src in "$TEMPLATE"/.agents/skills/*; do
+  p=".agents/skills/${src##*/}"
+  [ ! -L "$p" ] && diff -r "$src" "$p" || { echo "FAIL template skill differs: $p" >&2; exit 1; }
+done
+test -L .claude/skills/intent && test "$(readlink .claude/skills/intent)" = ../../.agents/skills/intent && test -f .claude/skills/intent/SKILL.md || { echo "FAIL intent skill link" >&2; exit 1; }
+test -L .claude/skills/outcomes && test "$(readlink .claude/skills/outcomes)" = ../../.agents/skills/outcomes && test -f .claude/skills/outcomes/SKILL.md || { echo "FAIL outcomes skill link" >&2; exit 1; }
+```
+
 ### Adopt the host-wide heavy-test admission without replacing your bench
 
 After copying `seats/` below, preserve your implemented bench and add this prologue before any build, fixture or test work in `wheelhouse/crew/bench.sh` (Bash):
@@ -277,7 +346,7 @@ Both terminals must then exit 0; `A.out` contains `A finished`, and `B.out` cont
 
 ### The seats machinery comes too
 
-The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `seat-worktree.ts`, `verify.ts`, `walk.ts`, `needs.ts`, `desk.ts`, `principal-sentinel.sh`, `courier.ts`, `channels.ts`, `comms.ts`, `transports/` (including `transports/teams.ts`), `prune.ts`, `floor.ts`, `manual.ts`, `cockpit.sh`, `recover.ts`, `intent-check.sh`, their selftests, `seats.json.example`, `channels.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. That file-by-file copy is how the integrate/close intent gate reaches existing installs; after the copy, `seats/intent-check.sh` should exist and `bash seats/intent-check.selftest.sh` should pass before you rely on the gate. Some copied selftests need template history as their fixture; they first use `wheelhouse/.template-source`'s `path=` if it is a live repository carrying `commit=`, otherwise they fetch `commit=` from `source=` into `wheelhouse/.template-cache/` under this install. What the copy can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/channels.json`, `seats/integration-refs.txt`, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/`, `seats/comms.jsonl` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:
+The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `seat-worktree.ts`, `verify.ts`, `walk.ts`, `needs.ts`, `desk.ts`, `principal-sentinel.sh`, `inbox-hook.sh`, `inbox-hook.selftest.sh`, `courier.ts`, `channels.ts`, `comms.ts`, `transports/` (including `transports/teams.ts`), `prune.ts`, `floor.ts`, `manual.ts`, `cockpit.sh`, `recover.ts`, `intent-check.sh`, `pool.ts`, `roster.ts`, `staffing.ts`, `fleet-snapshot.ts`, `seat-activity.ts`, `jev.ts`, their selftests, `seats.json.example`, `channels.json.example`, `pool.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. That file-by-file copy is how the integrate/close intent gate reaches existing installs; after the copy, `seats/intent-check.sh` should exist and `bash seats/intent-check.selftest.sh` should pass before you rely on the gate. Some copied selftests need template history as their fixture; they first use `wheelhouse/.template-source`'s `path=` if it is a live repository carrying `commit=`, otherwise they fetch `commit=` from `source=` into `wheelhouse/.template-cache/` under this install. What the copy can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/channels.json`, `seats/integration-refs.txt`, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/`, `seats/comms.jsonl` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:
 
 ```bash
 mkdir -p seats
@@ -290,7 +359,7 @@ for f in "$TEMPLATE"/seats/*; do
   fi
 done
 if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
-for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/verdicts/'; do
+for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/staffing.json' 'seats/verdicts/'; do
   grep -qxF "$e" .gitignore 2>/dev/null || printf '%s\n' "$e" >> .gitignore
 done
 seats/install-fleet-pre-push-guard.sh || { echo "STOP: fleet pre-push guard installation failed" >&2; exit 1; }
@@ -300,7 +369,7 @@ The copy does not remove retired selftests: existing installs must delete `seats
 
 The installer above protects both the container and the separate product Git root named by `product-repo=` in `wheelhouse/.template-source`. Preserve that value during upgrades; for an older install using the default, correct it before running the installer if the product is separate (absolute paths or paths relative to the install root are accepted). Each repository keeps its own hooks location, including a shared `.beads/hooks`, and its previous pre-push hook. Re-running refreshes the guard path without nesting wrappers or losing the previous hook. The product does not need a `seats/` directory: both hooks invoke the guard shipped with this install. Review the per-repository installation output; invalid/missing product roots stop the command rather than silently leaving them unguarded. The guard remains a bypassable tripwire, not credential isolation.
 
-`seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. Current template seats include optional dynamic-staffing pool support (`seats/pool.ts`, `seats/roster.ts`, `seats/pool.json.example`, and `seats/pool.selftest.sh`); copying the template files does not create `seats/pool.json`, so existing fixed-roster installs keep their current behavior unless they deliberately add a pool. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing.
+`seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. Current template seats include optional dynamic-staffing pool support (`seats/pool.ts`, `seats/roster.ts`, `seats/staffing.ts`, `seats/fleet-snapshot.ts`, `seats/seat-activity.ts`, `seats/jev.ts`, `seats/pool.json.example`, and their selftests); copying the template files does not create `seats/pool.json`, so existing fixed-roster installs keep their current behavior unless they deliberately add a pool. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing.
 
 ### Optional host build budget for existing installs
 
@@ -395,6 +464,62 @@ For the one seat being changed:
    ```
 
 The old harness session file remains history in `seats/state.json` until `reset` replaces that seat's record. Other seats' records and session files must not change; that is the falsifier for this procedure.
+
+### Move a fixed roster to a pool (optional)
+
+Existing fixed rosters remain valid. If the principal declines dynamic staffing, do nothing: leave `seats/seats.json` and `seats/state.json` byte-for-byte as they were, write no `seats/pool.json`, and verify the fixed-roster path:
+
+```bash
+cp seats/seats.json seats/seats.json.before-pool
+cp seats/state.json seats/state.json.before-pool 2>/dev/null || true
+rm -f seats/pool.json
+bun seats/pool.ts check      # expect: pool: none (fixed roster)
+diff -u seats/seats.json.before-pool seats/seats.json
+test ! -e seats/state.json.before-pool || diff -u seats/state.json.before-pool seats/state.json
+```
+
+If the principal accepts dynamic staffing, walk the same records current `BOOTSTRAP.md` question 11 asks for. Use the `Fixed roster`/`Dynamic staffing` choice language, Q8's harness labels (`pi`, `claude-code`, `codex`), and live model/provider sources for the selected harness; never pick models from memory. A role whose `min` equals `max` is fine. The read-back table is `entry | harness | provider | models | login folder | label | auth route`, followed by `role | min | max | entries | model`. Each pool entry normally starts from one existing fixed worker or reviewer login (first apply the role correction in the verifier-row paragraph below if this is an old review seat): reuse that row's existing `account.dir` as the pool entry's `account.dir`, because that login is keyed to the directory and moving it would force a re-login. Add any new subscriptions as new entries under `~/.pi-seats-<namespace>/pool/<entry>`. Do not copy a login directory.
+
+Then move the roster in this order:
+
+1. Confirm the old fixed worker and reviewer seats are idle; wait or stop if they are busy.
+
+   ```bash
+   bun seats/adapter.ts status
+   ```
+
+2. Write `seats/pool.json` with one entry per carried worker/reviewer login plus any new subscription entries. Set `roles.workers` and/or `roles.reviewers` with `min`, `max`, entries, and model. `roles.reviewers` is the `verify.ts` pool and replaces fixed `role: "reviewer"` rows, never fixed `role: "verifier"` walker rows.
+
+3. Run the validator before editing the roster; it should refuse while same-role fixed rows still exist. That STOP is the guard proving the pool will not silently double-count the same login:
+
+   ```bash
+   bun seats/pool.ts check    # expect STOP: the pool replaces the fixed roster for workers/reviewers
+   ```
+
+   Remove only the fixed worker rows for `roles.workers` and only the fixed reviewer rows for `roles.reviewers` from `seats/seats.json`. Keep `commander`, `producer`, `researcher`, the verifier walker, and any other non-pooled role. Run `bun seats/pool.ts check` again until it is clean.
+
+4. Stop old fixed worker processes after their rows have moved out of the fixed roster; old `seats/state.json` records may remain as history until reset.
+
+   ```bash
+   bun seats/adapter.ts stop <old-worker-seat>
+   ```
+
+5. Run one staffing check per expected live pooled seat, then read the status. A pooled worker appears as `worker-<entry>`; a pooled reviewer appears as `reviewer-<entry>`.
+
+   ```bash
+   bun seats/staffing.ts check
+   bun seats/staffing.ts status
+   ```
+
+6. Smoke dispatch to a staffed worker seat the same way the harness-switch section smokes a changed fixed seat.
+
+   ```bash
+   bun seats/adapter.ts dispatch <staffed-worker-seat> <scratch-bead-id> 'Smoke check after pool move: reply OK and stop.'
+   ```
+
+7. Commit `seats/pool.json` and the edited `seats/seats.json` together. Do not commit `seats/staffing.json`, `seats/state.json`, `seats/run/`, or `seats/logs/`.
+
+`bun seats/pool.ts check` also refuses a pool entry whose login folder is under another namespace root and an entry that uses the commander's own login folder. Those are not warnings: fix the account directory before running a staffed seat.
 
 Before running the upgraded dispatchers, inspect **every** `"role": "verifier"` row in `seats/seats.json` and `seats/staffing.json`. Old versions used that role for bead review. For each review seat, the one-line fix is `seats["<actual-seat-name>"].role = "reviewer"` in the file containing it. Preserve its key and `account.dir` so credentials and runtime history stay attached; new fixed review seats are named `reviewer-1`, `reviewer-2`, and newly staffed ones `reviewer-<entry>`. Keep role `verifier` only for a consumer-surface walker in `seats.json` (normally seat `verifier`); never auto-convert a real walker. Mirror the corrected roles in the installed SEATS roster and cold-reset any persistent review process after the brief changes. `verify.ts` now refuses a wrongly typed explicit seat and, if no reviewer exists, names each verifier seat with this fix; legacy staffing records STOP naming the seat and fix rather than silently becoming walkers. No credentials are moved or rewritten.
 
@@ -552,6 +677,7 @@ Do not split on the first occurrence of the words "this project", and do not spl
   diff wheelhouse/runbooks/<the-file> "$TEMPLATE/runbooks/<the-file>"
   ```
 - **Stakeholder channel docs and machinery are present.** Before relying on declared-channel communication, confirm `seats/channels.json` is install-owned (not copied from the template), `seats/channels.json.example` remains placeholder-only, and `bun seats/channels.ts check --credentials` succeeds once you have declared real channels and the owner has provisioned their credentials.
+- **Dynamic-staffing machinery is present and inert when unconfigured.** Run `bash seats/pool.selftest.sh`, `bash seats/staffing.selftest.sh`, `bash seats/staffing-live.selftest.sh`, `bash seats/fleet-snapshot.selftest.sh`, and `bash seats/jev.selftest.sh` after the seats copy. With no `seats/pool.json`, `bun seats/pool.ts check` must print `pool: none (fixed roster)` and `bun seats/staffing.ts check` must print `staffing: no pool (fixed roster)`.
 - **Newly-arrived contracts have an EMPTY project half, and the check above cannot tell you so.** The integrity check compares contract halves; the project-half check confirms the heading exists. A contract copied whole in step 4 satisfies both while carrying nothing but the template's guidance comments. That is not a failure and should not be made one — the template's own rule is that a guidance comment stays until you have content for it — but it is not evidence either, and "my project sections diffed clean" is trivially true for a file that never had one.
 
   So name them and act on them. Step 4 printed `new, copied whole:` for each; for every file it named:
@@ -585,6 +711,16 @@ rm -f wheelhouse/.template-source.bak
 
 ## 7. Sweep what the contracts do not cover
 
+Existing seat worktrees get the factory skill links under both `.agents/skills`
+and `.claude/skills` on their next dispatch (or bead-bound spawn); nothing needs
+linking by hand. After preparation run `bun seats/adapter.ts skills-check <seat>`
+for each standing seat whose worktree exists; stop on a refusal naming the seat
+and skill. Project-owned directories and committed links are preserved. The
+adapter adds exact per-entry Git excludes **without trailing slashes**: Git
+regards a symlink as a file entry, so a trailing-slash directory rule leaves it
+visible. Never exclude the entire skills directory; new manual/map files must
+remain visible.
+
 An upgrade re-copies the contracts and the runbooks and reaches nothing else. If the change altered a convention — a path form, a command name, a label — then your generated files and your existing beads still speak the old one:
 
 - If this install has an uncommitted, git-excluded root `AGENTS.md` carrying the wheelhouse note, move it to `wheelhouse/AGENTS.md` and drop any `AGENTS.md` or `/AGENTS.md` line from `.git/info/exclude`; then `git check-ignore AGENTS.md` must exit 1. If root `AGENTS.md` is committed, leave it product-owned and put only the wheelhouse note in `wheelhouse/AGENTS.md`. Also remove any blanket `.agents/` or `/.agents/` line from `.git/info/exclude`; a wheelhouse install no longer claims that namespace, and only named machine-generated paths belong in the machine-local exclude file.
@@ -601,6 +737,18 @@ An upgrade re-copies the contracts and the runbooks and reaches nothing else. If
 - Sweep `CLAUDE.md` and `wheelhouse/STARTUP.md` against `generated/CLAUDE.md.example` and `generated/STARTUP.md.example` for retired mechanics wording: old prose about the fleet-gate prompt hook, cockpit-started commander-pane polling, making the herald run, one-off herald checking through cockpit, and the old desk/courier watchdog scripts should be deleted or rewritten as pointers to supervisor, herald self-aim, alerts, and the fleet snapshot.
 - Remove any old Claude Code `UserPromptSubmit` hook that runs `bash seats/fleet-gate.sh`; the herald/alerts path replaces the per-prompt computation. If this install intentionally wants the prompt status line, it may keep that hook now that `seats/fleet-gate.sh` is only a sub-second reader of `seats/run/fleet-snapshot.json`, but wire it with the project-root-anchored command `bash "$CLAUDE_PROJECT_DIR/seats/fleet-gate.sh"` so a shell in a product subdirectory does not run a nested copy.
 - `seats/principal-sentinel.sh` also arrives through the `seats/` copy, but copying it does not wire the commander. Hand-merge the Claude Code Stop hook into `.claude/settings.json`: `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"bash seats/principal-sentinel.sh"}]}]}}`. Keep any existing `SessionStart`, optional `UserPromptSubmit`, and other hooks; add this as a sibling. Then run `bash seats/principal-sentinel.selftest.sh`.
+- `seats/inbox-hook.sh` and `seats/inbox-hook.selftest.sh` also arrive through the `seats/` copy. Copying files does not wire hooks: hand-merge these three sibling entries into `.claude/settings.json`, next to bd's SessionStart hook, the existing Stop hook and optional fleet-gate hook. Preserve all existing hooks. The herald's poke now triggers UserPromptSubmit delivery. The wrapper exits0 and does nothing when Bun is absent or no bytes are unread. Prove it with `bash seats/inbox-hook.selftest.sh`; the suite never launches a real Claude session or edits installed settings. Re-apply the standing behavior from the generated examples: records arrive at session start, with each prompt and after each shell command, and every delivered record is read before the turn ends. Use needs `show`, intake and comms for the corresponding records; inbound is information, not authority. No inbox delivery is wired on Stop.
+
+  <!-- inbox-hook-wiring -->
+  ```json
+  { "hooks": {
+    "SessionStart": [{ "matcher": "", "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/seats/inbox-hook.sh\"" }] }],
+    "UserPromptSubmit": [{ "matcher": "", "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/seats/inbox-hook.sh\"" }] }],
+    "PostToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/seats/inbox-hook.sh\"" }] }]
+  } }
+  ```
+  <!-- /inbox-hook-wiring -->
+
 - `seats/desk.ts` and `seats/courier.ts` also arrive through the `seats/` copy. Hand-merge the generated startup prose that says `seats/cockpit.sh <namespace>` starts/verifies the local desk, writes its URL to `seats/run/desk.port`, exposes `/needs` and read-only `/board`, and starts the optional courier only when `seats/channels.json` declares an `audience: "principal"` channel. A bare legacy `seats/run/telegram.token` no longer makes cockpit start the courier; leave existing token files in place only for manual/back-compat courier runs, and do not create `seats/run/telegram.token` during an upgrade. If this install wants Telegram courier delivery, first declare a principal Telegram channel, then provision a dedicated bot/token outside git with mode `0600`; Telegram allows only one `getUpdates` poller per bot, so do not share a bot with another poller. Never commit anything under `seats/run/`. Then run `bash seats/desk.selftest.sh`, `bash seats/supervisor.selftest.sh`, and, when present in the copied template, `bash seats/courier.selftest.sh`.
 - **Declare your stakeholder channels.** The `seats/` copy brought `seats/channels.ts`, `seats/comms.ts`, `seats/transports/teams.ts`, and `seats/channels.json.example`, but nothing is declared until you write install-owned `seats/channels.json`. Ask the same questions the current install interview asks: where do stakeholders talk; what stable channel name should the fleet use; is it `telegram`, `slack`, or `teams`; what destination id does the platform use; is its audience `principal` or `stakeholders`; who belongs there (member ids and human names); and may the commander read it (`read: true` or `false`). At most one channel may have `audience: "principal"`. Use `seats/channels.json.example` for the exact shape, then run the read-back:
 
@@ -621,6 +769,25 @@ An upgrade re-copies the contracts and the runbooks and reaches nothing else. If
 - every bead that is not closed and whose text cites paths or commands, especially long-lived ones filed at install;
 - the `template-report` label, if you installed before it existed — `wheelhouse/GRAPH.md` names it as the marker for template-class findings, and nothing back-fills it onto the `Report <tool> issue: ...` beads you already filed or writes its line into a `CLAUDE.md` generated before it.
 - installs predating `github-report=` have no line, which the publisher reads as off; append `github-report=off` and `github-report-routes=` to `wheelhouse/.template-source` so the record is explicit, and point at `BOOTSTRAP.md`'s publishing question if the principal wants it on.
+
+### Existing installs owe a verification manual
+
+For each product repo recorded by this install (the root for a single repo), follow the **Write the verification manual** block in `$TEMPLATE/BOOTSTRAP.md` step 5. Load the installed `.agents/skills/create-verification/SKILL.md` at the install root, scan that product's actual consumer surfaces, and map every discovered feature. Write the real manual and feature map in that repo at `.agents/skills/verify-<project>/`, where `<project>` is its directory basename, with the relative `.claude/skills/verify-<project>` link to `../../.agents/skills/verify-<project>`. It belongs to the project and travels with its code, not under `wheelhouse/`. Preserve an existing valid product manual rather than replacing it with template content; check its coverage against the scan and repair only what is missing.
+
+From the install root, run `bun seats/manual.ts check --repo <repo>` for each product repo and paste its `manual ok: N features` output; also check `test -L <repo>/.claude/skills/verify-<project>` and that the link resolves to the manual. Any nonzero result stops the upgrade. Follow the create skill's proof and cleanup instructions too. For a repo with no runnable surface, use its honest `surface: none` declaration and empty feature map: the check prints `manual ok: no surface`, not a live-proof verdict.
+
+Commit a newly written manual and its link locally on that product repo's recorded default line with subject `Add the verification manual for <project>`. Inspect status and stage only those exact paths, never the shared `.agents/skills/` parent or unrelated upgrade changes. If the checkout is not on that line or has unrelated staged changes, stop and resolve it rather than switching or merging the owner's work. Do not push from this step; the integrator's recorded authority governs anything leaving the machine. Report each manual's path and mapped-feature count, naming any `surface: none` declaration. The later container upgrade commit is separate from these product-owned paths.
+
+### Keep the verification manual honest
+
+The read-only maintain pass drives mapped features daily at local 05 (`WHEELHOUSE_MANUAL_CHECK_HOUR`), posts each finding to producer intake, and is disabled by `manual_check=off`; preserve any existing opt-out:
+
+```bash
+grep -q '^manual_check=' wheelhouse/.template-source \
+  || printf '\nmanual_check=on\n' >> wheelhouse/.template-source
+```
+
+No manual is invented by the schedule: install/upgrade's manual-creation and proof step supplies it. See `seats/README.md`, **Daily manual check**, for evidence, failure and rerun commands.
 
 ### Carry ISA direction changes to the producer
 
@@ -672,6 +839,14 @@ After step 3's runtime copy and step 4's producer-brief splice, before normal di
 5. Run `bun seats/contract.ts check <bead-id>`; require exit 0 before dispatching or reviewing that bead again. The refusal prints this recheck with the actual id (or a shell-quoted `--file` path). Repeat the audit for remaining open/in-progress work; each invalid id needs its own producer judgment, not a mass metadata rewrite. New work must be written with both skills from the start. Contract checks exit 2, dispatch exits 1, and review exits 6 on a missing/incomplete stamp; force does not bypass them. The exact, correctly labelled bootstrap/smoke install-procedure carve-out remains narrowly separate, never a legacy-work exemption.
 
 The audit's exit 1 still lets the upgrade sweep finish; it does not authorize dispatch/review of the listed contracts. An unreadable graph remains exit 3 and must be repaired separately. Upgrading this fleet's own queue is an install operation, not something the template silently does for every consumer.
+
+For **each listed open task**, post a signal after the audit (substitute its title and id; the angle brackets are placeholders, not shell syntax):
+
+```text
+bun seats/intake.ts post --kind finding --source upgrade --title "<bead title>" --ref <bead-id>
+```
+
+Hand the returned signal id to the producer to write the contract. If the owner writes it by hand instead, load `.agents/skills/intent/SKILL.md` first and `.agents/skills/outcomes/SKILL.md` next, then check the resulting contract with `bun seats/contract.ts check <bead-id>` before dispatch. Posting alone does not repair or dispatch a task; it only adds its intake row.
 
 ### Adopt the autonomy mandate in existing installs
 
@@ -744,9 +919,16 @@ git status --short
 NEW_COMMIT=$(sed -n 's/^commit=//p' wheelhouse/.template-source)
 [[ "$NEW_COMMIT" =~ ^[0-9a-f]{7,40}$ ]] || { printf "REFUSED template source: invalid commit='%s'; expected 7-40 lowercase hexadecimal characters\n" "$NEW_COMMIT" >&2; exit 1; }
 NEW=$(printf '%s' "$NEW_COMMIT" | cut -c1-12)
+# Reuse the checked TEMPLATE from the copy/readback; re-run source recovery if it is unset.
+[ -n "${TEMPLATE:-}" ] && [ -d "$TEMPLATE/.agents/skills" ] || { echo "STOP: checked TEMPLATE required for shipped skill staging" >&2; exit 1; }
 git add wheelhouse/ seats/ .gitignore CLAUDE.md .beads/
-for p in .claude/settings.json; do
+for p in .claude/settings.json .claude/skills/intent .claude/skills/outcomes; do
   [ ! -e "$p" ] || git add "$p"
+done
+# Never stage the shared parent or an unchanged product manual just because it is beside a skill.
+for src in "$TEMPLATE"/.agents/skills/*; do
+  p=".agents/skills/${src##*/}"
+  if [ -n "$(git status --short -- "$p")" ]; then git add -- "$p"; fi
 done
 # If step 7 made you edit any other project-owned file, add its exact path now.
 git status --short

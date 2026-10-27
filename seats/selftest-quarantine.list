@@ -4,3 +4,4 @@
 # Owner task records that evidence. Deadline must be after today (local date);
 # expiry STOPs the runner until removed or renewed by a reviewed change.
 # The template ships with no exemptions.
+verify-cancellation.selftest.sh wheelhouse-project-v9ve 2026-11-10

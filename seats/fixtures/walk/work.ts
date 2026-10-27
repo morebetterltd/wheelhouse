@@ -28,7 +28,15 @@ roster.seats['REVIEWER-RECORD-SENTINEL']={role:'reviewer',account:{dir:authorDir
 const approval = () => writeReviewFixture(fleet, reviewSample, 'fixture-work', { branch, tip: pin, 'verifier-seat': 'REVIEWER-RECORD-SENTINEL ('+reviewerDir+')' });
 approval();
 const contract = parseContract(fs.readFileSync(fixture, 'utf8')); assert.deepEqual(validateContract(contract, { requireSignal: true }), []);
-const passRows = ['OUTCOME: O1 PASS — GET /counter read back two', 'OUTCOME: O2 PASS — README names five features', 'OUTCOME: O3 PASS — GET /health returned {"ok":true}'];
+const walked = contract.outcomes.filter(o => o.group === 'person-on-surface' || o.group === 'person-reading');
+assert.deepEqual(walked.map(o => o.id), ['O1', 'O2']); assert.equal(contract.outcomes[2].group, 'machine');
+const machineOnly = path.join(path.dirname(fixture), 'merge-gate-machine-only.md');
+const machineContract = parseContract(fs.readFileSync(machineOnly, 'utf8')); assert.deepEqual(validateContract(machineContract, { requireSignal: true }), []); assert(machineContract.outcomes.every(o => o.group === 'machine'));
+const gapped = path.join(fleet, 'gapped-contract.md');
+fs.writeFileSync(gapped, ['Signal: isa-gap: W11', 'Skills: intent@1.0.0 outcomes@1.0.0', '', 'Intent:', contract.intent, '', 'Outcomes:',
+  ...[contract.outcomes[2], ...walked].flatMap((o, i) => [`- O${i+1} ${o.claim}`, `  consumer: ${o.group} — ${o.who}`, `  surface: ${o.surface}`, `  check: ${o.checkKind} — ${o.checkHow}`]), ''].join('\n'));
+assert.deepEqual(validateContract(parseContract(fs.readFileSync(gapped, 'utf8')), { requireSignal: true }), []);
+const passRows = ['OUTCOME: O1 PASS — GET /counter read back two', 'OUTCOME: O2 PASS — README names five features'];
 const done = [...passRows, 'VERDICT: WALKED-DONE'].join('\n') + '\n';
 const common = ['--work', 'fixture-work', '--branch', branch, '--author', author, '--repo', product];
 function run(name: string, reply: string, args = common, contractFile = fixture, extraEnv: Record<string, string> = {}) {
@@ -63,25 +71,47 @@ leg('work mixed claim or surface is usage', () => { refused(run('mixed-claim', d
 let good: any;
 leg('work prompt contains only Intent Outcomes and named surfaces', () => {
   good = run('all-pass', done); assert.equal(good.status, 0, good.stderr); assert.equal(good.invoked, 1);
-  assert(good.prompt.includes(contract.intent)); for (const o of contract.outcomes) { assert(good.prompt.includes(`- ${o.id} ${o.claim}`)); assert(good.prompt.includes(`  surface: ${o.surface}`)); }
+  assert(good.prompt.includes(contract.intent)); for (const o of walked) { assert(good.prompt.includes(`- ${o.id} ${o.claim}`)); assert(good.prompt.includes(`  surface: ${o.surface}`)); }
   assert(!/WORKER-REPORT-SENTINEL|^Trace:|^Signal:|^Integration:|^Skills:|bd show|contracts\/REVIEWER|wheelhouse\/ISA|seats\/logs|AUTHOR-SEAT-SENTINEL|BRANCH-NAME-SENTINEL/m.test(good.prompt));
   assert(good.prompt.includes('verify-five-features/SKILL.md')); assert(good.prompt.includes('# Counter')); assert(good.prompt.includes('## How to get to it'));
 });
+leg('work prompt omits machine outcomes', () => {
+  assert(good?.prompt, 'SETUP verifier must have captured a prompt');
+  for (const o of walked) { assert(good.prompt.includes(`- ${o.id} ${o.claim}`)); assert(good.prompt.includes(`  surface: ${o.surface}`)); }
+  const machine = contract.outcomes[2];
+  assert(!good.prompt.includes('- O3 '), 'machine outcome id entered prompt');
+  assert(!good.prompt.includes(machine.claim), 'machine claim entered prompt');
+  assert(!good.prompt.includes(machine.surface), 'machine surface entered prompt');
+  assert(!good.prompt.includes('Feature entry for O3:'), 'machine manual entry entered prompt');
+});
 leg('work cwd pinned and verifier brief appended', () => { assert(good); assert.equal(good.snapshot.status, 0); assert.equal(good.snapshot.stderr, ''); assert.equal(good.snapshot.head.trim(), pin); assert.notEqual(good.snapshot.cwd, product); assert.equal(path.basename(good.snapshot.cwd), 'product'); assert(good.argv.includes('--append-system-prompt')); assert(good.argv.some((arg: string) => arg.endsWith('/contracts/VERIFIER.md'))); assert(!fs.existsSync(good.snapshot.cwd)); });
-leg('work three PASS rows recorded', () => { assert.equal(good.metadata.mode, 'work'); assert.equal(good.metadata.tip, pin); assert.equal(good.metadata.branch, branch); assert.equal(good.metadata.outcomes.length, 3); assert.deepEqual(good.metadata.outcomes.map((x: any) => x.result), ['PASS', 'PASS', 'PASS']); assert(good.metadata.outcomes.every((x: any) => x.detail)); });
-leg('work O2 FAIL recorded', () => { const r = run('fail', [passRows[0], 'OUTCOME: O2 FAIL — README omitted Echo', passRows[2], 'VERDICT: WALKED-NOT-DONE — O2: README omitted Echo'].join('\n')); assert.equal(r.status, 2); assert.equal(r.metadata.outcomes[1].result, 'FAIL'); assert.equal(r.metadata.verdict, 'WALKED-NOT-DONE'); });
-leg('work missing O2 refused', () => refused(run('missing', [passRows[0], passRows[2], 'VERDICT: WALKED-DONE'].join('\n')), 4, /missing OUTCOME row O2/));
+leg('work rows cover walked outcomes only', () => { assert.equal(good.status, 0, 'reply covering exactly the person-facing outcomes must be accepted: '+good.stderr); assert.equal(good.metadata.mode, 'work'); assert.equal(good.metadata.tip, pin); assert.equal(good.metadata.branch, branch); assert.deepEqual(good.metadata.outcomes.map((x: any) => x.id), ['O1', 'O2']); assert.deepEqual(good.metadata.outcomes.map((x: any) => x.result), ['PASS', 'PASS']); assert(good.metadata.outcomes.every((x: any) => x.detail)); });
+leg('work person-only record passes merge gate', () => {
+  assert.equal(good.status, 0, 'producer must accept person-only rows: '+good.stderr);
+  const file = path.join(fleet, 'out-work-all-pass/walk.json');
+  const x = completedCommand('bun', ['seats/merge-gate.ts', 'fixture-work', branch, '--repo', product, '--walk', file], { cwd: fleet, env: { ...process.env, WHEELHOUSE_SKIP_BD: '1', WHEELHOUSE_CONTRACT_FIXTURE: fixture } });
+  const receipt = JSON.parse(fs.readFileSync(path.join(fleet, 'seats/verdicts/fixture-work.merge-gate.json'), 'utf8'));
+  save('actual-walk-to-gate', { ...x, receipt });
+  assert.equal(x.error, undefined); assert.equal(x.signal, null); assert.equal(x.status, 0, x.stderr+x.stdout); assert.match(x.stdout, /MERGE-GATE: PASS/);
+  assert.deepEqual(receipt.outcomes.map((o: any) => [o.id, o.result]), [['O1','PASS'], ['O2','PASS'], ['O3','SKIPPED']]);
+});
+leg('work machine outcome row refused', () => refused(run('machine-row', [...passRows, 'OUTCOME: O3 UNREACHED — sandbox', 'VERDICT: COULD-NOT-WALK — O3: sandbox'].join('\n')), 4, /OUTCOME row O3/));
+leg('work machine-only contract refused before spawn', () => { const r = run('machine-only', 'VERDICT: WALKED-DONE\n', common, machineOnly); refused(r, 5, /no outcome needs a walk/, true); assert.match(r.stderr, /bun seats\/merge-gate\.ts/); assert.equal(r.scratchAdds, 0, 'machine-only work must not allocate a checkout'); });
+leg('work original ids survive omitted machine outcome', () => { const r = run('gapped', ['OUTCOME: O2 PASS — counter read-back', 'OUTCOME: O3 PASS — README read', 'VERDICT: WALKED-DONE'].join('\n'), common, gapped); assert.equal(r.status, 0, r.stderr); assert.deepEqual(r.metadata.outcomes.map((o: any) => o.id), ['O2', 'O3']); assert(!r.prompt.includes('- O1 ')); });
+leg('work timeout records only walked outcomes', () => { const r = run('timeout-person-only', done, common, fixture, { WHEELHOUSE_WALK_TIMEOUT_MS: '500', STUB_SLEEP_MS: '1200' }); assert.equal(r.invoked, 1, 'SETUP stub reached before policy expiry'); assert.equal(r.status, 3, r.stderr); assert.deepEqual(r.metadata.outcomes.map((o: any) => [o.id, o.result]), [['O1','UNREACHED'], ['O2','UNREACHED']]); });
+leg('work O2 FAIL recorded', () => { const r = run('fail', [passRows[0], 'OUTCOME: O2 FAIL — README omitted Echo', 'VERDICT: WALKED-NOT-DONE — O2: README omitted Echo'].join('\n')); assert.equal(r.status, 2); assert.equal(r.metadata.outcomes[1].result, 'FAIL'); assert.equal(r.metadata.verdict, 'WALKED-NOT-DONE'); });
+leg('work missing O2 refused', () => refused(run('missing', [passRows[0], 'VERDICT: WALKED-DONE'].join('\n')), 4, /missing OUTCOME row O2/));
 leg('work extra O4 refused', () => refused(run('extra', [...passRows, 'OUTCOME: O4 PASS — extra', 'VERDICT: WALKED-DONE'].join('\n')), 4, /extra OUTCOME row O4/));
 leg('work duplicate O1 refused', () => { refused(run('duplicate', [passRows[0], 'OUTCOME: O1 PASS — different evidence', ...passRows.slice(1), 'VERDICT: WALKED-DONE'].join('\n')), 4, /duplicate OUTCOME row O1/); refused(run('identical-duplicate', [passRows[0], ...passRows, 'VERDICT: WALKED-DONE'].join('\n')), 4, /duplicate OUTCOME row O1/); });
-leg('work FAIL under DONE refused', () => refused(run('inconsistent', [passRows[0], 'OUTCOME: O2 FAIL — README wrong', passRows[2], 'VERDICT: WALKED-DONE'].join('\n')), 4, /inconsistent VERDICT/));
-leg('work UNREACHED without FAIL recorded', () => { const r = run('unreached', [...passRows.slice(0, 2), 'OUTCOME: O3 UNREACHED — credential missing', 'VERDICT: COULD-NOT-WALK — O3: credential missing'].join('\n')); assert.equal(r.status, 3); assert.equal(r.metadata.outcomes[2].result, 'UNREACHED'); });
+leg('work FAIL under DONE refused', () => refused(run('inconsistent', [passRows[0], 'OUTCOME: O2 FAIL — README wrong', 'VERDICT: WALKED-DONE'].join('\n')), 4, /inconsistent VERDICT/));
+leg('work UNREACHED without FAIL recorded', () => { const r = run('unreached', [passRows[0], 'OUTCOME: O2 UNREACHED — README inaccessible', 'VERDICT: COULD-NOT-WALK — O2: README inaccessible'].join('\n')); assert.equal(r.status, 3); assert.equal(r.metadata.outcomes[1].result, 'UNREACHED'); });
 leg('work evidence detail required', () => refused(run('no-detail', ['OUTCOME: O1 PASS', ...passRows.slice(1), 'VERDICT: WALKED-DONE'].join('\n')), 4, /O1 requires evidence detail/));
-leg('work id order enforced', () => refused(run('order', [passRows[1], passRows[0], passRows[2], 'VERDICT: WALKED-DONE'].join('\n')), 4, /id order/));
-leg('work first failing id required', () => refused(run('wrong-first-id', ['OUTCOME: O1 FAIL — first', 'OUTCOME: O2 FAIL — second', passRows[2], 'VERDICT: WALKED-NOT-DONE — O2: second'].join('\n')), 4, /inconsistent VERDICT.*O1:/));
-leg('work FAIL takes precedence over UNREACHED', () => { const r = run('fail-precedence', ['OUTCOME: O1 UNREACHED — blocked', 'OUTCOME: O2 FAIL — bad page', passRows[2], 'VERDICT: WALKED-NOT-DONE — O2: bad page'].join('\n')); assert.equal(r.status, 2); });
+leg('work id order enforced', () => refused(run('order', [passRows[1], passRows[0], 'VERDICT: WALKED-DONE'].join('\n')), 4, /id order/));
+leg('work first failing id required', () => refused(run('wrong-first-id', ['OUTCOME: O1 FAIL — first', 'OUTCOME: O2 FAIL — second', 'VERDICT: WALKED-NOT-DONE — O2: second'].join('\n')), 4, /inconsistent VERDICT.*O1:/));
+leg('work FAIL takes precedence over UNREACHED', () => { const r = run('fail-precedence', ['OUTCOME: O1 UNREACHED — blocked', 'OUTCOME: O2 FAIL — bad page', 'VERDICT: WALKED-NOT-DONE — O2: bad page'].join('\n')); assert.equal(r.status, 2); });
 leg('work full rows and paths reach inbox', () => {
   const long = 'read evidence '.repeat(180), r = run('long-inbox', [`OUTCOME: O1 PASS — ${long}END-EVIDENCE`, ...passRows.slice(1), 'VERDICT: WALKED-DONE'].join('\n')); assert.equal(r.status, 0);
-  const rows = fs.readFileSync(path.join(fleet, 'seats/inbox.jsonl'), 'utf8').trim().split('\n').map(s => JSON.parse(s)); const row = rows.at(-1); assert(row.detail.includes('END-EVIDENCE')); assert(row.detail.includes('OUTCOME: O3 PASS')); assert(row.detail.includes('metadata: ')); save('inbox', row);
+  const rows = fs.readFileSync(path.join(fleet, 'seats/inbox.jsonl'), 'utf8').trim().split('\n').map(s => JSON.parse(s)); const row = rows.at(-1); assert(row.detail.includes('END-EVIDENCE')); assert(row.detail.includes('OUTCOME: O2 PASS')); assert(!row.detail.includes('OUTCOME: O3 ')); assert(row.detail.includes('metadata: ')); save('inbox', row);
 });
 leg('work structured rows on all harnesses', () => {
   for (const harness of ['pi', 'claude-code', 'codex']) {
@@ -90,7 +120,7 @@ leg('work structured rows on all harnesses', () => {
     fs.writeFileSync(path.join(agent, '.claude.json'), '{"oauthAccount":{"accountUuid":"fixture"}}');
     const stream = path.join(fleet, 'stream-' + harness + '.jsonl'); const event = harness === 'pi' ? { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: done }] } } : harness === 'claude-code' ? { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: done }] } } : { type: 'item.completed', item: { type: 'agent_message', text: done } };
     fs.writeFileSync(stream, JSON.stringify({ type: 'tool_result', content: 'OUTCOME: O99 FAIL — stale tool text' })+'\n'+JSON.stringify(event)+'\n');
-    const r = run('stream-' + harness, '', common, fixture, { STUB_STREAM_FILE: stream, OPENAI_CODEX_API_KEY: 'fixture-key' }); assert.equal(r.status, 0, r.stderr); assert.equal(r.metadata.outcomes.length, 3);
+    const r = run('stream-' + harness, '', common, fixture, { STUB_STREAM_FILE: stream, OPENAI_CODEX_API_KEY: 'fixture-key' }); assert.equal(r.status, 0, r.stderr); assert.equal(r.metadata.outcomes.length, 2);
   }
 });
 // Restore the original verifier after the cross-harness fixture above.

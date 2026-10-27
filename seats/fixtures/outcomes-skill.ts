@@ -25,14 +25,16 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv, stem: stri
   return r;
 }
 const env = { ...process.env, WHEELHOUSE_SKIP_BD: "1", WHEELHOUSE_CONTRACT_ROOT: work, WHEELHOUSE_INTAKE_FIXTURE: path.join(work, "posted-fixture.jsonl") };
+fs.mkdirSync(path.join(work, "seats"), { recursive: true });
+fs.writeFileSync(path.join(work, "seats/seats.json"), JSON.stringify({ seats: { "fixture-producer": { role: "producer", external: true, runtime: "commander-subagent" } } }));
 const posted: string[] = [];
-function check(file: string, stem: string) { return run("bun", [contract, "check", "--file", file], env, stem); }
+function check(file: string, stem: string, beadId: string) { return run("bun", [contract, "check", "--file", file, "--bead", beadId], env, stem); }
 
 test("layout and frontmatter", () => {
   const text = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
   const front = text.match(/^---\n([\s\S]+?)\n---\n/); assert(front, "YAML frontmatter missing");
   const fields = Bun.YAML.parse(front[1]) as Record<string, unknown>;
-  assert.equal(fields.name, "outcomes"); assert.equal(fields.version, "1.0.0");
+  assert.equal(fields.name, "outcomes"); assert.equal(fields.version, "1.2.0");
   assert.equal(typeof fields.description, "string");
   for (const trigger of ["write the outcomes", "definition of done", "what does done look like", "acceptance criteria"]) assert(String(fields.description).includes(trigger), "missing trigger " + trigger);
   const link = path.join(root, ".claude/skills/outcomes"); assert(fs.lstatSync(link).isSymbolicLink(), "compatibility path is not a symlink");
@@ -41,12 +43,38 @@ test("layout and frontmatter", () => {
   const indexed = run("git", ["-C", root, "ls-files", "--stage", "--", ".claude/skills/outcomes"], process.env, "indexed-link");
   assert.equal(indexed.status, 0, indexed.stderr); assert.match(indexed.stdout, /^120000 [0-9a-f]+ 0\t\.claude\/skills\/outcomes\n$/);
 });
+test("sig authoring disposition precedes bead-naming checks", () => {
+  const text = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
+  const start = text.indexOf("### Signal-backed drafts (`sig-`)");
+  const end = text.indexOf("### Other signal kinds", start);
+  assert(start >= 0 && end > start, "sig- authoring section missing");
+  const sequence = text.slice(start, end), dispose = sequence.indexOf("bun seats/intake.ts dispose <sig-id> produced --work <bead-id>");
+  const checks = [...sequence.matchAll(/bun seats\/contract\.ts check --file <contract>[^`\n]*/g)];
+  assert(dispose >= 0 && sequence.includes("BEADS_ACTOR=<producer-seat>"), "producer disposition/actor missing");
+  assert(checks.length > 0, "sig- format check missing");
+  for (const check of checks) {
+    assert(check.index! > dispose, "sig- check precedes produced disposition");
+    assert(check[0].includes("--bead <bead-id>"), "sig- check omits explicit bead identity");
+  }
+  assert(sequence.includes("reuse it without disposing again") && sequence.includes("do not rewrite a"), "completed history rule missing");
+  assert(text.slice(end).includes("For `isa-gap:` and `install-procedure` drafts only"), "non-sig boundary missing");
+});
+test("version migration preserves historical stamps and requires revalidation", () => {
+  const text = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
+  assert(text.includes("[the stamp migration](migrations/1.2.0.md)"), "version bump lacks migration pointer");
+  const file = path.join(skillDir, "migrations/1.2.0.md");
+  assert(fs.statSync(file).isFile(), "migration note missing");
+  const note = fs.readFileSync(file, "utf8");
+  for (const fact of ["outcomes@1.1.0", "outcomes@1.2.0", "Historical contracts keep", "actually revalidates", "Do not bulk-restamp", "produced --work <bead-id>", "check --file <contract> --bead <bead-id>"])
+    assert(note.includes(fact), "migration omits " + fact);
+});
 test("neutral skill directory", () => {
+  const forbidden = new RegExp(["life", "os"].join("") + /|pai\b|\.cursor|cursor|claude|codex|\bpi\b|chatgpt|openai|anthropic|gemini/.source, "i");
   function walk(dir: string) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const file = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(file);
-      else { assert(entry.isFile(), "non-regular skill entry"); assert(!/lifeos|pai\b|\.cursor|cursor|claude|codex|\bpi\b|chatgpt|openai|anthropic|gemini/i.test(fs.readFileSync(file, "utf8")), "non-neutral text in " + file); }
+      else { assert(entry.isFile(), "non-regular skill entry"); assert(!forbidden.test(fs.readFileSync(file, "utf8")), "non-neutral text in " + file); }
     }
   }
   walk(skillDir);
@@ -58,6 +86,8 @@ for (const name of names) test("example " + name, () => {
   assert(source.includes("## Intent\nIntent:\n"), "source intent absent");
   const intent = source.split("## Intent\nIntent:\n")[1].trim();
   assert.equal(parsed.intent, intent, "intent differs from shipped source example");
+  // Historical examples keep the versions that wrote them; map-* examples
+  // exercise the new rule/version separately, not by rewriting old provenance.
   assert.equal(parsed.skills, "intent@1.0.0 outcomes@1.0.0"); assert.match(parsed.signal, /^sig-[a-z0-9]+$/);
   const outcomeCount = (text.match(/^- O[0-9]+ /gm) ?? []).length;
   const consumerCount = (text.match(/^  consumer: (person-on-surface|person-reading|machine) — /gm) ?? []).length;
@@ -70,14 +100,16 @@ for (const name of names) test("example " + name, () => {
   const post = run("bun", [path.join(path.dirname(contract), "intake.ts"), "post", "--kind", name === "goal" ? "goal" : name === "isa-gap" ? "isa-change" : "report", "--source", "outcomes-example", "--title", "Invented " + name, "--text", "Invented Basket Ledger example"], nativeEnv, name + "-post");
   assert.equal(post.status, 0, post.stderr); assert.equal(post.stderr, "");
   assert.match(post.stdout, /^sig-[a-z0-9]{4}\n$/);
-  // Derive the fixture from the captured owner CLI's posted JSONL row.
+  const disposed = run("bun", [path.join(path.dirname(contract), "intake.ts"), "dispose", post.stdout.trim(), "produced", "--work", name], { ...nativeEnv, BEADS_ACTOR: "fixture-producer" }, name + "-dispose");
+  assert.equal(disposed.status, 0, disposed.stderr);
+  // Derive the fixture from the captured owner CLI's posted + disposed JSONL rows.
   // Normalize only the random id into a fixture file; never rewrite intake.jsonl.
   const raw = fs.readFileSync(path.join(nativeRoot, "seats/intake.jsonl"), "utf8");
   fs.writeFileSync(path.join(work, name + "-native.jsonl"), raw);
-  const row = JSON.parse(raw); assert.equal(row.type, "posted"); assert.equal(row.id, post.stdout.trim());
+  const events = raw.trim().split("\n").map(line => JSON.parse(line)), row = events[0]; assert.equal(events.length, 2); assert.equal(row.type, "posted"); assert.equal(row.id, post.stdout.trim()); assert.equal(events[1].by, "fixture-producer"); assert.equal(events[1].work, name);
   posted.push(raw.replaceAll(row.id, parsed.signal).trimEnd());
   fs.writeFileSync(env.WHEELHOUSE_INTAKE_FIXTURE, posted.join("\n") + "\n");
-  const result = check(file, name + "-check");
+  const result = check(file, name + "-check", name);
   assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout, ""); assert.equal(result.stderr, "");
   console.log("OUTCOMES_EXAMPLE_CHECK " + JSON.stringify({ name, code: result.status, stdout: result.stdout, stderr: result.stderr }));
 });
@@ -86,7 +118,7 @@ test("user-report group/check mismatch refused", () => {
   assert.equal((text.match(/^  check: walk — /gm) ?? []).length, 1, "must mutate exactly the person-on-surface check");
   const file = path.join(work, "user-report-mismatch.md");
   fs.writeFileSync(file, text.replace("  check: walk — ", "  check: run — "));
-  const result = check(file, "mismatch-check");
+  const result = check(file, "mismatch-check", "user-report");
   assert.equal(result.status, 2, result.stderr); assert.equal(result.stdout, "");
   assert(result.stderr.includes("O1: check: person-on-surface requires walk, got run"), result.stderr);
   console.log("OUTCOMES_MISMATCH_CHECK " + JSON.stringify({ code: result.status, stdout: result.stdout, stderr: result.stderr }));

@@ -41,6 +41,9 @@ export function loadPool(root: string): Pool {
   const seenDirs = new Map<string, string>();
   const commanderDirs = new Set(commandDirs());
   const fixed = readFixedRoster(root);
+  const replacedFixedRoles = new Set<string>();
+  if (raw.roles.workers !== undefined) replacedFixedRoles.add(roleRosterName("workers"));
+  if (raw.roles.reviewers !== undefined) replacedFixedRoles.add(roleRosterName("reviewers"));
   for (const [name, e] of Object.entries<any>(raw.entries)) {
     if (!/^[a-z0-9-]+$/.test(name)) stop(`entry name ${name} is invalid`, "use lowercase letters, digits and hyphens only");
     checkKeys(e, ["harness", "provider", "models", "account", "allowedTools", "disallowedTools", "skills"], `entries.${name}`);
@@ -62,7 +65,7 @@ export function loadPool(root: string): Pool {
     for (const [seat, s] of Object.entries(fixed)) if (!s.external && s.account?.dir) {
       let fixedDir: string | null = null;
       try { fixedDir = real(expandTilde(s.account.dir)); } catch {}
-      if (fixedDir === rdir) stop(`entry ${name} shares a login with roster seat ${seat}`, "move one account.dir so every seat is distinct");
+      if (fixedDir === rdir && !replacedFixedRoles.has(s.role)) stop(`entry ${name} shares a login with roster seat ${seat}`, "move one account.dir so every seat is distinct");
     }
     entries[name] = { harness: e.harness, provider: e.provider, models: e.models, account: e.account, allowedTools: e.allowedTools, disallowedTools: e.disallowedTools, skills: e.skills };
   }

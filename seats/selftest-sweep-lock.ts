@@ -142,7 +142,8 @@ function diagnose(error: any, parent?: number, name?: string) {
   if (parent !== undefined && name) { capture(parent, name, 1); capture(parent, `${name}.queue`, 1); capture(parent, `${name}.host`, 1); }
   console.error("SELFTEST_LOCK_REFUSAL " + JSON.stringify({ operation: process.argv[2], lock: process.argv[3], reason: error.message,
     host: { hostname: HOST, hostId, identitySource, identityFailures, knownHostnames: [...hostNames], platform: process.platform },
-    ...(error.ancestryObservations ? { ancestryObservations: error.ancestryObservations } : {}), observed, snapshots }));
+    ...(error.ancestryObservations ? { ancestryObservations: error.ancestryObservations } : {}),
+    ...(error.ownership ? { ownership: error.ownership } : {}), observed, snapshots }));
 }
 // Async supervisor failures may occur outside a transition's pinned parent.
 // Reopen only for a diagnostic snapshot; never repair state from this path.
@@ -235,7 +236,7 @@ function readFile(parent: number, name: string): [string, string] {
     return [new TextDecoder("utf-8", { fatal: true }).decode(data), id(fd)];
   } finally { fs.closeSync(fd); }
 }
-type Marker = { pid: number; started: string; token: string | null };
+type Marker = { pid: number; started: string; token: string | null; hostname?: string };
 type Snapshot = { identity: string; marker: Marker; members: Record<string, string> | null };
 function inspect(parent: number, name: string): Snapshot {
   const fd = openAt(parent, name);
@@ -383,10 +384,59 @@ function cachedHostNames(fd: number, expectedId: string, members: Record<string,
   }
   return names;
 }
+// A successful admission may carry its hardware proof through a temporary
+// provider failure. This is continuity for one live token, not a host-ID override
+// or permission to acquire another endpoint. Native ancestry is still required.
+const HELD_IDENTITY = "WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY";
+type HeldIdentity = { lock: string; hostId: string; identity: string; pid: number; token: string; hostname: string; parentPid: number };
+function heldIdentity(parent: number, name: string): HeldIdentity | null {
+  const raw = process.env[HELD_IDENTITY];
+  if (!raw || raw.length > 4096) return null;
+  let pin: HeldIdentity;
+  try { pin = JSON.parse(raw); } catch { return null; }
+  if (!pin || pin.lock !== path.join(descriptorPaths.get(parent)!, name) || !/^[0-9a-f]{64}$/.test(pin.hostId) ||
+      !/^\d+:\d+$/.test(pin.identity) || !validPid(pin.pid) || !validPid(pin.parentPid) || !/^[0-9a-f]{32}$/.test(pin.token) || typeof pin.hostname !== "string") return null;
+  let fd = -1;
+  try {
+    fd = openAt(parent, name, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+    const op = process.argv[2];
+    const sibling = ["refresh", "release"].includes(op) && native.symbols.getppid() === pin.parentPid && pin.parentPid > 1;
+    // The supervisor releases only after joining its original child. That
+    // exact token may be retired by the original parent after the PID exits;
+    // a dead owner never grants renewal or inherited admission.
+    if (id(fd) !== pin.identity || (!alive(pin.pid) && !(op === "release" && sibling))) return null;
+    exactFiles(fd);
+    const m = JSON.parse(readFile(fd, MARKER)[0]);
+    if (m.pid !== pin.pid || m.token !== pin.token || m.hostname !== pin.hostname) return null;
+    // Transition helpers are siblings of the gated payload. Only that original
+    // native parent may renew/release for it; nested suites must descend from
+    // the actual lock owner, not merely from a caller-exported environment.
+    if (!sibling && !snapshotAncestorOwns(pin.pid)) return null;
+    return pin;
+  } catch (e: any) { if (e.errno === 2) return null; throw e; }
+  finally { if (fd >= 0) fs.closeSync(fd); }
+}
+function admissionOutput(parent: number, name: string, snapshot: Snapshot) {
+  console.log(snapshot.identity);
+  if (process.env.WHEELHOUSE_SELFTEST_SWEEP_CAPTURE_IDENTITY !== "1" || identitySource === "hostname" || !snapshot.marker.token) return;
+  const pin: HeldIdentity = { lock: path.join(descriptorPaths.get(parent)!, name), hostId: hostId!, identity: snapshot.identity,
+    pid: snapshot.marker.pid, token: snapshot.marker.token, hostname: snapshot.marker.hostname!, parentPid: native.symbols.getppid() as number };
+  console.log(JSON.stringify(pin));
+}
 function hostCache(parent: number, lockName: string): Set<string> {
-  // A weaker fallback cannot authenticate hardware-bound aliases. Do not
-  // overwrite or reject a previous stable cache just because lookup failed.
-  if (identitySource === "hostname") return new Set([HOST]);
+  // A new caller with no stable source retains current-hostname-only policy.
+  // A held run can reuse and renew its previously authenticated cache, but
+  // cannot add the newly reported name while the provider is unavailable.
+  if (identitySource === "hostname") {
+    const pin = heldIdentity(parent, lockName);
+    if (!pin) return new Set([HOST]);
+    const fd = openAt(parent, `${lockName}.host`, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+    try {
+      const members: Record<string, string> = {}, names = cachedHostNames(fd, pin.hostId, members);
+      renewFiles(fd, members);
+      return names;
+    } finally { fs.closeSync(fd); }
+  }
   // Sibling, NOT a fourth lock member or queue entry. Older helpers inspect
   // only lockName and lockName.queue and leave this cache completely alone.
   const name = `${lockName}.host`, digest = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -582,7 +632,17 @@ function main(): number {
     }
     if (op === "refresh") {
       const snapshot = inspect(parent, name);
-      if (!owned || snapshot.identity !== owned || snapshot.marker.pid !== pid || snapshot.marker.token !== token || !alive(pid)) throw new Refused("cannot refresh a different lock owner");
+      const payloadAlive = alive(pid);
+      const mismatches: string[] = [];
+      if (!owned) mismatches.push("missing caller identity");
+      else if (snapshot.identity !== owned) mismatches.push("identity");
+      if (snapshot.marker.pid !== pid) mismatches.push("pid");
+      if (snapshot.marker.token !== token) mismatches.push("token");
+      if (!payloadAlive) mismatches.push("payload liveness");
+      if (mismatches.length) throw Object.assign(new Refused(`cannot refresh a different lock owner (${mismatches.join(", ")})`), {
+        ownership: { mismatches, caller: { pid, token, identity: owned || null, payloadAlive },
+          lock: { pid: snapshot.marker.pid, token: snapshot.marker.token, identity: snapshot.identity } },
+      });
       const queue = queueFd(parent, `${name}.queue`, false);
       if (queue === null) throw new Refused("cannot refresh without FIFO ownership");
       try {
@@ -606,7 +666,7 @@ function main(): number {
       renewQueue(queue, current);
       if (snapshot) renewLock(parent, name, snapshot);
       if (snapshot?.marker.pid === pid && snapshot.marker.token === token && current[0].token === token) {
-        console.log(snapshot.identity); return 0; // Idempotent admission of this owner.
+        admissionOutput(parent, name, snapshot); return 0; // Idempotent admission of this owner.
       }
       // The brake is admission-only. Never revoke a token already admitted,
       // including idempotent retries above or nested runs checked by ancestry.
@@ -620,7 +680,8 @@ function main(): number {
         console.log(`queue_position=${position} holder=${snapshot ? `pid=${snapshot.marker.pid} started=${snapshot.marker.started}` : "none"} head_pid=${current[0].pid}${paused ? ` paused_by=${pauseFile}` : ""}`);
         return 75; // Validated queue wait; helper/runtime errors remain fatal.
       }
-      console.log(publish(parent, name, pid, token));
+      publish(parent, name, pid, token);
+      admissionOutput(parent, name, inspect(parent, name));
       return 0;
     } finally { fs.closeSync(queue); }
   } catch (e) { diagnose(e, parent, name); throw e; }
@@ -727,7 +788,7 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
   }
   let code = 2, renewal: ReturnType<typeof setInterval> | undefined, renewalFailed = false;
   // fd3 gates exec, not the suite's stdin. Bash keeps this PID across exec.
-  child = spawn(command[0], ["-c", 'IFS= read -r admission <&3 || exit 2; [ "$admission" = admitted ] || exit 2; exec 3<&-; exec "$@"', "selftest-admission-gate", ...command], { stdio: ["inherit", "inherit", "inherit", "pipe"], detached: true });
+  child = spawn(command[0], ["-c", 'IFS= read -r admission <&3 || exit 2; [ "$admission" = admitted ] || exit 2; IFS= read -r WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY <&3 || exit 2; export WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY; exec 3<&-; exec "$@"', "selftest-admission-gate", ...command], { stdio: ["inherit", "inherit", "inherit", "pipe"], detached: true });
   const gate = child.stdio[3] as import("node:stream").Writable;
   let closed = false, spawnError: Error | undefined;
   const done = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
@@ -735,7 +796,10 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
     child!.once("close", (code, signal) => { closed = true; resolve({ code, signal }); });
   });
   gate?.on("error", () => {}); // Child exit/EPIPE is checked via native close.
-  const transition = (op: string) => spawnSync("bun", [import.meta.path, op, lock, String(child!.pid), token, owned], { encoding: "utf8", detached: true });
+  let held = "";
+  const transition = (op: string) => spawnSync("bun", [import.meta.path, op, lock, String(child!.pid), token, owned], {
+    encoding: "utf8", detached: true, env: { ...process.env, [HELD_IDENTITY]: held, WHEELHOUSE_SELFTEST_SWEEP_CAPTURE_IDENTITY: op === "acquire" ? "1" : "0" },
+  });
   try {
     if (!child.pid || !gate) throw new Refused("cannot start gated suite process");
     let previous = "";
@@ -746,8 +810,9 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
       if (result.status === 0 || result.status === 75) {
         enrolled = true;
         if (result.status === 0) {
-          owned = result.stdout.trim();
-          if (!/^\d+:\d+$/.test(owned)) throw new Refused("missing suite lock identity");
+          const lines = result.stdout.trim().split("\n");
+          owned = lines[0]; held = lines[1] ?? "";
+          if (!/^\d+:\d+$/.test(owned) || lines.length > 2) throw new Refused("missing suite lock identity");
         }
       }
       // Deliver pending signals after the synchronous descriptor transition.
@@ -772,7 +837,7 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
           console.error("STOP: suite lock renewal failed");
         }
       }, 60_000);
-      gate.end("admitted\n");
+      gate.end(`admitted\n${held}\n`);
       const result = await done;
       if (spawnError) throw spawnError;
       code = renewalFailed ? 2 : result.code ?? (result.signal ? 128 + os.constants.signals[result.signal] : 2);

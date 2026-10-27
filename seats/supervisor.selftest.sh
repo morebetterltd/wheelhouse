@@ -15,6 +15,8 @@ cleanup(){ [ -n "$FIX" ] && pkill -f "$FIX" 2>/dev/null || true; selftest_remove
 selftest_install_cleanup_traps cleanup
 PROJ="$FIX/project"; mkdir -p "$PROJ/seats/logs" "$PROJ/seats/run" "$PROJ/wheelhouse"
 selftest_copy_seat_runtime "$PROJ" "$HERE"; chmod +x "$PROJ/seats/supervisor.sh" "$PROJ/seats/daemons.sh"
+# Never launch a real full sweep from the legacy daemon/clock fixtures.
+printf 'process.exit(0);\n' > "$PROJ/seats/nightly-sweep.ts"
 bun "$HERE/fixtures/supervisor-observation.ts" "$PROJ/seats/supervisor.sh" || exit 2
 for d in herald desk courier; do cat > "$PROJ/seats/$d.ts" <<'TS'
 import * as fs from "node:fs";
@@ -194,6 +196,8 @@ printf 'digest=off\n' > "$PROJ/wheelhouse/.template-source"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-02T06:00:00 WHEELHOUSE_DIGEST_HOUR=6 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
 d4="$(call_count --notify "$PROJ/seats/run/digest-calls.log")"
 if [ "$d4" = 1 ]; then pass "digest=off disables daily digest"; else fail "digest=off still ran digest count=$d4"; fi
+# No service/launch-agent is installed by the manual-check clock fixture.
+if bun "$HERE/fixtures/manual-check-supervisor.ts" "$HERE/supervisor.sh" "$FIX/manual-check-clock"; then pass "daily manual check configured hour, once and off"; else fail "manual check tick regression"; fi
 # canary: if crashLoop marker is removed, the no-fourth-restart property fails.
 CAN="$FIX/canary"; mkdir -p "$CAN/seats"; cp "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; perl -0pi -e 's/j\.crashLoop=rs\.length>=3;/j.crashLoop=false;/' "$CAN/seats/supervisor.sh"
 if cmp -s "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; then fail "canary edit did not change supervisor"; else
@@ -264,5 +268,14 @@ if [ "$(isa_count)" = 7 ]; then pass "failed ISA sync retries without advancing 
 if bun "$HERE/fixtures/supervisor-ordering.ts" "$FIX" "$HERE"; then pass "native holder/recovery ordering and both removal controls"; else fail "supervisor ordering observation/control failed"; fi
 printf 'NATIVE_ONCE_RESULTS\n'; cat "$PROJ/seats/run/fixture-once-results.jsonl"
 printf 'NATIVE_HOLDER_CLAIMS\n'; cat "$PROJ/seats/run/fixture-holder-claims"
+if bun "$HERE/fixtures/supervisor-health.ts" "$FIX" "$HERE"; then
+  pass "completed-work health, injected thresholds, real signals and removal controls"
+else
+  fail "completed-work health consumer/controls failed"
+fi
+# Nightly-only fixture and sensitive removals, isolated from legacy daemons.
+if bun "$HERE/fixtures/nightly-supervisor.ts" "$HERE" "$FIX"; then
+  pass "nightly full-tier clock, pause, busy skip and sensitive removal controls"
+else fail "nightly full-tier supervisor regression"; fi
 if [ "$FAIL" -eq 0 ]; then echo "supervisor.selftest: PASS ($PASS checks)"; exit 0; fi
 echo "supervisor.selftest: FAIL ($FAIL failure(s), $PASS pass(es))"; exit 1

@@ -19,16 +19,26 @@ const sha = (bytes: string | Buffer) => createHash('sha256').update(bytes).diges
 // This adapter preserves real tmux argv/results, then holds only the return of
 // a successfully created client server until its owning test explicitly acts.
 const wrapper = String.raw`#!/usr/bin/env node
-const fs=require('node:fs'),cp=require('node:child_process'),dir=process.env.COCKPIT_CLEANUP_OBSERVER,args=process.argv.slice(2);
+const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path'),dir=process.env.COCKPIT_CLEANUP_OBSERVER,args=process.argv.slice(2);
+// These global options precede the command in captured real tmux invocations.
+// qjgw's short relative -S endpoints must not disappear behind an -L-only spy.
+let at=0,socketName='';
+while(at<args.length){
+ if(args[at]==='-L'){socketName=args[at+1];at+=2;}
+ else if(args[at]==='-S'){socketName=path.basename(args[at+1]);at+=2;}
+ else if(args[at]==='-f')at+=2;
+ else break;
+}
+const nativeCommand=args[at];
 const out=dir+'/commands/'+process.pid+'.stdout',err=dir+'/commands/'+process.pid+'.stderr';
 const fds=[fs.openSync(out,'wx'),fs.openSync(err,'wx')];
 const r=cp.spawnSync(process.env.COCKPIT_CLEANUP_REAL_TMUX,args,{stdio:['inherit',...fds]});
 for(const fd of fds)fs.closeSync(fd);
-const data={args,code:r.status,signal:r.signal,error:r.error?String(r.error):null,stdout:fs.readFileSync(out,'utf8'),stderr:fs.readFileSync(err,'utf8')};
+const data={args,cwd:process.cwd(),socketName,nativeCommand,code:r.status,signal:r.signal,error:r.error?String(r.error):null,stdout:fs.readFileSync(out,'utf8'),stderr:fs.readFileSync(err,'utf8')};
 fs.writeFileSync(dir+'/commands/'+process.pid+'.json',JSON.stringify(data));
 process.stdout.write(data.stdout);process.stderr.write(data.stderr);
 function finish(){if(r.error||r.signal||r.status===null)process.exit(2);process.exit(r.status);}
-if(args[0]==='-L'&&args[1].endsWith('-client')&&args[2]==='new-session'&&r.status===0){
+if(/^wheelhouse-cockpit-selftest\.[0-9]+-client$/.test(socketName)&&nativeCommand==='new-session'&&r.status===0){
  const mark=dir+'/client-up.json',temp=mark+'.'+process.pid;
  fs.writeFileSync(temp,JSON.stringify({wrapperPid:process.pid,native:data}));fs.renameSync(temp,mark);
  const poll=setInterval(()=>{if(fs.existsSync(dir+'/release-client')){clearInterval(poll);if(process.env.COCKPIT_CLEANUP_ACTION==='fail'){process.stderr.write('fixture: client command failed AFTER real server creation\n');process.exit(23);}finish();}},25);
@@ -36,12 +46,14 @@ if(args[0]==='-L'&&args[1].endsWith('-client')&&args[2]==='new-session'&&r.statu
 `;
 function command(args: string[], cwd = root) {
   const r = completedCommand(args[0], args.slice(1), { cwd });
-  const row = { args, code: r.status, signal: r.signal, error: r.error ? String(r.error) : null, stdout: r.stdout, stderr: r.stderr };
+  const row = { args, cwd, code: r.status, signal: r.signal, error: r.error ? String(r.error) : null, stdout: r.stdout, stderr: r.stderr };
   fs.appendFileSync(root + '/observer-commands.jsonl', JSON.stringify(row) + '\n');
   return row;
 }
-function tmux(sock: string, args: string[]) { return command([realTmux!, '-L', sock, ...args]); }
-function endpoint(sock: string) { return path.join(process.env.TMUX_TMPDIR || '/tmp', 'tmux-' + process.getuid!(), sock); }
+const socketRoots = new Map<string, string>();
+function socketRoot(sock: string) { const dir=socketRoots.get(sock); assert(dir, 'owned socket address registered before inspection'); return dir; }
+function tmux(sock: string, args: string[]) { return command([realTmux!, '-f', '/dev/null', '-S', './' + sock, ...args], socketRoot(sock)); }
+function endpoint(sock: string) { return path.join(socketRoot(sock), sock); }
 function socketState(file: string) {
   try { const s = fs.lstatSync(file); return { exists: true, socket: s.isSocket(), symlink: s.isSymbolicLink(), dev: s.dev, ino: s.ino, uid: s.uid }; }
   catch (e: any) { if (e.code === 'ENOENT') return { exists: false }; throw e; }
@@ -78,6 +90,8 @@ function actor(dir: string, action: string, foreign = '', defer = false) {
   // real suite can create anything. Never adopt another run's stale endpoint.
   const child = spawn('/bin/bash', ['-c', 'IFS= read -r release || exit 2; exec /bin/bash "$1"', 'cockpit-cleanup-owner', program], { cwd: dir, env, stdio: ['pipe', stdout, stderr] });
   assert(child.pid && child.pid > 1); const sock = 'wheelhouse-cockpit-selftest.' + child.pid;
+  const socketDir = path.join(dir, 'tmp', 'wheelhouse-cockpit-sockets.' + child.pid);
+  socketRoots.set(sock, socketDir); socketRoots.set(sock + '-client', socketDir);
   if (socketState(endpoint(sock)).exists || socketState(endpoint(sock + '-client')).exists) {
     child.once('close', () => { fs.closeSync(stdout); fs.closeSync(stderr); });
     child.stdin!.end(); // allocation refused before exec; do not adopt/delete it
@@ -87,7 +101,7 @@ function actor(dir: string, action: string, foreign = '', defer = false) {
   if (!defer) authorize();
   let closed: any = null;
   const exited = new Promise<any>((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => { closed = { code, signal }; resolve(closed); }); });
-  return { dir, child, sock, executedSha256, exited, authorize, get closed() { return closed; }, release() { fs.writeFileSync(dir + '/release-client', 'owner releases real client return\n'); }, closeDescriptors() { fs.closeSync(stdout); fs.closeSync(stderr); } };
+  return { dir, child, sock, socketDir, executedSha256, exited, authorize, get closed() { return closed; }, release() { fs.writeFileSync(dir + '/release-client', 'owner releases real client return\n'); }, closeDescriptors() { fs.closeSync(stdout); fs.closeSync(stderr); } };
 }
 type Actor = ReturnType<typeof actor>;
 async function until(a: Actor, label: string, check: () => any): Promise<any> {
@@ -103,7 +117,9 @@ async function until(a: Actor, label: string, check: () => any): Promise<any> {
 async function ready(a: Actor) {
   await until(a, 'real client server creation', () => fs.existsSync(a.dir + '/client-up.json'));
   const marker = JSON.parse(fs.readFileSync(a.dir + '/client-up.json', 'utf8'));
-  assert.equal(marker.native.code, 0); assert.equal(marker.native.args[1], a.sock + '-client');
+  assert.equal(marker.native.code, 0); assert.equal(marker.native.socketName, a.sock + '-client');
+  assert.equal(marker.native.nativeCommand, 'new-session');
+  assert.equal(fs.realpathSync(marker.native.cwd), fs.realpathSync(a.socketDir), 'measurement must address this actor, not another private server');
   const endpoints = [snapshot(a.sock), snapshot(a.sock + '-client')];
   await until(a, 'actual native client attach', () => {
     const r = tmux(a.sock, ['list-clients', '-F', '#{client_pid}']); assert.equal(r.code, 0); return r.stdout.trim() !== '';
@@ -155,7 +171,8 @@ for (const mode of modes.filter(x => selected.includes(x) && x !== 'preexisting'
       if (!owned.some(x => x.sock === sock)) { const state = socketState(endpoint(sock)); if (state.exists) { assert(state.socket && !state.symlink); const r = tmux(sock, ['display-message', '-p', '#{pid}']); owned.push({ sock, file: endpoint(sock), state, pid: r.code === 0 && /^[1-9][0-9]*\n$/.test(r.stdout) ? Number(r.stdout.trim()) : 0 }); } }
     }
     for (const x of owned) {
-      const kill = tmux(x.sock, ['kill-server']);
+      const alreadyClean = !socketState(x.file).exists && !live(x.pid);
+      const kill = alreadyClean ? { skipped: 'owned endpoint and original server already absent' } : tmux(x.sock, ['kill-server']);
       const state = socketState(x.file);
       if (state.exists) { assert.equal(state.dev, x.state.dev); assert.equal(state.ino, x.state.ino, 'refuse replacement endpoint'); assert(state.socket && !state.symlink); fs.unlinkSync(x.file); }
       if (x.pid > 1) while (live(x.pid)) await Bun.sleep(25);
@@ -178,6 +195,8 @@ if (selected.includes('preexisting')) {
     subject = actor(dir + '/subject', 'preexisting', '', true); result.executedSha256 = subject.executedSha256;
     // This endpoint belongs to a separate native setup, NOT to the suite
     // whose still-live exec PID appears in its name (e.g. PID recycling).
+    // Plant at the exact address the actual suite will inspect after exec.
+    fs.mkdirSync(subject.socketDir);
     for (const sock of [subject.sock]) {
       const r = tmux(sock, ['new-session', '-d', '-s', 'preexisting', '-c', dir, 'exec tail -f /dev/null']); assert.equal(r.code, 0);
       owned.push(snapshot(sock));

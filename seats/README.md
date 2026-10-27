@@ -22,14 +22,16 @@ The main files here:
   dispatch, pushes the previous bead's branch before a move, enforces the
   worktree cap. Install policy in `wheelhouse/.template-source` may opt out
   with `seat_push=off` or `seat_worktrees=per-task`.
-- `herald.ts` — non-LLM Dispatch Office daemon: tails `seats/logs/*.jsonl`, starts pre-existing cursorless logs at EOF, appends deduplicated wake events to `seats/inbox.jsonl`, and drains unread events with `--drain`.
+- `herald.ts` — non-LLM Dispatch Office daemon and delivery carrier: tails logs from their saved cursor (first cursorless sight starts at EOF), appends deduplicated inbox records, and supplies identity-guarded `--hook` delivery. Manual `--drain` is the fallback/test seam for unwired installs. The cursor catalog drops retired log paths; a recreated cursorless path is adopted at EOF. Pane cooldown/defer history keeps at most 128 pane ids, retaining the current target. The seen-id horizon defaults to 5000 (finite `WHEELHOUSE_HERALD_MAX_SEEN` values of at least 1 override it, rounded down); idle polls reuse that bounded set instead of copying it.
 - `needs.ts` — append-only human-needs ledger: opens, lists, answers, shows, and closes durable requests in `seats/needs.jsonl`.
 - `intake.ts` — durable signal intake: post, dispose, list, show and audit signals in `seats/intake.jsonl`.
 - `channels.ts` — reads and validates install-owned `seats/channels.json` declarations for principal/stakeholder channels.
 - `comms.ts` — the single declared-channel send gate; sends by channel name, confirms read-back, and records refs in ignored `seats/comms.jsonl`.
 - `report-issues.ts` — commander-run, opt-in publisher for `template-report` tasks: dry-runs or files routed GitHub issues with scrubbed bodies, dedupe, and `external-ref` writeback.
 - `digest.ts` — read-only fleet digest for a time window: shipped work, open/cleared needs, review/sent-back work, failures, and alerts in commander, human, or JSON form.
-- `desk.ts` — local web desk for `/needs` and the read-only `/board` kanban.
+- `desk.ts` — local web desk for `/needs` and the read-only `/board` kanban. Digest refreshes admit at most two windows concurrently and use the existing read-only digest JSON CLI in short-lived processes, avoiding retained native allocations from recreated Worker VMs. The bounded digest LRU is unchanged. Each job is reaped before its slot is released; timeout/error cleanup kills its isolated process group. Normal exit and SIGTERM/SIGINT/SIGHUP also cancel active job groups. Additional windows keep their cached/empty response until a later request can schedule them; page handlers do not wait for digest work.
+- `inbox-hook.sh` — anchored, quiet Claude Code SessionStart/UserPromptSubmit/PostToolUse(Bash) inbox wrapper; starts no Bun when the inbox is absent or already read.
+- `inbox-hook.selftest.sh` — proves context formats, write-before-bookkeeping, budgeted rows, identity guard and manual-path deduplication on owned fixtures.
 - `principal-sentinel.sh` — Claude Code Stop hook that turns final assistant `@principal:` lines into durable needs.
 - `courier.ts` — optional transport daemon for off-machine replies; Telegram lives under `transports/`.
 - `principal-sentinel.selftest.sh` — proves the Stop hook opens exactly the intended needs and that source dedupe works.
@@ -45,12 +47,14 @@ The main files here:
 - `prune.ts` — scan/cleanup/prune: `cleanup` is the automatic never-lose-work reaper the adapter runs on bead close and `seats/supervisor.sh` schedules nightly fleet-wide; `scan` plus `prune --from-file` is the reviewed exceptions path a person drives, dry-run by default. `wheelhouse/.template-source` may set `cleanup=off` or `cleanup=report` for installs whose authority forbids automatic deletion.
 - `intent-check.sh` — read-only integrate/close gate for the ISA trace rules.
 - `manual.ts` — read-only verification-manual checker and feature/evidence reader; see "Verification manual" below.
+- `install-features.ts` — read-only install gate: `bun seats/manual.ts features --repo <repo> --json | bun seats/install-features.ts <repo> wheelhouse/interview/features.md` compares that repo's confirmed interview features with its map, including owner-provided reach wording; prints expected/mapped counts or a named failure. BOOTSTRAP's Verify step also checks the producer command's exit before piping its captured inventory.
 - `specimen-leak.selftest.sh` — proves BOOTSTRAP's specimen grep passes on current installed contract/runbook prose and still catches a planted generated specimen copy.
 - `placeholder-grep.selftest.sh` — proves BOOTSTRAP's placeholder grep ignores binary evidence while still catching planted text placeholders.
 - `floor.ts` — read-only status display for the commander cockpit.
 - `fleet-snapshot.ts` — reads Beads, effective roster, state, logs, and review markers into one scaling/idle-alert snapshot; `readyWorkNobodyOnIt()` is the single detector shared by staffing and idle-fleet alerts.
 - `alerts.ts` — herald-clocked fleet alert pass. `bun seats/alerts.ts check [--json]` atomically writes `seats/run/fleet-snapshot.json` with `{at, intervalMs, snapshot, herald, inbox, needs, capacity, disk, github, drift, seatStreams, alerts, settledSeats}`. Alert transitions append one Dispatch Office row from `herald`; sustained inbox lag/idle ready work, silent mid-turn model streams and invalid commander panes open/close human needs through `seats/needs.ts` only.
-- `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. The herald is the clock: when a pool exists it periodically launches `bun seats/staffing.ts check` detached and appends output to `seats/logs/staffing.out.log`, while `staffing.lock` remains the overlap guard. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state.
+- `staffing.ts` — dynamic-staffing decision/apply loop. With no `seats/pool.json` it prints `staffing: no pool (fixed roster)` and exits 0 without touching runtime files. With a pool, `check` takes one decision under `seats/run/staffing.lock`, clamps it to role min/max and free subscriptions, appends a plain-text line to `seats/logs/staffing.log`, and applies at most one add/drop. The herald is the clock: when a pool exists it periodically launches `bun seats/staffing.ts check` detached and appends output to `seats/logs/staffing.out.log`, while `staffing.lock` remains the overlap guard. `add`, `drop`, `probe`, `flag`, and `status` are manual surfaces for the same pool state. `status` prints `seat | role | harness | model | subscription | state | source` rows, per-role live-of-min..max counts, the last decision and a Jev configuration line; `--json` returns the same data without account directories.
+- `jev.ts` — optional staffing decider, enabled only with `JEV_BASE_URL` and `JEV_API_KEY` (or `JEV_API_KEY_FILE`, mode 0600 and outside the install root). It receives only aggregate counts, change counters and ready-work titles/chaining/groups, never paths, file contents, env, account directories, labels or credentials. Missing configuration skips Jev; low confidence, `other`, malformed/error/timeout responses fall back to the built-in rule.
 
 `seats.json` holds NO tokens, keys, or secrets — ever. Identity lives in each
 seat's `auth.json`, written either by OAuth `/login` inside the interactive Pi
@@ -74,7 +78,7 @@ A `surface: none` manual needs no runnable sections and has an empty feature map
 bun seats/manual.ts check --repo <product-repo> [--project <name>]
 bun seats/manual.ts features --repo <product-repo> [--project <name>] --json
 bun seats/manual.ts evidence <feature> --repo <product-repo> --dir <retained-evidence>
-bun seats/manual.ts lint-contract --file <contract>
+bun seats/manual.ts lint-contract --file <contract> --repo <product-repo> [--project <name>]
 ```
 
 `check` prints `manual ok: N features`; format/missing/ambiguous errors exit2 and
@@ -87,8 +91,24 @@ with slug, title, file and the four section texts (`whatItIs`, `howToGetToIt`,
 
 `evidence` checks that a mapped feature's directory contains a regular file; it
 does not judge that file's truth or accept a symlink as a regular file. The
-reserved `lint-contract` command prints `not yet` and exits2; its implementation
-belongs to later work. These commands never launch or edit a product.
+`lint-contract` parses the shared contract grammar and prints `map outcomes:
+expected N, found N`; exit0 means the needed/provided feature-slug sets match,
+not that unbuilt work is proven. Exit2 names the first missing, gratuitous,
+duplicate or wrong-project entry. It is a drafting heuristic: compare the FULL
+proposed product locator with the current reach, never a work-type label or a
+prefix of the proposed locator. A moved control can name `/counter#actions`;
+an end-state-only change can name `/counter; proof: Counter = 3`. The optional
+proof suffix is a literal comparison with `whatProvesItWorks`. Prose-only
+changes/aliases, route parameters and semantic equivalence are not inferred.
+URLs use path/query/fragment; `screen:`/`command:` values and mapped slugs are
+also recognized. Reuse the mapped feature's slug for changed reach; new path
+segments become a hyphenated slug. Multiple consumers of one changed feature
+owe one entry. Relative factory files and artifacts named as files owe none;
+a reader consumer group alone never exempts a product locator. Map
+outcomes use the selected manual's `.agents/skills/verify-<project>/features/<slug>.md`
+(or `features/<slug>.md`) with a machine/run check. No-surface launch rules,
+proving a future entry live and review scope enforcement belong to other passes.
+These commands never launch or edit a product.
 
 `seats/fixtures/verification/five-features/` is the dependency-free HTTP fixture
 and hand-written format oracle. Its README and manual describe five public
@@ -483,6 +503,7 @@ bun seats/adapter.ts spawn    <seat> [bead-id]          # start it
 bun seats/adapter.ts probe    <seat>                    # one-shot provider/model liveness check
 bun seats/adapter.ts dispatch <seat> <bead-id> <text>   # hand it a bead
 bun seats/adapter.ts steer    <seat> <text>             # redirect mid-turn
+bun seats/adapter.ts skills-check <seat>                # read-only skill visibility and clean Git paths
 bun seats/adapter.ts status                             # liveness, every seat
 bun seats/adapter.ts stop     <seat>                    # graceful; session kept
 bun seats/adapter.ts stop-all                           # stop every idle rostered seat; report busy seats
@@ -512,10 +533,11 @@ before waiting for the response. The stdin holder is the direct `0<>` FIFO
 redirection, not a line-splitting relay.
 
 The seat's process cwd is the seat's own worktree by construction, not a
-prompt telling it to `cd` there. A worker seat owns ONE persistent git
-worktree at `<root>/.wheelhouse-worktrees/<seat-name>` (for example
-`.wheelhouse-worktrees/worker-1`), not one per bead, and two seats never
-share one. `bun seats/adapter.ts dispatch <seat> <bead> <text> [--base <ref>]`
+prompt telling it to `cd` there. A worker seat's ordinary persistent git
+worktree is `<root>/.wheelhouse-worktrees/<seat-name>` (for example
+`.wheelhouse-worktrees/worker-1`), not one per bead. When that anchor belongs to
+a product repository, umbrella tasks get the separate persistent
+`umbrella-<seat-name>` anchor described below. Two live seats never share one. `bun seats/adapter.ts dispatch <seat> <bead> <text> [--base <ref>]`
 prepares it before the seat sees the bead: `git switch -c fleet/<bead> <base>`
 for a new bead, or `git switch fleet/<bead>` for a reopened one so its old
 commits are kept. The base is `--base` if given, else the bead's
@@ -526,7 +548,7 @@ previous bead's branch to origin; a failed push is written to the seat log as
 "push failed" and blocks the move, and so do real uncommitted changes in the
 seat worktree (deletions of once-committed build output under
 `.cargo-target-shared/` or `car-rs/.wt-target/` do not count). New worktrees
-are capped at the number of seats in `seats/seats.json` plus two. Seats in
+are capped per repository at the number of seats in `seats/seats.json` plus two. Seats in
 non-worker roles — reviewer, verifier, producer, researcher — run from the
 project root and take no slot; a roster entry may set `"worktree": true|false`
 to override its role's default. A `.pruned-placeholder` directory left by
@@ -536,12 +558,43 @@ worktree, then to the root. `dispatch` transparently stops and relaunches the
 seat, attached to the same session, when its cwd does not already match the
 seat worktree.
 
+Every bead-bound spawn or dispatch links the install root's factory skills
+(`.agents/skills/*/SKILL.md`) into the prepared worktree under both
+`.agents/skills` (Pi/Codex) and `.claude/skills` (Claude Code), using absolute
+symlinks. Existing project directories and committed project links win and are
+not overwritten; stale untracked factory links are repaired. Reviewer and walker
+scratch worktrees get the same links. A repeat preparation leaves correct links
+and exclude bytes unchanged; new factory entries appear on the next preparation.
+
+After `spawn <seat> <bead-id>` or dispatch, run
+`bun seats/adapter.ts skills-check <seat>`. It uses the recorded cwd, falling back
+to `.wheelhouse-worktrees/<seat>`, checks the harness's directory for the four
+factory skills, any additional factory entries, and the project's `verify-*`
+manuals, then prints one skill name per line. Missing manuals/skills, dirty skill
+paths or unreadable Git state exit **2**, naming the seat and entry. The check
+never repairs links, changes state, launches a model or proves harness discovery.
+Bare `spawn <seat>` starts at the install root and does not prepare a worktree;
+check after a bead-bound spawn/dispatch, not that unprepared root session.
+
+**Verified Git gotcha:** per-entry exclude rules for symlinks have **no trailing
+slash**, e.g. `/.agents/skills/intent` and `/.claude/skills/intent`. A rule ending
+in `/` matches a real directory and does not hide a symlink; native Git status
+still reports the link. Never exclude `/.agents/skills/` or `/.claude/skills/`
+wholesale: new project manual/map files must remain visible. Resolve the exclude
+file with `git -C <worktree> rev-parse --git-path info/exclude`; a linked
+worktree's `.git` is a file, not a directory.
+
 In an umbrella install, `Repo: UMBRELLA` selects the container's Git repository
 before any existing worktree is reused. The field may start a line or follow
-another sentence (`Closes: H7. Repo: UMBRELLA`). If the selected seat worktree
-belongs to the product instead, dispatch refuses before creating or switching
-its branch; prepare an umbrella-owned seat worktree first. It does not silently
-create an empty product branch or repurpose the product worktree.
+another sentence (`Closes: H7. Repo: UMBRELLA`). When the seat's ordinary
+`.wheelhouse-worktrees/<seat>` belongs to the product, dispatch creates or reuses
+`.wheelhouse-worktrees/umbrella-<seat>` in the umbrella repository and runs the
+seat there; the product worktree is left untouched, never repurposed. An existing
+umbrella-<seat> worktree made by hand is reused too. Its previous commits remain
+on their branch, and dirty files refuse a switch through the same safety gates.
+A later product task returns to `.wheelhouse-worktrees/<seat>`, leaving the
+umbrella worktree unchanged. A fresh seat with no worktree still follows the
+ordinary primary-anchor preparation path.
 
 `probe` runs the rostered account, provider, and model through a one-shot `pi -p --no-session` liveness turn that asks only for `OK`; it does not need or create a bead worktree and writes no bead comment. A successful probe prints `OK`; a provider failure prints pi's stdout/stderr verbatim and exits with pi's status.
 
@@ -593,6 +646,8 @@ discarded deltas. Checks require a running herald (or explicit
 an independent process supervisor timer.
 
 `status` prints an `ORPHAN:` line only for a confirmed duplicate seat process: a candidate must not be a descendant of the recorded seat pid, must either hold the seat FIFO or predate the recorded pid, and must still be present on a second scan a few seconds later. The line includes the remedy (`inspect pid ..., then stop it or run bun seats/recover.ts`) so transient child tools are not reported as duplicate seats and genuine duplicates say what to do next.
+
+When `seats/pool.json` exists, `bun seats/adapter.ts status` also prints a staffing trailer with per-role live/min/max counts and points to `bun seats/staffing.ts status`. The staffing status command is the detailed operator view: one row per staffed live seat for pooled worker/reviewer roles, and one row per fixed live seat for worker/reviewer roles not declared in the pool, with role, harness, model, public subscription label (or entry name/provider), busy/idle state, and source (`fixed` or `staffed`); then workers/reviewers used/min/max, free and rate-limited subscription counts, the last decision line, and whether Jev is configured. `--json` prints the same data as one object. Neither form prints account directories.
 
 `dispatch` prefixes the message with `Bead <bead-id>` and queues behind the
 current turn if the seat is mid-stream; redirecting the CURRENT turn is what
@@ -659,8 +714,12 @@ remain errors. Cancel a hung command explicitly; the admitted selftest sweep sup
 test containment. Staffing growth and stop-all busy actors use observed events
 and explicit release, never elapsed startup/turn clocks.
 Status's one whole-host `ps` orphan census uses the same descriptor capture.
-Native errors/signals/nonzero, diagnostics, empty or malformed census output
-produce `UNVERIFIED orphan census` rather than an empty-table inference.
+Command lines containing a newline, U+2028 LINE SEPARATOR or U+2029 PARAGRAPH
+SEPARATOR are ordinary command text, not malformed records (native `ps` may
+escape the newline). Native errors/signals/nonzero exits, diagnostics, empty
+output or a row missing the expected PID, parent PID, start-time or command
+fields still produce `UNVERIFIED orphan census` rather than an empty-table
+inference.
 Healthy recorded seat rows remain visible; an unavailable census neither proves
 absence of extra processes nor changes seat identity/state. Adapter regression
 cases replay actual captured process records beyond the old pipe ceiling and
@@ -830,7 +889,7 @@ When a branch changes `.agents/skills/verify-*/`, the reviewer prompt and verdic
 
 ### Required review tier
 
-For **every** review, `verify.ts` runs a dispatcher-owned sweep of **the tier the change requires** at the exact reviewed tip **before** starting the reviewer. It records the selected tier and first matching reason, not merely a generic PASS. The default is core, the 35 suites in tracked `seats/selftest-core.list`. Full is required when the paths changed from main's merge base to the tip include `seats/selftest-sweep.sh`, `seats/selftest-lib.sh`, `seats/selftest-sweep-lock.ts`, `seats/selftest-herald.sh`, `seats/python-invocations.ts`, `seats/selftest-core.list`, a full-tier root suite, a fixture not named for a core suite, or `seats/adapter.ts`, `seats/seat-worktree.ts`, `seats/verify.ts`, `seats/heavy-test.sh` or `seats/heavy-test-entry.ts`. Fixture ownership uses the longest known suite name: `adapter-rpc` is full, not the core `adapter` fixture. Shared/unknown fixtures conservatively require full. Deletions and both sides of renames count. The first matching path in sorted order is the reason; otherwise explicit “full sweep passes” or `selftest-sweep.sh` claim wording forces full with reason “Done line”; otherwise core/default. No nightly or quarantine override is implemented by this tier rule.
+For **every** review, `verify.ts` runs a dispatcher-owned sweep of **the tier the change requires** at the exact reviewed tip **before** starting the reviewer. It records the selected tier and first matching reason, not merely a generic PASS. The default is core, defined by tracked `seats/selftest-core.list`. Full is required when the paths changed from main's merge base to the tip include `seats/selftest-sweep.sh`, `seats/selftest-lib.sh`, `seats/selftest-sweep-lock.ts`, `seats/selftest-herald.sh`, `seats/python-invocations.ts`, `seats/selftest-core.list`, the nightly harness (`seats/nightly-sweep.ts` and `seats/nightly-state.ts`), a full-tier root suite, a fixture not named for a core suite, or `seats/adapter.ts`, `seats/seat-worktree.ts`, `seats/verify.ts`, `seats/heavy-test.sh` or `seats/heavy-test-entry.ts`. Fixture ownership uses the longest known suite name: `adapter-rpc` is full, not the core `adapter` fixture. Shared/unknown fixtures conservatively require full. Deletions and both sides of renames count. The first matching path in sorted order is the reason; otherwise explicit “full sweep passes” or `selftest-sweep.sh` claim wording forces full with reason “Done line”; otherwise core/default. The nightly-red brake below takes precedence; quarantine is independent of the path-selection rule.
 
 The command is `bash seats/selftest-sweep.sh --tier core|full`. Its header records `tier=core reason=default` or, for example, `tier=full reason=seats/adapter.ts`. The prompt and verdict name both fields; core coverage also carries the manifest's SHA-256. The historical `## Dispatcher full-sweep result` heading remains for record consumers; the explicit tier below it is the coverage, not the heading. APPROVE still needs integer rc=0, a pinned tip and a retained nonempty regular log; the actual tier must match the dispatcher's choice, and core hash/inventory must match the pinned manifest. A mismatch is INCOMPLETE.
 
@@ -889,6 +948,45 @@ outside this guarantee. The regression uses idle sleeping stubs, TERM-ignoring
 suites at 5-second and 120-second runner grace, a KILLed runner, a TERM-ignoring
 reviewer, a same-group orphan, and an unrelated same-cwd process in a different
 group which must remain alive.
+
+### Nightly full tier
+
+The supervisor attempts one full sweep per local day during `sweep-hour=` in `wheelhouse/.template-source` (default `03`, hours `00`–`23`). `sweep=off` disables it; otherwise it is enabled. `WHEELHOUSE_SUPERVISOR_SWEEP_HOUR` overrides the recorded hour. Choose an hour when this install is available. A due tick records `lastSweepDay` in `seats/run/supervisor.state.json` and logs its start or skip; a skipped day is not repeatedly queued. A manual retry is `bun seats/nightly-sweep.ts`.
+
+Presence of `seats/run/paused` suppresses the nightly. `WHEELHOUSE_SUPERVISOR_PAUSE_FILE` selects a different marker (absolute or relative to the install root). Contents do not matter, and the nightly never removes the marker or changes the install's pause/service configuration. A live host sweep holder also causes a logged skip, not another queued review-sized job. The runner's opt-in `WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT=1` closes the preflight/admission race: it withdraws only its own FIFO ticket and exits **75** before any suite START when busy. The nightly requests fresh FIFO admission even if an ancestor owns the endpoint; it never borrows a running review's token. Normal reviews still wait without an admission deadline, and ordinary nested benches/sweeps still reuse validated ancestor ownership. The no-wait flag is consumed at admission, so suites and their nested fixture runners do not inherit it.
+
+The job resolves `merge-target=` (default `main`) in the configured product repository, takes its local branch tip or an already-present `origin/<name>` fallback, and makes a detached scratch worktree. It does not fetch or test the supervisor's current topic checkout. It reuses the dispatcher's isolated graph, metrics-off HOME, host-budget PATH, runner launch and teardown, runs `bash seats/selftest-sweep.sh --tier full` with `WHEELHOUSE_SKIP_REAL_PI=1`, and retains `seats/verdicts/sweeps/nightly.<tip>.<pid>.<ms>.selftest-sweep.log`. Scratch is removed after the run; owned-child cancellation joins groups before removal.
+
+`seats/run/nightly-sweep.json` is the atomic latest completed result: `{date, tip, rc, logPath, elapsedMs, failedSuites}`. Red (`rc=1`) forces **every new review to full**, including digest-only changes and batch reuse, with `tier=full reason=nightly red <date> <tip>` in its log and receipt. A later completed green releases the brake; a missing record imposes none. An unreadable/invalid record conservatively requires full. Core receipts cannot authorize merges while this brake is active: the integrator checks current state, not just an old receipt.
+
+A pause, busy lock, setup/scratch failure or interruption writes the separate atomic `seats/run/nightly-sweep-missed.json` with date/reason; it does **not** replace a completed red result. Alerts show `nightly-sweep-red` (date, tip, failed suite names) or `nightly-sweep-missed` (reason) on the existing fleet-gate line and emit one herald inbox row on transition. Repeated red results refresh detail without repeated wakes; a later completed run clears an older missed alert, and green clears red.
+
+For fixture-only checks, an explicit `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` may name two tiny suites; names are remapped into the pinned scratch checkout. A selection smaller than the pinned full inventory is marked `filtered: true`: even native rc=0 cannot release the full-review brake, and it raises the missed-coverage alert. Its `lastCompleted` field preserves the previous full result, including a red alert that no later full green has cleared. Do not use filtered fixtures as production nightly receipts. Scheduled launches clear the pattern and tier environment overrides. Old already-running supervisors do not acquire this tick merely because a new script was copied: restart through the install's normal approved procedure. No LaunchAgent/systemd definition change is needed.
+
+### Review an entire batch once
+
+For one reviewer judgment over the batch and its candidates, start the batch from current local `main`, then merge each `fleet/BEAD` tip with a bead-naming subject (one merge per bead). Run:
+
+```text
+bun seats/verify.ts BATCH-TASK BATCH-BRANCH AUTHOR REVIEWER --candidates BEAD-A=AUTHOR-A,BEAD-B=AUTHOR-B [--repo PRODUCT-REPO]
+```
+
+`--candidates` must match the branch repository's new first-parent bead merges exactly; it cannot be combined with `--batch-sweep`. Candidate tips are the immutable second parents, not wherever fleet branches now point. Every candidate contract and author account is checked before sweep/model spawn. One dispatcher sweep at the batch tip uses the strictest tier required by the batch task or any candidate. The reviewer sees every validated claim and `main..candidate-tip` range, and must cite the actual sweep rc/log and emit, above the closing VERDICT/PUSH lines and outside fences:
+
+```text
+CANDIDATE: BEAD-A APPROVE — evidence for this candidate
+CANDIDATE: BEAD-B APPROVE — evidence for this candidate
+VERDICT: APPROVE
+PUSH: APPROVE origin — verified: batch range and publication authority
+```
+
+Exactly one plain CANDIDATE line per derived bead: no duplicates, missing or outside-batch ids, malformed lines, bullets or blockquotes. An overall APPROVE over any BOUNCE/DISCOVER refuses the whole answer, leaving no new verdict records. Batch BOUNCE can record one candidate APPROVE and another BOUNCE, but no candidate APPROVE can borrow a failed sweep. The existing refused-output/corrective-attempt path applies; it never repeats the sweep.
+
+The batch task gets its usual record at the batch tip; each candidate gets the same writer's record at its merged tip, with its own author/verdict, the identical batch PUSH text, `batch-task`, `batch-branch`, `batch-tip`, `batch-merge` headers, actual sweep tier/reason/log and its own required tier/reason. These are working copies, not new signed authority or evidence homes. Inspect each candidate's verdict and pin; batch approval never proves a person-checked outcome.
+
+Manual scope is computed separately at each candidate's immutable merged tip, using that candidate's validated contract and available integration comparison base. Its prompt block and verdict header carry its own changed manual files, matching outcome ids/surfaces and `manual-diff-base`, not the batch's union. The batch task keeps its own scope at the batch tip. These lists remain context, not authorization to change a manual.
+
+Order: batch review → `walk.ts --work` for each candidate with person-on-surface/person-reading outcomes at its recorded merged tip (pass that tip to `--branch` if its fleet branch moved) → `merge-gate.ts` per candidate at that tip → fast-forward and push. Machine-only candidates pass the gate on APPROVE alone; bounced or unwalked work still refuses. The next subsection is the alternative shape: separate candidate reviews sharing only one sweep.
 
 ### Reuse one passing sweep for a review batch
 
@@ -1040,6 +1138,51 @@ the prompt supplies. Source paths not named by the bead are not mounted;
 if the reviewer needs one, the verdict routes that missing source instead
 of reaching around the dispatcher.
 
+## Daily manual check
+
+`bun seats/manual-check.ts [--repo <product>] [--verifier <seat>] [--out <evidence-dir>]`
+runs the maintain skill once on a free roster verifier (never a reviewer). With
+no `--repo`, it reads configured `product-repo`/`product-repos` entries, or the
+install root; missing manuals and `surface: none` are skipped. Install's manual
+creation/proof step supplies the manual; the scheduled check does not write one.
+The supervisor starts it once per local day at **05**, configurable with
+`WHEELHOUSE_MANUAL_CHECK_HOUR=00..23`. `.template-source` has `manual_check=on`
+by default; `manual_check=off` disables the tick. This upgrade does not restart
+or replace an installed supervisor/service: adopt the copied code through the
+install's normal approved restart procedure.
+
+The pass pins the product's default line (origin/HEAD, then main/master), uses a
+detached scratch worktree and linked factory skills, reads the validated manual
+through `manual.ts`, attempts **every mapped feature** using Launch, Doctor,
+Drive, Evidence and Cleanup, and scans changes since the last successful pass
+(or seven days). It is read-only on product code/manual/map: never branches,
+commits, publishes or opens a PR. Read-only command shims and before/after HEAD,
+status, diff and branch/ref snapshots reject an edited tree before any findings
+are posted. These fences are not an OS privilege sandbox; a failed integrity
+check is an alert, not permission to repair the tree or publish partial findings.
+Use only isolated instances and non-production endpoints and stop owned helpers.
+
+The trailing, unfenced answer is `FINDINGS: none`, or `FINDINGS:` followed by
+`- drift|unmapped|break — <feature or path> — <one sentence>` (choose one kind).
+The coordinator—not the verifier—posts one `finding` intake row per result for
+the producer. Sources are `manual-check:<kind>:<feature-or-path>`; an undisposed
+row with that source suppresses a repeat, not a new branch/PR. Disposition and
+fixes remain producer work. Inspect with `bun seats/intake.ts list --open`.
+
+Evidence defaults to ignored `seats/verdicts/manual-check/<stamp>/`; fleet/ad-hoc
+runs pass their exact task scratch path via `--out`. Per-product prompt, native
+status/signal, separate stdout/stderr, before/after snapshots and drive evidence
+stay there after scratch cleanup. Runtime locations are caller-owned and must
+be outside product source or explicitly git-ignored. The output log is
+`seats/logs/manual-check.out.log`; the last successful tip/counts/time are in
+`seats/run/manual-check.last.json`. A refusal exits2; edited tree, helper failure
+or missing/malformed FINDINGS exits3 and appends one `manual-check-failed` inbox
+row, with no findings from that failed pass. Clean/posted/deduped/none runs exit0.
+The one-shot policy is at most30minutes (`WHEELHOUSE_MANUAL_CHECK_TIMEOUT_MS`,
+1..1800000); metadata/intake helpers have10second limits, and owned one-shot
+groups are terminated/reaped on expiry (TERM then KILL after1.5seconds). Rerun
+with a fresh `--out` after resolving a refusal; no installed service is changed.
+
 ## Walking a consumer surface
 
 ```bash
@@ -1072,7 +1215,7 @@ reuses this pinned manual/entry plumbing. Example:
 bun seats/walk.ts 'Counter reaches two after two increments' --surface manual:counter --repo seats/fixtures/verification/five-features --out <task-scratch>/walk
 ```
 
-The transcript is scrubbed through `seats/evidence-scrub.sh` and retained under `--out`; stdout and `walk.json` print the transcript/metadata paths relative to the install root, not as machine-local absolute paths. If `--out` is omitted, it defaults under ignored `seats/verdicts/walks/` for the commander to transcribe into a graph-approved evidence home. The default walker budget is 1800000 ms (30 minutes); override it for one invocation with `WHEELHOUSE_WALK_TIMEOUT_MS=<ms> bun seats/walk.ts ...`. On timeout, `walk.ts` keeps the partial transcript, exits `3`, writes `COULD-NOT-WALK` metadata, and names the phase it was in. Exit codes are `0` for `WALKED-DONE`, `2` for `WALKED-NOT-DONE`, `3` for `COULD-NOT-WALK`, `4` for missing/ambiguous/malformed `VERDICT:` output, and `5` for preflight or credential refusal before any walker spawns.
+The transcript is scrubbed through `seats/evidence-scrub.sh` and retained under `--out`; stdout and `walk.json` print the transcript/metadata paths relative to the install root, not as machine-local absolute paths. If `--out` is omitted, it defaults under ignored `seats/verdicts/walks/` for the commander to transcribe into a graph-approved evidence home. The default walker budget is 1800000 ms (30 minutes); override it for one invocation with `WHEELHOUSE_WALK_TIMEOUT_MS=<ms> bun seats/walk.ts ...`. A work walk (`--work`) first observes the test lock its suites will use (`WHEELHOUSE_SELFTEST_SWEEP_LOCK`, default `/tmp/wheelhouse-selftest-sweep.lock`). If another run already held it when the work walk began, stderr says `work walk: waiting for test lock <path> held by pid=<pid> started=<time>; verifier clock has not started`. That wait has no verifier deadline; the full budget starts only when the verifier launches. The observer never takes or releases the test lock, and an already-admitted caller's own inherited hold is not another run. It waits out that initial hold, not a reservation against later contenders. If the budget subsequently expires while an actual verifier-descendant suite is still queued, the `COULD-NOT-WALK` verdict and `walk.json` reason say `queued for the test lock <path>, waiting behind pid=<pid> started=<time>` (also naming the suite pid). This is a test-lane blocker, not evidence of an unreachable work surface: rerun once the lock is free. A timeout with no attributable queued suite retains the ordinary `timed out after <n>ms during run verifier walk` reason. On timeout, `walk.ts` keeps the partial transcript, exits `3`, writes `COULD-NOT-WALK` metadata, and names the phase it was in. Exit codes are `0` for `WALKED-DONE`, `2` for `WALKED-NOT-DONE`, `3` for `COULD-NOT-WALK`, `4` for missing/ambiguous/malformed `VERDICT:` output, and `5` for preflight or credential refusal before any walker spawns.
 
 ### Per-work cold-start verification
 
@@ -1083,7 +1226,13 @@ bun seats/walk.ts --work <bead-id> --branch <ref> --author <author-seat> [--repo
 Do not mix `--work` with a positional claim, `--surface` or `--baseline`.
 `--branch` and `--author` are required. The contract is checked first, before
 account selection or any verifier spawn; missing/invalid contracts refuse5 with
-the contract remedy. The verifier's canonical account directory must differ
+the contract remedy. Only `person-on-surface` and `person-reading` outcomes
+need a walk. A machine-only contract refuses5 with “no outcome needs a walk”
+and a pointer to `bun seats/merge-gate.ts <bead> <ref>`, before account selection,
+scratch checkout or verifier spawn. Machine outcomes rest on the worker's
+command evidence and the review's test run; they are not re-run by the verifier.
+The walk's time budget is for the person-facing outcomes only, not a repeat of
+the review's sweep. The verifier's canonical account directory must differ
 from the author's (roster, with retired-seat state fallback), using the same
 shared gate as the reviewer. Same-account and credential refusals exit5;
 usage/unresolved-ref errors exit1.
@@ -1108,13 +1257,16 @@ The product resolver is shared with `verify.ts`: default the install root or
 install root. Pin `<ref>^{commit}`, not the author's current checkout. The
 verifier runs in a detached scratch worktree at that tip; a product subdirectory
 keeps its location inside the tree. Its prompt contains only the contract's
-Intent and reconstructed Outcomes (consumer, surface, check), pinned tip and
-surface setup — no bead title, metadata, comments/history, worker report,
+Intent and reconstructed person-facing Outcomes (consumer, surface, check),
+pinned tip and surface setup — no machine outcome claims, surfaces or checks,
+bead title, metadata, comments/history, worker report,
 author identity or branch name. A validated manual is named when present;
 entries for feature slugs named in outcome surfaces are included. Launch,
 doctor, drive, evidence and cleanup come from that snapshot, not live edits.
 
-End with one plain, unfenced row per outcome in id order, then one verdict:
+End with one plain, unfenced row per person-facing outcome given, in original
+contract id order (do not renumber gaps), then one verdict. Machine outcomes
+are neither given nor answered; adding a machine row is malformed:
 
 ```text
 OUTCOME: O1 PASS — <what was driven, read or run and observed>
@@ -1130,9 +1282,11 @@ requires COULD-NOT-WALK naming the first UNREACHED; all PASS requires WALKED-DON
 Verdict exits remain0/2/3. Claim mode keeps its existing single-verdict behavior.
 
 `walk.json` adds `mode: "work"`, `bead`, `branch`, pinned `tip`, root-relative
-`repo`, `outcomes: [{id,result,detail}]`, `verdict`, `line` and `transcript`.
+`repo`, `outcomes: [{id,result,detail}]` for only the person-facing outcomes,
+`verdict`, `line` and `transcript`.
 The inbox carries the verdict, every row without truncating evidence, and output
-paths. A dispatcher timeout records UNREACHED rows rather than fabricating PASS.
+paths. A dispatcher timeout records UNREACHED rows for only those person-facing
+outcomes rather than fabricating PASS or recording machine results.
 Default output is `seats/verdicts/walks/<bead>/<stamp>`; use a fresh `--out` under
 the task scratch root for fleet runs. An existing work `walk.json` is never
 overwritten by another pass. The merge gate below consumes these rows;
@@ -1226,6 +1380,8 @@ can have null tip/review fields. An initial REFUSED invalidates an older PASS ev
 if the shared repository resolver stops early. Receipts are local trusted
 metadata, not signed attestations or a historical ledger.
 
+A fast-forward batch push does not hide its constituent merges: the guard checks each candidate's second-parent work tip, so use the `--candidates` batch-verdict procedure above to produce per-candidate review records, complete required walks, then run each merge gate for its own PASS receipt.
+
 The installed `fleet-pre-push-guard.sh` checks new first-parent bead-naming merge
 commits on the default line and `seats/integration-refs.txt` refs. It requires a
 PASS receipt at each merge's SECOND parent (the work tip), regardless of
@@ -1305,7 +1461,7 @@ Only a bead labelled `wheelhouse-bootstrap` or `wheelhouse-smoke` may use the li
 
 ```bash
 bun seats/contract.ts check <bead-id>
-bun seats/contract.ts check --file <path>
+bun seats/contract.ts check --file <path> [--bead <bead-id>]
 bun seats/contract.ts audit
 bun seats/contract.ts trace <bead-id|merge-sha>
 bun seats/contract.ts lint-intent --file <path>
@@ -1313,7 +1469,7 @@ bun seats/contract.ts lint-intent --file <path>
 
 `check` exits 0 for a valid contract, 2 for invalid shape (printing every error with bead/file, outcome and field), 3 for unreadable input. `audit` checks open and in_progress beads, prints one line per failing bead with its first error, and exits 0 if all pass, 1 if any are invalid, 3 if bd is unreadable. Root defaults to the script's parent directory, overridable with `WHEELHOUSE_CONTRACT_ROOT`. `readBeadText` reads `bd show <id> --json` from that root, joining title/description/notes/design/body, or accepting non-JSON stdout for plain-file stubs. With `WHEELHOUSE_SKIP_BD=1`, a readable `WHEELHOUSE_CONTRACT_FIXTURE` is required; a failed bd read may use that explicit fixture, but there is no empty-text pass. `lint-intent --file <path>` checks an intent alone: literal first-line `Intent:`, non-blank prose and no numbered build steps, outcome rows/fields or `Outcomes:` header. It exits 0 for valid shape or 2 naming the first offending line (also 2 for an unreadable file). It does not read the graph or prove the intent's meaning; the intent skill pairs it with a fresh-reader check.
 
-`Signal:` accepts `sig-<id>` (a posted row in `seats/intake.jsonl`), `isa-gap: <claim>` (shape `[A-Z]+[0-9-]+`, not ISA existence), or `install-procedure`. Missing/invalid Signal refuses naming the bead. A missing ledger prints an id-check-skipped line; an existing unreadable/malformed ledger refuses. With `WHEELHOUSE_SKIP_BD=1`, `WHEELHOUSE_INTAKE_FIXTURE=<ledger>` supplies it; an unset fixture prints the skip line. `trace` reads merge → contract → Signal → intake (and lists all matching merges when starting from a bead), exits 0 for a complete chain or 2 naming an unresolved link, and never writes Git, the graph or the ledger. Repo selection is the bead's `Repo:` paths (including `TEMPLATE (template/)`, `template/`, `TEMPLATE.`, or `UMBRELLA`), then `product-repo=`/`product-repos=`, then the root. SHA lookup also checks immediate child git roots before checking the bead's declared repos.
+`Signal:` accepts `sig-<id>` (an intake row), `isa-gap: <claim>` (shape `[A-Z]+[0-9-]+`, not ISA existence), or `install-procedure`. Missing/invalid Signal refuses naming the bead. A `sig-` contract passes only when that row is disposed `produced`, its `work` equals the checked bead id and its `by` names a seat whose roster role is `producer`; the commander's disposition refuses before dispatch or review spawns anything. An external commander-subagent producer must therefore run `intake.ts dispose` with `BEADS_ACTOR=<its roster producer name>`, not `commander`. This compares recorded provenance to configured roles, not authenticated authorship. Missing/unreadable/malformed ledgers or missing/invalid producer rosters refuse, never skip. File checks of `sig-` contracts require `--bead <id>` explicitly; neither the filename nor the disposition supplies that identity. `isa-gap:` and install-procedure file checks need no such flag. `WHEELHOUSE_INTAKE_ROOT=<root>` selects the ledger at `<root>/seats/intake.jsonl`; under `WHEELHOUSE_SKIP_BD=1`, the legacy explicit `WHEELHOUSE_INTAKE_FIXTURE=<ledger>` also works and takes precedence if both are set. The producer roster is read from the contract's install root. `trace` reads merge → contract → Signal → intake (and lists all matching merges when starting from a bead), exits 0 for a complete chain or 2 naming an unresolved link, and never writes Git, the graph or the ledger. Repo selection is the bead's `Repo:` paths (including `TEMPLATE (template/)`, `template/`, `TEMPLATE.`, or `UMBRELLA`), then `product-repo=`/`product-repos=`, then the root. SHA lookup also checks immediate child git roots before checking the bead's declared repos.
 
 Dispatch checks before RPC, state writes, worktree switching or launch. `WHEELHOUSE_DISPATCH_FORCE=1` cannot bypass it. `spawn <seat> <bead-id>` only prepares a worktree and sends no prompt, so it is not gated. `verify.ts` applies the same check before reviewer selection, refusing with exit 6.
 
@@ -1354,7 +1510,9 @@ Use canonical absolute paths and only a directory this run created/recorded as i
 
 Automatic cleanup also discovers `.wheelhouse-runs/<bead>*` inside registered fleet worktrees. Such scratch uses the same creation-record API with that worktree as `$ROOT`; cleanup never retroactively marks historical controls. Only closed-task scratch is eligible. Registered controls inside it must satisfy the worktree safety checks before any are removed through `git worktree remove`; cleanup then removes the scratch and prunes registrations. Open-task scratch, dirty/unmerged controls, anchors, live holders, and unmarked/foreign scratch are kept. This discovery is automatic-cleanup-only, not a widening of reviewed `prune` policy.
 
-New scratch and cleanup-lock markers are version 2: `hostId` uses the **same provider and digest** as the sweep lock (`selftest-sweep-lock.ts`), not the mutable diagnostic `hostname`. They survive network-name changes without rewriting the marker or needing an alias cache. A different stable ID is refused even when the hostname matches. Creating a new ownership record requires an available hardware/machine ID; unlike sweep admission, cleanup does not publish hostname-derived v2 authority. Legacy v1 current-name records retain their original root/inode checks. After a name change, v1 recognition additionally requires that old name in the read-only, stable-ID-authenticated sweep `<lock>.host` cache (`WHEELHOUSE_SELFTEST_SWEEP_LOCK`, default `/tmp/wheelhouse-selftest-sweep.lock`). Missing, foreign, malformed or symlinked caches never authorize an unproven name. Unmarked folders remain unmarked.
+New scratch and cleanup-lock markers are version 2: `hostId` uses the **same provider and digest** as the sweep lock (`selftest-sweep-lock.ts`), not the mutable diagnostic `hostname`. Persistent ownership binds the canonical install/target paths, directory inode, bead (scratch), host proof, and the directory's presence on the install root's **current** volume. The stored `identity` keeps its compatible `device:inode` format, but the recorded device number is diagnostic: macOS can assign another `st_dev` after a restart. Both pre-fix and new v1/v2 records keep working when only that number changes; dispatch reuses scratch without rewriting its marker or payload, and a dead owner's cleanup lock can be reclaimed normally. Live path/descriptor/race checks still compare the complete current `(dev, ino)` pair, and lock release still requires the exact current directory, pid, token and member contents. A replaced inode, another install/task/path/host, a directory on a different current volume from its install root, or a symlinked path is still refused. A refusal after restart therefore means another ownership/path/host proof failed, not that an old device number needs editing. Do not re-mark unknown folders or adopt v2 records to work around it.
+
+V2 records also survive network-name changes without rewriting the marker or needing an alias cache. A different stable ID is refused even when the hostname matches. Creating a new ownership record requires an available hardware/machine ID; unlike sweep admission, cleanup does not publish hostname-derived v2 authority. Legacy v1 current-name records retain their root/path/inode/current-volume checks. After a name change, v1 recognition additionally requires that old name in the read-only, stable-ID-authenticated sweep `<lock>.host` cache (`WHEELHOUSE_SELFTEST_SWEEP_LOCK`, default `/tmp/wheelhouse-selftest-sweep.lock`). Missing, foreign, malformed or symlinked caches never authorize an unproven name. Unmarked folders remain unmarked.
 
 ### Explicit legacy scratch host adoption
 
@@ -1364,7 +1522,7 @@ A v1 scratch marker has no stable ID. If its old name cannot be proved locally, 
 bun seats/cleanup-identity.ts adopt-v1 --root "$PWD" --target "$PWD/.wheelhouse-runs/<bead>" --bead '<bead>'
 ```
 
-This explicit authorization checks the existing v1 schema, canonical root, direct scratch target, directory inode and bead before atomically replacing only its marker with a v2 record for this machine. It never runs automatically, never changes payload files, and rejects unmarked folders, v2 markers (including foreign stable IDs), mismatched metadata and symlinked paths. It does not override a cleanup lease. All cooperating transitions share the runtime-directory mutex; keep other writers idle because the final check and replacement are not a kernel compare-and-swap against uncooperative writers.
+A restart alone does not require adoption: a v1 record with a locally proven old name is accepted even when its recorded device number changed. When the old name is unproven, the printed command still applies after a restart; it does not require the obsolete device number to equal today's one. This explicit authorization checks the existing v1 schema, canonical root, direct scratch target, directory inode, current volume matching the install root, and bead before atomically replacing only its marker with a v2 record for this machine. It never runs automatically, never changes payload files, and rejects unmarked folders, v2 markers (including foreign stable IDs), mismatched metadata and symlinked paths. It does not override a cleanup lease. All cooperating transitions share the runtime-directory mutex; keep other writers idle because the final check and replacement are not a kernel compare-and-swap against uncooperative writers.
 
 Adoption emits JSON on stdout and durable `adopt-v1-intent` / `adopted-v1` records in `seats/logs/cleanup-adoptions.jsonl`, including root/target/bead/inode, old hostname, old/new marker hashes and the new stable ID. The audit path is no-follow, regular, single-link and current-user-owned. An intent alone is **not** completed adoption. A failure after marker publication explicitly says v2 was committed: inspect the marker and audit rather than blindly retrying. Dispatch/cleanup still cannot adopt an unproven folder themselves. `cleanup-host.selftest.sh` covers the rename/refusal/adoption boundaries and failing removal controls; `cleanup.selftest.sh` covers actual adapter redispatch after a stored-name change.
 
@@ -1378,7 +1536,7 @@ bun seats/prune.ts prune --from-file prune.tsv --categories merged-worktree,orph
 bun seats/prune.ts categories
 ```
 
-`scan` is read-only and defaults to the install/container root. The scan category `bead-runs` is now named `run-scratch`; `--categories bead-runs` is still accepted. `prune` is dry-run unless `--yes` is present and only acts from a reviewed scan file, never from a fresh implicit scan. Safe rows include closed/merged/pushed fleet worktrees, orphaned checkout directories in worktree containers, stale merged fleet branches with no worktree, stale `.wheelhouse-bench.lock.stale.*` bench lock directories, closed-bead scratch under `.wheelhouse-runs/<bead>*` and `/private/tmp/<bead>-*`, simctl devices named `<closed-bead>-*`, an idle `~/Library/Developer/XCTestDevices` simctl set, and regenerable build caches. Pruning a merged-worktree keeps the merged fleet branch ref; stale-branch rows are archive-tagged (`archive/<branch-without-fleet/>`) before deletion and report `0` bytes because deleting a branch does not reclaim worktree storage. Build-cache means only directories a clean build regenerates at a project/package root: `.wheelhouse-build`, `dist`, `build`, `.next`, `out`, `.build`, `target`, .NET `bin`/`obj`, and Xcode `DerivedData` when explicitly under a scanned root; a directory below a dependency tree (`node_modules`, `vendor`, `.venv`, `venv`, `Pods`, or a dependency-like path segment) is never safe build-cache and is emitted as `needs-review` when matched. Caches under a root with an active `.wheelhouse-bench.lock` are `needs-review`. Rows occupied by a seat in `seats/state.json`, dirty trees, open beads, unmerged work, bead-named scratch or simulators for open/in-progress beads, and anything unverifiable are `needs-review` or `seat-anchor` and are never removed. The XCTestDevices row is safe only when no `xcodebuild` process is running and no device in that set is booted.
+`scan` is read-only and defaults to the install/container root. The scan category `bead-runs` is now named `run-scratch`; `--categories bead-runs` is still accepted. `prune` is dry-run unless `--yes` is present and only acts from a reviewed scan file, never from a fresh implicit scan. Safe rows include closed/merged/pushed fleet worktrees, orphaned checkout directories in worktree containers, stale merged fleet branches with no worktree, stale `.wheelhouse-bench.lock.stale.*` bench lock directories, closed-bead scratch named `.wheelhouse-runs/<bead>`, `.wheelhouse-runs/<bead>-*` or `.wheelhouse-runs/<bead>_*`, and `/private/tmp/<bead>-*`, simctl devices named `<closed-bead>-*`, an idle `~/Library/Developer/XCTestDevices` simctl set, and regenerable build caches. Pruning a merged-worktree keeps the merged fleet branch ref; stale-branch rows are archive-tagged (`archive/<branch-without-fleet/>`) before deletion and report `0` bytes because deleting a branch does not reclaim worktree storage. Build-cache means only directories a clean build regenerates at a project/package root: `.wheelhouse-build`, `dist`, `build`, `.next`, `out`, `.build`, `target`, .NET `bin`/`obj`, and Xcode `DerivedData` when explicitly under a scanned root; a directory below a dependency tree (`node_modules`, `vendor`, `.venv`, `venv`, `Pods`, or a dependency-like path segment) is never safe build-cache and is emitted as `needs-review` when matched. Caches under a root with an active `.wheelhouse-bench.lock` are `needs-review`. Rows occupied by a seat in `seats/state.json`, dirty trees, open beads, unmerged work, bead-named scratch or simulators for open/in-progress beads, and anything unverifiable are `needs-review` or `seat-anchor` and are never removed. The XCTestDevices row is safe only when no `xcodebuild` process is running and no device in that set is booted. A folder whose name only begins with a bead id, without the exact-name, dash or underscore boundary, is not attributed to that bead.
 
 Reviewed scan files are install-bound: TSV starts with a `# wheelhouse-prune-scan-v1` root header; JSON/JSONL starts with an inactive `wheelhouse-prune-scan` v1 metadata record (JSON remains a flat array for host-budget consumers). Even an empty scan records its root. Old headerless files and files from another install are refused; rescan with that install's `seats/prune.ts`. Every row is validated before any action; malformed files exit `2` naming the row and field. JSON `safe` must be the number `0` or `1`, never a string or boolean. Immediately before `--yes` acts, targets are checked again for owned-container/cache scope, canonical paths, existence, seat/live-cwd occupancy and worktree cleanliness. Simulator IDs and XCTest set scope are checked before invoking simctl. Stale or unsafe targets print `SKIPPED ... reason=...`, count as skipped, and exit `0`; missing targets are not reported as reclaimed.
 
@@ -1447,7 +1605,33 @@ For the full host sweep, run the locked runner instead of an ad-hoc loop:
 bash seats/selftest-sweep.sh
 ```
 
-It runs the selected tier serially and, for core and full alike, shares one host-wide FIFO with project benches, direct suites, and `verify.ts` reviews; another seat or install waits indefinitely for admission rather than running heavy work concurrently. `bash seats/selftest-sweep.sh --tier core` runs exactly the sorted `seats/selftest-core.list` (35 suites, including the prune deletion-safety split); every other root suite belongs to full by absence. The default is `--tier full`. `WHEELHOUSE_SELFTEST_SWEEP_TIER=core|full` is the environment form; an explicit flag wins. Core ignores `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` so a filter cannot silently weaken its manifest; full retains the pattern override for targeted diagnostics, never reusable full-batch evidence. Missing/unreadable manifests, invalid or duplicate names, empty lists and missing/unreadable suites STOP with exit2 before lock admission. Comments beginning with `#` and blank lines are allowed. The manifest's original bytes, including comments, determine its SHA-256. Tier environment selection does not leak into nested suite fixtures. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
+It runs the selected tier serially and, for core and full alike, shares one host-wide FIFO with project benches, direct suites, and `verify.ts` reviews; another seat or install waits indefinitely for admission rather than running heavy work concurrently. `bash seats/selftest-sweep.sh --tier core` runs exactly the sorted `seats/selftest-core.list` (including the prune deletion-safety split); every other root suite belongs to full by absence. The default is `--tier full`. `WHEELHOUSE_SELFTEST_SWEEP_TIER=core|full` is the environment form; an explicit flag wins. Core ignores `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` so a filter cannot silently weaken its manifest; full retains the pattern override for targeted diagnostics, never reusable full-batch evidence. Missing/unreadable manifests, invalid or duplicate names, empty lists and missing/unreadable suites STOP with exit2 before lock admission. Comments beginning with `#` and blank lines are allowed. The manifest's original bytes, including comments, determine its SHA-256. Tier environment selection does not leak into nested suite fixtures. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
+
+### Daemon retention fixture
+
+The herald/desk suites drive 24 hours of real scan/refresh work after warm-up.
+Their retention oracle measures **audited owned-state logical footprint**, not
+whole-VM heap or RSS: object identities, reference slots, opaque functions and
+UTF-8/primitive payload bytes. Herald roots include the persisted cursor/pane
+catalog that each poll reloads, plus its live seen array/set; desk roots include
+board/digest snapshots, both caches, pending windows and cancellation closures.
+Shared objects are visited once. The fixed fixture's limits are printed with
+warm/end/peak measurements: herald 128 objects / 12,000 slots, desk 1,024 objects /
+8,192 slots, both zero residual closures and 256 KiB logical payload. These are
+fixed-input test envelopes, **not production graph-size or process-memory caps**.
+Component counters additionally constrain Worker/process/Blob lifetimes and
+seen-table allocation churn; removal controls must reach their own oracle.
+A growing payload inside an otherwise bounded collection is separately rejected.
+
+Native physical footprint (including compressed pages on Darwin), RSS and JSC
+heap remain diagnostics. Collection requests do not establish that every runtime
+allocation has retired; VM capacity and GC scheduling can vary with host load.
+They therefore cannot decide bounded *owned* retention. This is not a proof that
+all Bun/native internals or a production-sized graph have flat memory.
+`WHEELHOUSE_MEMORY_VM_NOISE=1` adds bounded, rotating fixture-owned allocation
+interference during the unchanged drive (two 65,536-object generations). It
+exercises the oracle amid VM churn without a host-wide CPU burner, slowing the
+workload, changing production daemons, or bypassing heavy-test admission.
 
 ### Project benches, reviews, and the host pressure brake
 
@@ -1481,7 +1665,9 @@ Tune the deadline using the per-suite `elapsed=<N>s` numbers retained in the swe
 
 FIFO admission uses a marked sibling `<lock>.queue` directory, leaving the active lock's exact three-file ownership contract unchanged. Registration under the same parent-directory flock assigns a monotonically ordered ticket (not a wall-clock timestamp). Only the oldest live ticket may acquire a free lock; a faster/newer poller cannot pass it. Wait messages report `queue_position`, the current holder and the head PID, updating when these change. Complete PID/host/token records are atomically published; definitive dead-PID tickets are reaped, while live/EPERM owners are preserved. TERM/INT removes only the cancelling runner's ticket, even before acquisition. Empty validated queues are removed without recursive deletion; malformed, foreign or symlinked queues fail closed. A process killed while staging an unpublished private candidate cannot leave an incomplete entry in the visible queue.
 
-The helper retains observed network hostnames in a persistent sibling `<lock>.host` directory, bound to a SHA-256 identity derived from macOS `IOPlatformUUID` (`/usr/sbin/ioreg`, independent of PATH) or Linux `/etc/machine-id`. This lets it recognize lock, queue and waiter markers written before a network-name change, without changing their wire fields. Identity lookup is best-effort: missing, failing or malformed hardware/machine-ID sources fall back to the existing current-hostname behavior rather than blocking a lock operation. In hostname mode the helper leaves any stable-ID cache untouched and does not trust its historical aliases, so changing lookup availability cannot cause a cache-ID mismatch. Network-name-change recognition is available only when a stable source is available. A legacy hostname never observed in this endpoint's cache cannot retrospectively prove its machine after that name changes. Every helper refusal emits a `SELFTEST_LOCK_REFUSAL` JSON record on stderr with operation/reason, current hostname/identity digest, `identitySource` (`darwin-ioplatformuuid`, `linux-machine-id` or `hostname`) and sanitized `identityFailures`, observed marker bytes and a refusal-time lock/queue snapshot (paths, device/inode, nanosecond mtime, full text and base64 bytes). Reads remain no-follow/nonblocking and bounded at 16 KiB per regular marker; missing, unreadable, oversize or nonregular entries are explicitly identified instead of followed or read without a bound. Observed reads and later snapshots are separate because an outside writer need not honor the flock. Diagnostics never authorize removal or repair. All entry modes initialize stable host identity; `inherited` loads the same endpoint hostname cache before checking ancestry/FIFO ownership. Its refusals capture the pinned parent before close. `supervise` also snapshots the endpoint on early validation/admission failures and on release failure (which returns exit 2 rather than throwing). Transition subprocess diagnostics remain visible alongside the supervisor-context diagnostic; each names its own operation.
+The helper retains observed network hostnames in a persistent sibling `<lock>.host` directory, bound to a SHA-256 identity derived from macOS `IOPlatformUUID` (`/usr/sbin/ioreg`, independent of PATH) or Linux `/etc/machine-id`. This lets it recognize lock, queue and waiter markers written before a network-name change, without changing their wire fields. Identity lookup is best-effort: missing, failing or malformed hardware/machine-ID sources fall back to the existing current-hostname behavior rather than blocking a lock operation. An admitted supervisor or sweep retains the successful hardware proof for its exact lock directory identity, live owner PID, token and recorded hostname, and passes that continuity record to its suites. If the hardware lookup later fails or times out, renewal, release and inherited admission can still read that hardware-bound cache using the retained proof, even if the network has renamed the machine meanwhile. This requires the original native supervisor parent for its transition helpers, or verified ancestry from the live lock owner for suites; an exported environment record alone is not admission. The fallback renews validated cache timestamps but neither adds new hostname aliases nor rewrites cache bytes. A new caller without that held-lock proof still recognizes only the current hostname when hardware lookup fails. Markers naming an unobserved foreign host, a different lock identity/owner/token, or a cache with a different hardware identity remain refused; a missing or malformed cache is not repaired automatically. A legacy hostname never observed in this endpoint's cache cannot retrospectively prove its machine after that name changes. Every helper refusal emits a `SELFTEST_LOCK_REFUSAL` JSON record on stderr with operation/reason, current hostname/identity digest, `identitySource` (`darwin-ioplatformuuid`, `linux-machine-id` or `hostname`) and sanitized `identityFailures`, observed marker bytes and a refusal-time lock/queue snapshot (paths, device/inode, nanosecond mtime, full text and base64 bytes). Reads remain no-follow/nonblocking and bounded at 16 KiB per regular marker; missing, unreadable, oversize or nonregular entries are explicitly identified instead of followed or read without a bound. Observed reads and later snapshots are separate because an outside writer need not honor the flock. Diagnostics never authorize removal or repair. All entry modes initialize stable host identity; `inherited` loads the same endpoint hostname cache before checking ancestry/FIFO ownership. Its refusals capture the pinned parent before close. `supervise` also snapshots the endpoint on early validation/admission failures and on release failure (which returns exit 2 rather than throwing). Transition subprocess diagnostics remain visible alongside the supervisor-context diagnostic; each names its own operation.
+
+A refresh ownership refusal keeps the phrase `cannot refresh a different lock owner` and appends every failed check in parentheses. Its JSON record adds `ownership.mismatches`, `ownership.caller` (`pid`, `token`, `identity`, `payloadAlive`) and `ownership.lock` (`pid`, `token`, `identity`), from the same check; existing observed bytes and later snapshots remain separate. `missing caller identity` means the caller supplied no device:inode claim (`caller.identity` is null): check the admission output passed to refresh. `identity` means the supplied device:inode differs from the inspected lock object: compare both identities and investigate replacement of the lock directory. `pid` means the supplied payload PID differs from the lock marker's PID: compare the caller with the admitted payload, not the supervisor/helper process. `token` means the supplied admission token differs from the marker: inspect how that run carried its token between admission and refresh. `payload liveness` means the caller's claimed payload PID is no longer live (`caller.payloadAlive` is false): check that payload's exit and supervisor timing; this is a liveness check, not a PID-birth proof. Multiple failures are listed together; a missing identity is named instead of also reporting an identity mismatch. Do not delete or repair a live lock based on this diagnostic. A refused supervised renewal stops further renewal and makes `supervise` exit **2** after the payload completes, whatever status the payload returned.
 
 #### Missing sweep host record
 
@@ -1534,6 +1720,7 @@ bash seats/prune-safety.selftest.sh
 bash seats/prune.selftest.sh
 bash seats/staffing.selftest.sh
 bash seats/staffing-live.selftest.sh
+bash seats/jev.selftest.sh
 bash seats/alerts.selftest.sh
 bash seats/never-lose-work.selftest.sh
 bash seats/intent-check.selftest.sh
@@ -1628,7 +1815,7 @@ run; to clean it by hand, those pid-stamped dirs are the whole footprint.
 ## The bridge
 
 The bridge is how a human looks at the fleet: ONE tmux window per project,
-built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. `cockpit.sh` builds or attaches the tmux session, records the commander pane in `seats/run/commander-pane.json`, and starts or verifies `seats/supervisor.sh`. The supervisor is the single loop that keeps the Dispatch Office herald, local needs desk, and declared courier alive, runs the same dead-seat recovery pass cockpit runs every `WHEELHOUSE_SEAT_RECOVERY_SECONDS` (default `60`), schedules the nightly cleanup reaper, and replaces the old per-daemon watchdog scripts. A daemon that crashes three times in five minutes is marked in `seats/run/supervisor.state.json`; the supervisor stops restarting it, appends one `daemon-down` inbox row, opens one human notification need, and waits for `seats/supervisor.sh reset <daemon>`. For opt-in reboot/logout keep-alive, `seats/supervisor.sh install-launchd` writes a macOS LaunchAgent plist and prints the `launchctl bootstrap`/`bootout` commands for a human to run; it never loads or unloads the agent itself. Linux users can run `seats/supervisor.sh print-systemd` and install the printed user unit by hand.
+built by `seats/cockpit.sh` and viewed through `seats/floor.ts`. `cockpit.sh` builds or attaches the tmux session, records the commander pane in `seats/run/commander-pane.json`, and starts or verifies `seats/supervisor.sh`. The supervisor is the single loop that keeps the Dispatch Office herald, local needs desk, and declared courier alive, runs the same dead-seat recovery pass cockpit runs every `WHEELHOUSE_SEAT_RECOVERY_SECONDS` (default `60`), schedules the nightly cleanup reaper, and replaces the old per-daemon watchdog scripts. The supervisor also watches completed work: a live herald with no completed scan for `scan-stall-minutes` (default `5`, optional in `wheelhouse/.template-source`; missing or blank means the default) is TERMed, KILLed on the next tick if still alive, and restarted under the same crash-loop budget. A wedged alerts pass is killed on the same TERM/KILL sequence when its snapshot is stale; a failing pass with no live lock holder opens a human need carrying its last output instead. Alerts kills share a three-in-five-minutes hold and notification budget. Neither alerts condition restarts a healthy herald. Deferred commander pokes, pending inbox work and seat tool waits never trigger a restart. Missing or mismatched herald heartbeats mean scan health unknown, not a stall. A daemon that crashes three times in five minutes is marked in `seats/run/supervisor.state.json`; the supervisor stops restarting it, appends one `daemon-down` inbox row, opens one human notification need, and waits for `seats/supervisor.sh reset <daemon>`. For opt-in reboot/logout keep-alive, `seats/supervisor.sh install-launchd` writes a macOS LaunchAgent plist and prints the `launchctl bootstrap`/`bootout` commands for a human to run; it never loads or unloads the agent itself. Linux users can run `seats/supervisor.sh print-systemd` and install the printed user unit by hand.
 
 Daemon launchers use observed readiness, not a startup sleep: herald and courier publish their own PID, desk publishes its bound URL, and supervisor publishes its own PID. An observed child exit or launch error is reported as failure. The CLI has a five-second observation ceiling; if the child remains alive without readiness, it returns `still starting: pid …; observed …` (exit 0), not a failure or a claim of readiness. Logs remain in `seats/logs/<daemon>.{out,stderr}.log`. This ceiling does not terminate a starting service. `seats/run/<daemon>.starting.pid` keeps its live launch distinct from readiness: repeated launch commands wait on that same process, and the supervisor reports `STARTING` without launching duplicates. Cache TTLs, refresh cadence, and background-work deadlines are separate policies and unchanged.
 
@@ -1652,6 +1839,8 @@ duplicate. The tmux status bar carries the project name and the key hints.
 
 The herald is a standalone, non-LLM daemon. Startup refuses a live `seats/run/herald.pid` instead of overwriting it; a root-local PID lock also serializes concurrent daemon starts. `daemons.sh` reads the daemon-owned PID record and restarts a dead instance, including recovery of a dead owner's lock. Separate install roots have separate locks.
 
+Alongside `seats/run/herald.target.json`, `seats/run/herald.heartbeat.json` is the atomic completed-scan record: pid, process startedAt, last completed-scan at, scanCount, inboxBytes, drainCursor, undrainedRows, lastPoke (outcome and at, from this process), and alertsLastLaunchAt. It is written at daemon start and after `pokeCommanderIfSafe` returns, at most once per `WHEELHOUSE_HERALD_HEARTBEAT_MS` (default `10000`); `--once` always writes. A blocked tmux idle check cannot refresh it. `herald.ts --status` and `supervisor.sh --status` show last scan age, undrained rows and last wake outcome; the supervisor also reports alerts OK/STALLED/FAILING/NONE from snapshot age and pass ownership. Alerts are stale at `max(scan-stall-minutes, 3 × snapshot interval)`; a missing snapshot gets the herald's startup grace. `WHEELHOUSE_SCAN_STALL_MS` and `WHEELHOUSE_SUPERVISOR_NOW` inject threshold/time for isolated fixture ticks, not seat-idle policy. Choose a stall threshold comfortably above the heartbeat publication cadence and scan interval; very small explicit thresholds intentionally allow aggressive restarts. Copy `scan-health.ts` with the rest of `seats/` on upgrade.
+
 Selftests that start a real or stub herald source `selftest-herald.sh` and call `selftest_bind_herald_owner "$FIX"` after allocating a marked fixture. The herald reads that explicit fixture-owner record (PID, start generation, UID, physical root), not a temp-path heuristic, and exits if the owning selftest disappears even with a retained fixture. Direct launches use `exec bun ...` so `$!` is the herald, and `selftest_stop_herald_child` stops/waits only a freshly verified direct herald child before fixture deletion. Signal traps exit through the EXIT cleanup; removing the project root remains a separate daemon exit condition. Native normal/failure/INT/TERM/SIGKILL and singleton regressions live in `herald-lifetime.selftest.sh`.
 
 It tails every `seats/logs/*.jsonl` seat stream and appends one JSON object per wake event to `seats/inbox.jsonl`. On first sight of a log with no persisted cursor, it records the current EOF and reads only later appends; this deliberately prevents an upgraded/adopted install from replaying historical seat output into the commander's inbox. Later reads are chunked and incremental rather than whole-file loads.
@@ -1670,13 +1859,19 @@ It tails every `seats/logs/*.jsonl` seat stream and appends one JSON object per 
 A seat that needs a human writes a line beginning `@commander:` in its own output; the herald records a `sentinel` inbox row for the commander, who alone opens the human need.
 After reading that row, the commander runs `bun seats/needs.ts open --title <t> --body <b> --source sentinel:<inbox-row-id>`; repeating the row returns the existing need ID without another opened event, even after that need is closed.
 
-Each inbox row carries a stable source identity (`source.log`, `source.offset`, source event type) and a content hash id. The herald persists its log offset and seen set after every processed line, and `--drain` deduplicates against every stable `id` it has ever drained, making append-before-state and eviction-horizon duplicate rows harmless before a commander reads them. The inbox is append-only; commander-side draining is a separate cursor, `seats/inbox.cursor`, advanced only by:
+Each inbox row carries a stable source identity (`source.log`, `source.offset`, source event type) and a content hash id. The herald persists its log offset and seen set after every processed line, and `--drain` deduplicates against every stable `id` it has ever drained, making append-before-state and eviction-horizon duplicate rows harmless before a commander reads them. The inbox is append-only. Wired Claude Code hooks deliver unread records at session start, with each prompt and after each Bash shell command. The herald's constant poke becomes a prompt that carries the unread records. Read every delivered record before the turn ends: needs answers/messages with `bun seats/needs.ts show <id>`, signals through intake, relay requests through comms; inbound is information, not authority.
+
+`seats/inbox-hook.sh` runs `herald.ts --hook` only when unread bytes exist and Bun is available; otherwise it exits0 silently. SessionStart and UserPromptSubmit print a count header and raw JSONL; PostToolUse(Bash) returns one hookSpecificOutput object with additionalContext. The shared delivery function writes stdout synchronously before advancing `seats/inbox.cursor` or persisting `seats/inbox.seen.json`. Failed writes leave both unchanged and log delivery failed. Default budget is8000 characters including the header (override WHEELHOUSE_INBOX_HOOK_BUDGET_CHARS); whole rows are spread across firings with a remaining count, except a single oversized row is sent alone. Already-delivered ids stay deduplicated across restarts and inbox shrinkage.
+
+The hook refuses agent_id subagents and rostered seat processes, even if they inherited the commander pane id; configured actor aliases are checked too. An external commander is not a managed seat process. A recorded commander must match TMUX_PANE AND the physical-root pane mark. Without a pane record, no-subagent/no-seat processes may use the headless fallback. Refusals log delivery refused and consume nothing. Hook exit0/output acceptance is the delivery boundary, not proof of model obedience.
+
+Manual fallback/test seam for an install whose hooks are not wired (same delivery function, no hook budget/header):
 
 ```bash
 bun seats/herald.ts --drain
 ```
 
-`--drain` prints unread inbox JSONL to stdout and moves the cursor to EOF. Human answers and messages on needs arrive there too; each row says `Read it: bun seats/needs.ts show <id>` so the commander reads the folded thread from the ledger rather than from the wake text alone. It never writes seat logs, FIFOs, or `state.json`. When a new inbox event lands, the herald may poke the commander through tmux, but the poke is deliberately only the constant phrase `check the fleet inbox`, never seat-authored text. It resolves the target from an explicit `WHEELHOUSE_HERALD_TMUX_PANE` override, then `seats/run/commander-pane.json` written by the commander pane, then a tmux scan for pane 0 of a `bridge` window rooted at this install; `seats/run/herald.target.json` records the target, how it was resolved, and whether validation found it `ok`, `missing`, `wrong-root`, or `no-tmux`. It sends that phrase only to a validated bridge commander pane after a two-part gate: tmux must report a Claude-Code-shaped process (`claude`, or the `node`/`bun` wrapper states observed while Claude Code runs tools), and the captured pane text must match the measured idle Claude Code prompt UI rather than the measured active/working UI. If your commander is launched through a wrapper whose idle prompt is not the stock Claude prompt, set `WHEELHOUSE_HERALD_IDLE_RE` to a JavaScript regular expression matching that wrapper's idle-only pane text; active markers still veto the match first. Measure the wrapper before choosing it: while the commander is idle, run `tmux capture-pane -p -J -t wh-<namespace>:bridge.0 -S -200 | tail -40`, then choose a stable line that appears only when idle and verify a mid-turn capture lacks it. Shell commands such as `sh`, `bash`, and `zsh` are outside the allowlist, so a bare shell gets no keystrokes even if its prompt is `❯`. A poke withheld because the pane is busy, invalid, missing, or inside the cooldown is left pending and retried on later herald scans until it can be sent; after `WHEELHOUSE_HERALD_POKE_ESCALATE_MS` (default 300000) of not-idle deferrals, the herald sends the wake anyway once active markers are clear. `seats/logs/herald.out.log` distinguishes `poke refused` (invalid or missing target), `poke deferred`, `poke sent`, `poke escalated`, and `poke dropped` (for already-drained rows or send failure). Poke delivery is a wake-up hint, not correctness: a commander drains at session start, after every dispatch, and whenever poked.
+Manual `--drain` prints unread inbox JSONL to stdout and advances past complete delivered rows only after the write succeeds. Human answers and messages on needs arrive there too; each row says `Read it: bun seats/needs.ts show <id>` so the commander reads the folded thread from the ledger rather than from the wake text alone. It never writes seat logs, FIFOs, or `state.json`. When a new inbox event lands, the herald may poke the commander through tmux, but the poke is deliberately only the constant phrase `check the fleet inbox`, never seat-authored text. It resolves the target from an explicit `WHEELHOUSE_HERALD_TMUX_PANE` override, then `seats/run/commander-pane.json` written by the commander pane, then a tmux scan for panes marked with `@wheelhouse_commander` equal to this install's physical root (preferring `wh-<namespace>` case-insensitively, regardless of window name or pane index). Every candidate must have a working directory under the root AND that exact mark, including overrides and recorded pane IDs; a reused/unmarked same-project pane is not a commander. Cockpit marks and records its commander pane on first build and every re-run. For a commander outside cockpit, run `seats/cockpit.sh --claim-commander` inside its pane once (or supply a pane argument). Pane marks require tmux 3.0 or newer; cockpit stops if it cannot set one. `seats/run/herald.target.json` records the target, resolution source and one of five statuses: `ok`, `missing`, `wrong-root`, `not-commander`, `no-tmux`. `not-commander` includes the mark seen (`-` when absent), logs once per change and appears in `herald.ts --status` and the commander-pane-invalid alert. Inbox collection and `--drain` still work without a claimed commander; only wake delivery is withheld. It sends that phrase only to a validated marked commander pane after a two-part gate: tmux must report a Claude-Code-shaped process (`claude`, or the `node`/`bun` wrapper states observed while Claude Code runs tools), and the captured pane text must match the measured idle Claude Code prompt UI rather than the measured active/working UI. If your commander is launched through a wrapper whose idle prompt is not the stock Claude prompt, set `WHEELHOUSE_HERALD_IDLE_RE` to a JavaScript regular expression matching that wrapper's idle-only pane text; active markers still veto the match first. Measure the wrapper before choosing it: while the commander is idle, run `tmux capture-pane -p -J -t wh-<namespace>:bridge.0 -S -200 | tail -40`, then choose a stable line that appears only when idle and verify a mid-turn capture lacks it. Shell commands such as `sh`, `bash`, and `zsh` are outside the allowlist, so a bare shell gets no keystrokes even if its prompt is `❯`. A poke withheld because the pane is busy, invalid, missing, or inside the cooldown is left pending and retried on later herald scans until it can be sent; after `WHEELHOUSE_HERALD_POKE_ESCALATE_MS` (default 300000) of not-idle deferrals, the herald sends the wake anyway once active markers are clear. `seats/logs/herald.out.log` distinguishes `poke refused` (invalid or missing target), `poke deferred`, `poke sent`, `poke escalated`, and `poke dropped` (for already-drained rows or send failure). Poke delivery is a wake-up hint; wired lifecycle hooks carry the actual records, which the commander reads before the turn ends.
 
 ### The floor
 

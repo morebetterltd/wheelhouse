@@ -70,7 +70,7 @@ import { harnessNameForSeat, requirePiHarness } from "./harness";
 import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
-import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
+import { SeatWorktreeError, checkSeatSkills, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
 import { agentSettledEvent, barePidAlive, eventTimeIso, inspectProcessStart, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath, seatIdentity, SeatIdentityUnverified } from "./seat-activity";
 import { seatTurnDisplay } from "./seat-turn-display";
 import { QUOTA_RE } from "./quota";
@@ -1725,7 +1725,7 @@ function processRows(): ProcessRowsSnapshot {
     const rows = new Map<number, ProcessRow>();
     for (const [index, line] of result.stdout.split(/\n/).entries()) {
       if (!line.trim()) continue;
-      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.*)$/);
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.*)$/s);
       if (!m) return { rows: null, error: `ps returned a malformed census record at line ${index + 1}` };
       const start = Date.parse(m[3]);
       rows.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), startMs: Number.isFinite(start) ? start : null, command: m[4] || "" });
@@ -2041,14 +2041,33 @@ function rotateLogIfSafe(name: string, log: string, last: string): void {
   fs.truncateSync(log, 0);
 }
 
+function staffingTrailer(state: State, roster: Record<string, SeatEntry>): string | null {
+  if (!hasPool(ROOT)) return null;
+  try {
+    const pool = loadPool(ROOT);
+    let workers = 0;
+    // Review identities are live registrations, not resident adapter processes:
+    // verify.ts starts their ephemeral process only when a review is assigned.
+    const reviewers = Object.values(roster).filter((entry) => !entry.external && entry.role === "reviewer").length;
+    for (const [name, rec] of Object.entries(state.seats)) {
+      const entry = roster[name];
+      if (!entry || entry.external || entry.role !== "worker" || !pidAlive(rec.pid, rec.fifo, rec.startedAt)) continue;
+      workers++;
+    }
+    return `staffing: workers ${workers}/${pool.roles.workers?.min ?? 0}..${pool.roles.workers?.max ?? 0} · reviewers ${reviewers}/${pool.roles.reviewers?.min ?? 0}..${pool.roles.reviewers?.max ?? 0} · see bun seats/staffing.ts status`;
+  } catch { return null; }
+}
+
 async function cmdStatus(): Promise<void> {
   const state = readState();
   const names = Object.keys(state.seats);
+  const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
   if (names.length === 0) {
     console.log("no seats recorded in seats/state.json");
+    const staffing = staffingTrailer(state, roster);
+    if (staffing) console.log(staffing);
     return;
   }
-  const roster = fs.existsSync(ROSTER_FILE) ? readRoster() : {};
   const census = processRows();
   if (census.rows === null) console.error(`UNVERIFIED orphan census: ${census.error}; no absence of extra processes inferred; recorded seat rows still reported`);
   const rows = census.rows;
@@ -2122,6 +2141,8 @@ async function cmdStatus(): Promise<void> {
       }
     }
   }
+  const staffing = staffingTrailer(state, roster);
+  if (staffing) console.log(staffing);
   if (sawSettled) reportHostBudgetWorktreeCap();
 }
 
@@ -2217,6 +2238,23 @@ async function cmdStopAll(): Promise<void> {
   }
 }
 
+// No account, process, state lock or provider access: this is a filesystem/Git
+// check of the cwd the seat actually uses, not another spawn or repair path.
+function cmdSkillsCheck(name: string): void {
+  try {
+    validateSeatName(name);
+    const entry = parseRosterFile()[name];
+    if (!entry) throw new Error("not in the roster");
+    const harness = harnessNameForSeat(name, entry);
+    const cwd = readState().seats[name]?.cwd ?? seatWorktreeDir(ROOT, name);
+    const skills = checkSeatSkills(ROOT, path.resolve(ROOT, cwd), harness);
+    for (const skill of skills) console.log(skill);
+  } catch (e: any) {
+    process.stderr.write(`STOP: ${name}: ${e.message}\n`);
+    process.exit(2);
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 const [cmd, ...argvRest] = process.argv.slice(2);
@@ -2252,6 +2290,12 @@ async function main(): Promise<void> {
     case "steer":
       if (rest.length !== 2) die("usage: adapter.ts steer <seat> <text>");
       return cmdSteer(validateSeatName(rest[0]), rest[1]);
+    case "skills-check":
+      if (rest.length !== 1) {
+        process.stderr.write("STOP: usage: adapter.ts skills-check <seat>\n");
+        process.exit(2);
+      }
+      return cmdSkillsCheck(rest[0]);
     case "status":
       return cmdStatus();
     case "stop":
@@ -2267,7 +2311,7 @@ async function main(): Promise<void> {
       if (rest.length !== 1) die("usage: adapter.ts reset <seat>");
       return cmdReset(validateSeatName(rest[0]));
     default:
-      die("usage: adapter.ts spawn|probe|dispatch|steer|status|stop|stop-all|resume|reset ...");
+      die("usage: adapter.ts spawn|probe|dispatch|steer|skills-check|status|stop|stop-all|resume|reset ...");
   }
 }
 

@@ -114,6 +114,13 @@ if bun "$HERE/fixtures/log-rotation-owner.ts" "$FIX/log-rotation-runtime" "$FIX"
 else
   fail "status log-rotation ownership regression"
 fi
+phase "0. factory skills in prepared seat and one-shot worktrees"
+selftest_copy_seat_runtime "$FIX/skills-runtime" "$ADAPTER_DIR" || exit 2
+if bun "$HERE/fixtures/adapter-skills.ts" "$FIX/skills-runtime" "$FIX/skills-check"; then
+  pass "skills-check lists five for Claude Code, Codex and Pi; missing/dirty skills refuse without repair"
+else
+  fail "factory skills-check or scratch-worktree regression"
+fi
 fi
 # Dispatch must pass the real contract gate too (fleet/producer enables it).
 export WHEELHOUSE_CONTRACT_FIXTURE="$FIX/dispatch-contract.md"
@@ -559,6 +566,18 @@ fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/skills-worktrees.after"
 fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/skills-status.after"
 LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
 if cmp -s "$FIX/contract-state.before" "$REFUSE_PROJ/seats/state.json" && cmp -s "$FIX/contract-worktrees.before" "$FIX/skills-worktrees.after" && cmp -s "$FIX/contract-status.before" "$FIX/skills-status.after" && [ "$LAUNCHES_BEFORE" = "$LAUNCHES_AFTER" ]; then pass 'Skills refusal: state, worktree and launch count unchanged'; else fail 'Skills refusal: side effect occurred'; fi
+# D3: the disposition, not the adapter caller's actor, must name the producer.
+bun -e 'import fs from "node:fs"; const file=process.argv[1],r=JSON.parse(fs.readFileSync(file,"utf8"));r.seats["fixture-producer"]={role:"producer",external:true,runtime:"commander-subagent"};fs.writeFileSync(file,JSON.stringify(r));' "$REFUSE_PROJ/seats/seats.json" || exit 2
+PRODUCED_SIGNAL="$(WHEELHOUSE_INTAKE_ROOT="$REFUSE_PROJ" bun "$HERE/intake.ts" post --kind finding --source fixture --title 'Produced-by refusal' --text 'A commander disposition must not dispatch work')" || exit 2
+WHEELHOUSE_INTAKE_ROOT="$REFUSE_PROJ" BEADS_ACTOR=commander bun "$HERE/intake.ts" dispose "$PRODUCED_SIGNAL" produced --work producer-refusal >/dev/null || exit 2
+bun -e 'import fs from "node:fs";const[src,dest,id]=process.argv.slice(1);fs.writeFileSync(dest,fs.readFileSync(src,"utf8").replace(/^Signal:.*$/m,"Signal: "+id));' "$FIX/dispatch-contract.md" "$FIX/produced-contract.md" "$PRODUCED_SIGNAL" || exit 2
+cp -f "$REFUSE_PROJ/seats/intake.jsonl" "$FIX/produced-ledger.before"
+WHEELHOUSE_DISPATCH_FORCE=1 WHEELHOUSE_CONTRACT_FIXTURE="$FIX/produced-contract.md" WHEELHOUSE_INTAKE_ROOT="$REFUSE_PROJ" WHEELHOUSE_INTAKE_FIXTURE="$REFUSE_PROJ/seats/intake.jsonl" run dispatch worker-1 producer-refusal 'must never reach a seat'
+[ "$RC" = 1 ] && says "refused: signal $PRODUCED_SIGNAL was produced by commander, not the producer seat \"fixture-producer\"" && pass 'produced-by refusal: commander disposition names signal and producer; force cannot bypass' || fail "produced-by refusal rc=$RC: $OUT"
+fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/produced-worktrees.after"
+fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/produced-status.after"
+LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
+if cmp -s "$FIX/contract-state.before" "$REFUSE_PROJ/seats/state.json" && cmp -s "$FIX/contract-worktrees.before" "$FIX/produced-worktrees.after" && cmp -s "$FIX/contract-status.before" "$FIX/produced-status.after" && cmp -s "$FIX/produced-ledger.before" "$REFUSE_PROJ/seats/intake.jsonl" && [ "$LAUNCHES_BEFORE" = "$LAUNCHES_AFTER" ]; then pass 'produced-by refusal: no process spawned; state, worktree and ledger unchanged'; else fail 'produced-by refusal: side effect occurred'; fi
 if [ "${WHEELHOUSE_CONTRACT_REFUSAL_ONLY:-0}" = 1 ]; then [ "$FAILED" = 0 ]; exit $?; fi
 RUN_PROJ="$PROJ"
 phase "0a0. state lock waits visibly for live holders; safely reclaims abandoned writers"
@@ -1548,6 +1567,23 @@ else fail "status did not survive adapter restart (exit $RC): $OUT"; fi
 if ! says "account fixture-human-account"; then
   pass "status still works for a roster with no account.label"
 else fail "status carried a label from a different roster into an unlabeled seat: $OUT"; fi
+if ! says "staffing:"; then pass "adapter status has no staffing trailer without a pool"
+else fail "adapter status printed staffing trailer without pool: $OUT"; fi
+mkdir -p "$HOME_FIX/.pi-seats-proj/rv1"
+cat > "$PROJ/seats/pool.json" <<'JSON'
+{"version":1,"entries":{"rv1":{"harness":"codex","provider":"openai","models":["rv"],"account":{"dir":"~/.pi-seats-proj/rv1","authRoute":"env"}}},"roles":{"reviewers":{"min":0,"max":1,"entries":["rv1"],"model":"rv"}}}
+JSON
+run status
+if [ $RC -eq 0 ] && says "staffing: workers 1/0..0 · reviewers 0/0..1 · see bun seats/staffing.ts status"; then pass "adapter status appends staffing trailer when a pool exists"
+else fail "adapter status missing staffing trailer with pool (rc=$RC): $OUT"; fi
+# Reviewers are registered identities; they have no persistent adapter pid.
+cat > "$PROJ/seats/staffing.json" <<'JSON'
+{"version":1,"seats":{"reviewer-rv1":{"role":"reviewer","entry":"rv1","addedAt":"2026-01-01T00:00:00Z"}}}
+JSON
+run status
+if [ $RC -eq 0 ] && says "staffing: workers 1/0..0 · reviewers 1/0..1"; then pass "adapter status counts a live role reviewer in the pool trailer"
+else fail "adapter status miscounted role reviewer (rc=$RC): $OUT"; fi
+rm -f "$PROJ/seats/pool.json" "$PROJ/seats/staffing.json"
 
 phase "5. no tokens — identity never leaks into state or logs"
 if selftest_capture_lacks "$STATE" -q -- "$SENTINEL" && ! grep -rq "$SENTINEL" "$PROJ/seats/logs/"; then
@@ -1842,6 +1878,7 @@ RUN_PROJ="$PROJ"; STATE="$PROJ/seats/state.json"; LOG="$PROJ/seats/logs/worker-1
 phase "6e. captured process census — capacity and unavailable observations"
 if bash "$HERE/fixtures/adapter-census-run.sh" "$FIX/census-cases" "$ADAPTER"; then
   pass 'captured large census reports real duplicate; failed/invalid census is UNVERIFIED with healthy rows visible'
+  pass 'status census reads command lines with line separators'
 else fail 'captured process census lost data or silently guessed absence'; fi
 
 phase "7. host build budget — opt-in PATH shim serializes cargo and allows re-entrant children"

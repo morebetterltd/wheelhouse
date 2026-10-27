@@ -216,7 +216,9 @@ contain_suite_tree(){
 suite_watchdog(){ (
   # This asynchronous child must never run the parent's lock-release traps.
   trap - EXIT
-  trap '' INT TERM HUP
+  # Cleanup must not depend on a diagnostic pipe still having a reader.
+  # Otherwise the first TERM log write can kill this watchdog before its kill.
+  trap '' INT TERM HUP PIPE
   local root="$1" dir="$2" message=""
   local deadline=$((SECONDS+SUITE_TIMEOUT_S)) remaining slice renewal_rc=0 poll_rc
   while :; do
@@ -316,8 +318,12 @@ start_suite(){
 }
 
 finish_current_suite(){
-  local mode="$1" watch_rc=0
+  local mode="$1" watch_rc=0 saved_pipe_trap
   [ -n "$CURRENT_SUITE_PID" ] || return 0
+  # Cover the synchronous survivor check/fallback too. Restore the caller's
+  # disposition before another suite is launched; suites must not inherit it.
+  saved_pipe_trap="$(trap -p PIPE)"
+  trap '' PIPE
   if [ "$mode" = stop ]; then printf 'stop\n' >&9; fi
   if [ -n "$WATCHDOG_PID" ]; then
     if [ "$mode" != stop ]; then wait "$CURRENT_SUITE_PID"; SUITE_RC=$?; printf 'done\n' >&9; fi
@@ -353,19 +359,36 @@ finish_current_suite(){
   retire_review_group || { info 'STOP: cannot retire review suite group'; SUITE_RC=2; }
   CURRENT_SUITE_PID=""; WATCHDOG_PID=""; SUITE_STATE=""
   [ "$watch_rc" = 0 ] || SUITE_RC=2
+  if [ -n "$saved_pipe_trap" ]; then eval "$saved_pipe_trap"; else trap - PIPE; fi
 }
 
 acquire_lock(){
   local previous="" result rc
-  # A project bench or verify.ts may already own admission. Reuse only a
-  # validated ancestor's token/FIFO head, never a caller-supplied bypass flag.
-  if bun "$LOCK_HELPER" inherited "$LOCK"; then return 0; else rc=$?; fi
-  [ "$rc" = 75 ] || { info "STOP: selftest-sweep ancestry check failed (exit $rc)"; exit 2; }
+  # Ordinary nested runs reuse only validated ancestor/FIFO ownership. A
+  # nightly requests fresh admission: even an ancestor's live review is busy,
+  # not permission to run another nightly payload under its token.
+  if [ "${WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT:-0}" != 1 ]; then
+    if bun "$LOCK_HELPER" inherited "$LOCK"; then return 0; else rc=$?; fi
+    [ "$rc" = 75 ] || { info "STOP: selftest-sweep ancestry check failed (exit $rc)"; exit 2; }
+  fi
   while :; do
-    result="$(bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
+    result="$(WHEELHOUSE_SELFTEST_SWEEP_CAPTURE_IDENTITY=1 bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
     case "$rc" in
-      0) ENROLLED=1; OWNED_LOCK="$result"; return 0 ;;
-      75) ENROLLED=1 ;; # Validated, durably registered waiter, not a Bun error.
+      0)
+        ENROLLED=1; OWNED_LOCK="${result%%$'\n'*}"
+        WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY=""
+        case "$result" in *$'\n'*) WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY="${result#*$'\n'}" ;; esac
+        export WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY
+        # Admission-only: nested fixture runners keep ordinary wait semantics.
+         unset WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT
+        return 0 ;;
+      75) ENROLLED=1
+          # Opt-in nightly admission: EXIT withdraws only our validated ticket.
+          # Ordinary reviews retain FIFO waiting. Status 75 means skipped.
+          if [ "${WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT:-0}" = 1 ]; then
+            info "selftest-sweep: SKIP lock busy $LOCK $result"
+            exit 75
+          fi ;; # Validated waiter, not a Bun error.
       *) info "STOP: selftest-sweep lock helper failed (exit $rc)"; exit 2 ;;
     esac
     if [ "$previous" != "$result" ]; then
@@ -390,6 +413,7 @@ finish_sweep(){
   # A startup allocation error must not erase a signal already accepted there.
   [ -z "$PENDING_INTERRUPT" ] || rc="$PENDING_INTERRUPT"
   trap - EXIT
+  trap '' PIPE
   if [ -n "$CURRENT_SUITE_PID" ]; then finish_current_suite stop; fi
   if [ -n "$SUITE_STATE" ]; then exec 8>&- 9>&-; rm -rf "$SUITE_STATE"; fi
   release_lock || rc=2
@@ -401,7 +425,7 @@ interrupt_sweep(){
     [ -n "$PENDING_INTERRUPT" ] || PENDING_INTERRUPT="$rc"
     return
   fi
-  trap '' INT TERM HUP
+  trap '' INT TERM HUP PIPE
   finish_current_suite stop
   exit "$rc"
 }

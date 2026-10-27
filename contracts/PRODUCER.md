@@ -14,7 +14,7 @@ Your assembled brief carries the intent and outcomes skills in full, each headed
 
 Split anything bigger than one sitting into dependent beads.
 
-When you decompose an ISA Goal into more than one bead, name the integration branch as `fleet/<goal-slug>`: you choose the slug, and it stays stable for the life of the goal. Write `Integration: fleet/<goal-slug>` on the epic and on every child. Group the children into outcome groups — the sets that reach the default line as one PR — and list those outcome groups on the epic. A goal that is one bead gets no branch. You do not create the branch, because you never edit product repos; the integrator creates it at first dispatch per `wheelhouse/INTEGRATOR.md`.
+When you decompose an ISA Goal into more than one bead, name the integration branch as `fleet/<goal-slug>`: you choose the slug, and it stays stable for the life of the goal. Write `Integration: fleet/<goal-slug>` on the epic and on every child. Group the children into outcome groups — the sets that reach the default line as one PR — and list those outcome groups on the epic. A goal that is one bead gets no branch. You do not create the branch, because you never edit product repos; the integrator creates it at first dispatch per `wheelhouse/INTEGRATOR.md`. For retirement, follow its **Retiring a goal branch that reached the default line** paragraph under `### Two integration modes`.
 
 ### Constraints
 

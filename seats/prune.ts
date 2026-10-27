@@ -245,7 +245,11 @@ function beadFor(name: string, beads: Map<string, string>): [string, string] | n
 }
 function beadPrefix(name: string, beads: Map<string, string>, sep = ""): [string, string] | null {
   let best: [string, string] | null = null;
-  for (const [id, st] of beads) if (name.startsWith(`${id}${sep}`) && (!best || id.length > best[0].length)) best = [id, st];
+  for (const [id, st] of beads) {
+    const matches = sep ? name.startsWith(`${id}${sep}`)
+      : name === id || name.startsWith(`${id}-`) || name.startsWith(`${id}_`);
+    if (matches && (!best || id.length > best[0].length)) best = [id, st];
+  }
   return best;
 }
 function pidAlive(pid: number | null): boolean {
@@ -342,8 +346,8 @@ function pushInProgress(root: string, p: string, live: Set<string> | null): stri
   const processLines = observation.stdout.split("\n");
   if (!processLines.some(line => Number(/^\s*(\d+)\s+/.exec(line)?.[1]) === process.pid)) return "cannot verify pushes in flight: native process table lacks the observing process";
   for (const line of processLines) {
-    const m = line.match(/^\s*(\d+)\s+(.*)$/);
-    if (!m || !/\bgit(-remote-\w+)?\b.*\bpush\b/.test(m[2])) continue;
+    const m = line.match(/^\s*(\d+)\s+(.*)$/s);
+    if (!m || !/\bgit(-remote-\w+)?\b.*\bpush\b/s.test(m[2])) continue;
     const cwd = processCwd(Number(m[1]));
     if (cwd && (insideOf(cwd, path.resolve(p)) || insideOf(cwd, realpathOr(p) ?? p))) return `pid ${m[1]} is running git push`;
   }

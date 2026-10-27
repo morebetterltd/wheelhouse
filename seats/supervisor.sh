@@ -25,21 +25,41 @@ append_alert(){
   if [ -f "$SEATS/inbox.jsonl" ] && grep -q "\"id\":\"$id\"" "$SEATS/inbox.jsonl" 2>/dev/null; then return 0; fi
   title="$d keeps dying"; body="$detail
 Restart after fixing: seats/supervisor.sh reset $d"
-  printf '{"id":"%s","at":"%s","seat":"supervisor","class":"daemon-down","state":"failed","title":%s,"detail":%s}\n' "$id" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(json_string "$title")" "$(json_string "$body")" >> "$SEATS/inbox.jsonl"
+  printf '{"id":"%s","at":"%s","seat":"supervisor","class":"daemon-down","state":"failed","title":%s,"detail":%s}\n' "$id" "$(now_iso)" "$(json_string "$title")" "$(json_string "$body")" >> "$SEATS/inbox.jsonl"
   if command -v bun >/dev/null 2>&1 && [ -f "$SEATS/needs.ts" ]; then
     (cd "$ROOT" && bun seats/needs.ts open --kind notify --source "supervisor:$d" --title "$title" --body "The $d service stopped repeatedly, so related fleet updates may stop flowing. Check the last stderr lines, fix the service, then run: seats/supervisor.sh reset $d" >/dev/null 2>&1) || true
   fi
 }
 
+scan_health(){ bun "$SEATS/scan-health.ts" "$1" "$ROOT"; }
+tick_scan_health(){
+  [ -f "$SEATS/scan-health.ts" ] && command -v bun >/dev/null 2>&1 || return 0
+  local records health_kind health_name health_first health_detail
+  mkdir -p "$RUN" "$LOGS"
+  records="$(scan_health --tick 2>> "$LOGS/supervisor.stderr.log")" || { printf '%s STOP: scan health check failed\n' "$(now_iso)" >> "$OUT_LOG"; return 1; }
+  [ -n "$records" ] || return 0
+  while IFS="$(printf '\037')" read -r health_kind health_name health_first health_detail; do
+    if [ "$health_kind" = retiring ]; then
+      HERALD_RETIRED_THIS_TICK=1
+    elif [ "$health_kind" = alert ]; then
+      append_alert "$health_name" "$health_first" "$health_detail"
+    elif [ "$health_kind" = need ] && [ -f "$SEATS/needs.ts" ]; then
+      (cd "$ROOT" && bun seats/needs.ts open --kind notify --source "supervisor:$health_name" --title "$health_name pass failing" --body "$health_detail") >> "$OUT_LOG" 2>&1 || true
+    fi
+  done <<< "$records"
+}
+now_iso(){ node -e 'console.log(new Date(process.env.WHEELHOUSE_SUPERVISOR_NOW || Date.now()).toISOString())'; }
+
 tick_daemon(){
   d="$1"; should_run "$d" || return 0
+  [ "$d" != herald ] || [ "${HERALD_RETIRED_THIS_TICK:-0}" != 1 ] || return 0
   daemon_starting "$d" && return 0
   rec="$(state_get "$d")"; crash="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); console.log(j.crashLoop?"1":"0")})')"
   [ "$crash" = 1 ] && return 0
   old="$(cat "$RUN/$d.pid" 2>/dev/null || true)"; if daemon_alive "$d"; then return 0; fi
-  out="$(restart_cmd "$d" 2>&1 || true)"; new="$(cat "$RUN/$d.pid" 2>/dev/null || true)"; now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; tail5="$(last_stderr "$d")"
+  out="$(restart_cmd "$d" 2>&1 || true)"; new="$(cat "$RUN/$d.pid" 2>/dev/null || true)"; now="$(now_iso)"; tail5="$(last_stderr "$d")"
   printf '%s %s restarted: pid %s (previous pid %s dead)\n%s\n' "$now" "$d" "${new:-?}" "${old:-?}" "$tail5" >> "$OUT_LOG"
-  data="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); let now=process.argv[1], pid=process.argv[2]; let cutoff=Date.now()-300000; let rs=(j.restarts||[]).filter(x=>Date.parse(x)>=cutoff); rs.push(now); j.restarts=rs; j.lastPid=pid; j.crashLoop=rs.length>=3; console.log(JSON.stringify(j));})' "$now" "$new")"
+  data="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); let now=process.argv[1], pid=process.argv[2]; let cutoff=Date.parse(now)-300000; let rs=(j.restarts||[]).filter(x=>Date.parse(x)>=cutoff&&Date.parse(x)<=Date.parse(now)); rs.push(now); j.restarts=rs; j.lastPid=pid; j.crashLoop=rs.length>=3; console.log(JSON.stringify(j));})' "$now" "$new")"
   state_set "$d" "$data"
   if printf '%s' "$data" | grep -q '"crashLoop":true'; then first="$(printf '%s' "$data" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s); console.log(j.restarts[0])})')"; append_alert "$d" "$first" "$tail5"; fi
 }
@@ -92,8 +112,50 @@ tick_digest(){
   (cd "$ROOT" && exec </dev/null >> "$LOGS/digest.out.log" 2>> "$LOGS/digest.stderr.log"; WHEELHOUSE_DIGEST_ROOT="$ROOT" bun seats/digest.ts --notify) &
   printf '%s digest started for %s (pid %s)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$day" "$!" >> "$OUT_LOG"
 }
-tick(){ tick_daemon herald; tick_daemon desk; tick_daemon courier; tick_recovery; tick_isa_signals; tick_cleanup; tick_digest; }
-status(){ for d in herald desk courier; do if ! should_run "$d"; then echo "$d SKIPPED"; continue; fi; rec="$(state_get "$d")"; crash="$(printf '%s' "$rec" | grep -q '"crashLoop":true' && echo 1 || echo 0)"; if [ "$crash" = 1 ]; then since="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); console.log((j.restarts||[])[0]||"")})')"; echo "$d CRASH-LOOP since $since"; elif daemon_starting "$d"; then echo "$d STARTING pid $(cat "$RUN/$d.starting.pid")"; elif daemon_alive "$d"; then echo "$d RUNNING pid $(cat "$RUN/$d.pid")"; else echo "$d DEAD"; fi; done; }
+manual_check_enabled(){ v="$(sed -n 's/^manual_check=//p' "$ROOT/wheelhouse/.template-source" 2>/dev/null | tail -1)"; [ "$v" != off ]; }
+tick_manual_check(){
+  local ms day hour want
+  manual_check_enabled || return 0
+  [ -f "$SEATS/manual-check.ts" ] && command -v bun >/dev/null 2>&1 || return 0
+  ms="$(now_ms)"; day="$(local_day "$ms")"; hour="$(local_hour "$ms")"
+  want="$(node -e 'const s=process.argv[1]||"05",n=Number(s); if(!/^[0-9]{1,2}$/.test(s)||!Number.isInteger(n)||n<0||n>23)process.exit(2);console.log(String(n).padStart(2,"0"));' "${WHEELHOUSE_MANUAL_CHECK_HOUR:-05}")" || return 1
+  [ "$hour" = "$want" ] || return 0
+  [ "$(supervisor_state_get lastManualCheckDay)" != "$day" ] || return 0
+  supervisor_state_set lastManualCheckDay "$day"
+  (cd "$ROOT" && exec </dev/null >> "$LOGS/manual-check.out.log" 2>> "$LOGS/manual-check.stderr.log"; WHEELHOUSE_MANUAL_CHECK_ROOT="$ROOT" bun seats/manual-check.ts) &
+  printf '%s manual check started for %s (pid %s)\n' "$(now_iso)" "$day" "$!" >> "$OUT_LOG"
+}
+# Nightly full tier only. Keep this independent of cleanup/digest scheduling.
+sweep_enabled(){ v="$(sed -n 's/^sweep=//p' "$ROOT/wheelhouse/.template-source" 2>/dev/null | tail -1)"; [ "$v" != off ]; }
+tick_sweep(){
+  local ms day hour want raw check rc
+  sweep_enabled || return 0
+  [ -f "$SEATS/nightly-sweep.ts" ] && [ -f "$SEATS/nightly-state.ts" ] || return 0
+  command -v bun >/dev/null 2>&1 || return 0
+  ms="$(now_ms)"; day="$(local_day "$ms")"; hour="$(local_hour "$ms")"
+  raw="${WHEELHOUSE_SUPERVISOR_SWEEP_HOUR:-$(sed -n 's/^sweep-hour=//p' "$ROOT/wheelhouse/.template-source" 2>/dev/null | tail -1)}"
+  want="$(bun -e 'const s=process.argv[1]||"03",n=Number(s); if(!/^[0-9]{1,2}$/.test(s)||!Number.isInteger(n)||n<0||n>23) process.exit(2); console.log(String(n).padStart(2,"0"));' "$raw")" || {
+    if [ "$(supervisor_state_get lastSweepDay)" != "$day" ]; then
+      supervisor_state_set lastSweepDay "$day"
+      WHEELHOUSE_NIGHTLY_ROOT="$ROOT" bun "$SEATS/nightly-state.ts" --missed 'invalid sweep-hour (expected 00-23)' >> "$OUT_LOG" 2>&1 || true
+    fi
+    return 0
+  }
+  [ "$hour" = "$want" ] || return 0
+  [ "$(supervisor_state_get lastSweepDay)" != "$day" ] || return 0
+  supervisor_state_set lastSweepDay "$day"
+  check="$(WHEELHOUSE_NIGHTLY_ROOT="$ROOT" bun "$SEATS/nightly-state.ts" --check 2>&1)"; rc=$?
+  if [ "$rc" != 0 ]; then
+    printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${check:-nightly sweep preflight failed (exit $rc)}" >> "$OUT_LOG"
+    return 0
+  fi
+  (cd "$ROOT" && exec </dev/null >> "$LOGS/nightly-sweep.out.log" 2>> "$LOGS/nightly-sweep.stderr.log";
+    unset WHEELHOUSE_SELFTEST_SWEEP_PATTERN WHEELHOUSE_SELFTEST_SWEEP_TIER
+    WHEELHOUSE_NIGHTLY_ROOT="$ROOT" bun seats/nightly-sweep.ts) &
+  printf '%s nightly sweep started for %s (pid %s)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$day" "$!" >> "$OUT_LOG"
+}
+tick(){ HERALD_RETIRED_THIS_TICK=0; tick_scan_health; tick_daemon herald; tick_daemon desk; tick_daemon courier; tick_recovery; tick_isa_signals; tick_cleanup; tick_digest; tick_manual_check; tick_sweep; }
+status(){ for d in herald desk courier; do if ! should_run "$d"; then echo "$d SKIPPED"; continue; fi; rec="$(state_get "$d")"; crash="$(printf '%s' "$rec" | grep -q '"crashLoop":true' && echo 1 || echo 0)"; if [ "$crash" = 1 ]; then since="$(printf '%s' "$rec" | node -e 'let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{let j=JSON.parse(s||"{}"); console.log((j.restarts||[])[0]||"")})')"; echo "$d CRASH-LOOP since $since"; elif daemon_starting "$d"; then echo "$d STARTING pid $(cat "$RUN/$d.starting.pid")"; elif daemon_alive "$d"; then if [ "$d" = herald ] && [ -f "$SEATS/scan-health.ts" ]; then scan_health --herald-status; else echo "$d RUNNING pid $(cat "$RUN/$d.pid")"; fi; else echo "$d DEAD"; fi; done; if [ -f "$SEATS/scan-health.ts" ]; then scan_health --alerts-status; else echo 'alerts NONE yet'; fi; }
 resetd(){ d="$1"; state_set "$d" '{"restarts":[],"crashLoop":false}'; restart_cmd "$d"; }
 supervisor_holder_alive(){
   pid="$1"

@@ -7,3 +7,6 @@ selftest_isolate_git "$FIX" || exit 2
 cleanup() { selftest_cleanup_fixture_processes "$FIX"; selftest_remove_fixture_dir "$FIX"; }
 selftest_install_cleanup_traps cleanup
 bun "$HERE/fixtures/manual.ts" "${1:-$HERE/manual.ts}" "$FIX" "$HERE/fixtures/verification/five-features"
+bun "$HERE/fixtures/map-contracts.ts" "${1:-$HERE/manual.ts}" "$HERE/contract.ts" "$FIX/map-contracts" "$HERE/.."
+bun "$HERE/fixtures/no-surface-contracts.ts" "${1:-$HERE/manual.ts}" "$HERE/contract.ts" "$FIX/no-surface-contracts" "$HERE/.."
+echo 'manual.selftest: PASS'

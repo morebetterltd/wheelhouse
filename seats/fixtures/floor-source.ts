@@ -44,6 +44,8 @@ fi
 exec ${JSON.stringify(realBun)} "$@"
 `, { mode: 0o755 });
   fs.writeFileSync(root + '/bin/tmux', `#!/usr/bin/env bash
+# Pane callbacks change cwd; keep every relative socket and gate query rooted.
+cd ${JSON.stringify(root)} || exit 2
 if [ "\${1:-}" = -L ]; then socket="$2"; shift 2; set -- -S "./$socket.sock" "$@"; fi
 if [ "\${1:-}" = -S ] && [ "\${3:-}" = capture-pane ]; then
   socket="$2"; args=("$@"); target=""

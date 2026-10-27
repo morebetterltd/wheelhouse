@@ -24,6 +24,14 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 prune_fixture_start "$@"
 selftest_install_cleanup_traps cleanup
 
+phase 'run-scratch task-id boundaries with an unreadable open list'
+if bash "$HERE/fixtures/prune-prefix-run.sh" "$PRUNE"; then
+  pass 'a longer task id is not attributed to a shorter closed one'
+  pass 'exact, dash and underscore closed-task scratch remains safe and is automatically removed'
+else
+  fail 'run-scratch task-id boundary regression'
+fi
+
 # Harness falsifiers stay full-tier; the real enclosing-Git check is core.
 if bun "$HERE/fixtures/prune-nested-git.ts" "$HERE" "$FIX/nested-controls" "$PRUNE"; then
   pass 'nested Git leak check detects HEAD/index corruption, child failure and timeout'
@@ -256,6 +264,11 @@ mkdir -p "$EXT/seats/run"; printf '{"seat":"worker-1","branch":"fleet/%s","workt
 OUT=$(ext_cleanup --bead "$PUSH_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ -d "$EWTS/$PUSH_ID" ] && printf '%s\n' "$OUT" | grep >/dev/null "kept needs-review $EWTS/$PUSH_ID reason=deferred: push in progress" && pass 'worktree kept with "deferred: push in progress" while the push marker names a live pid' || fail "mid-push rc=$RC: $OUT"
 rm -f "$EXT/seats/run/push.worker-1.json"; kill "$PUSH_PID" >/dev/null 2>&1; wait "$PUSH_PID" 2>/dev/null
+if bun "$HERE/fixtures/prune-push-separators.ts" "$EXT" "$EWTS/$PUSH_ID" "$EXT/seats/prune.ts"; then
+  pass 'push with a line separator in its command line defers cleanup'
+else
+  fail 'separator-bearing push was not deferred without a push marker'
+fi
 OUT=$(ext_cleanup --bead "$PUSH_ID"); RC=$?
 [ "$RC" -eq 0 ] && [ ! -e "$EWTS/$PUSH_ID" ] && printf '%s\n' "$OUT" | grep >/dev/null "removed merged-worktree $EWTS/$PUSH_ID " && pass 'worktree removed once the push has ended' || fail "post-push rc=$RC: $OUT"
 

@@ -45,7 +45,7 @@ await leg('reference manual', () => {
   const malformed = copy('frontmatter'), file = malformed + '/' + relativeManual + '/SKILL.md';
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('version: 1.0.0', 'version: not-a-version'));
   const bad = run(['check'], malformed); assert.equal(bad.code, 2); assert.match(bad.stderr, /SKILL\.md:\d+:.*version/);
-  const reserved = run(['lint-contract', '--file', path.join(fixture, 'not-read')], empty); assert.equal(reserved.code, 2); assert.equal(reserved.stderr, 'not yet\n');
+  const missingFile = run(['lint-contract']); assert.equal(missingFile.code, 2); assert.match(missingFile.stderr, /usage: manual.ts lint-contract --file/); assert.match(missingFile.stderr, /heuristic:/);
 });
 await leg('missing Doctor refused', () => {
   const repo = copy('missing-doctor'), file = repo + '/' + relativeManual + '/SKILL.md';
@@ -78,7 +78,7 @@ await leg('no-surface manual', () => {
   const repo = copy('no-surface'), dir = repo + '/' + relativeManual;
   fs.writeFileSync(dir + '/SKILL.md', '---\nname: verify-five-features\ndescription: No runnable surface.\nversion: 1.0.0\nsurface: none\n---\nThis repository has no runnable consumer surface. No live journey can be driven yet.\n');
   for (const slug of slugs) fs.unlinkSync(dir + '/features/' + slug + '.md'); fs.writeFileSync(dir + '/features/README.md', '# Features\n\nNo entries yet.\n');
-  const r = run(['check'], repo); assert.equal(r.code, 0); assert.equal(r.stdout, 'manual ok: 0 features\n');
+  const r = run(['check'], repo); assert.equal(r.code, 0); assert.equal(r.stdout, 'manual ok: no surface\n');
   const listed = run(['features', '--json'], repo); assert.equal(listed.code, 0); assert.deepEqual(JSON.parse(listed.stdout), []);
   fs.copyFileSync(reference + '/' + relativeManual + '/features/counter.md', dir + '/features/counter.md'); fs.appendFileSync(dir + '/features/README.md', '\n- [Counter](./counter.md)\n');
   const invalid = run(['check'], repo); assert.equal(invalid.code, 2); assert.match(invalid.stderr, /surface: none requires an empty feature map/);
