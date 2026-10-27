@@ -202,6 +202,40 @@ oracle(!retentionViolation(peakOwned,RETAINED_LIMIT),'owned retained state excee
 console.log('PASS '+kind+' retained state: warm='+JSON.stringify(warmOwned!)+' end='+JSON.stringify(endOwned!)+' peak='+JSON.stringify(peakOwned)+' threshold='+JSON.stringify(RETAINED_LIMIT)+'; '+result.equivalentHoursAfterWarmup+'h-equivalent; VM/native bytes diagnostic only');
 noise=[];
 if(kind==='herald' && control==='fixed')checkSeenHorizon();
+function digestProbe(label:string,probe:string,candidate:string,mode:string,record:string,expected:number){
+  const r=completedCommand('bun',[probe,candidate,mode,record]);
+  let measured:any;
+  try{measured=JSON.parse(fs.readFileSync(record,'utf8'));}
+  catch(error){
+    console.error(label+'_SETUP '+JSON.stringify({setup:'record',stderr:r.stderr,error:String(error)}));
+    assert.fail('fixture setup incomplete: record missing or unreadable; stderr='+r.stderr);
+  }
+  if(r.status===2){
+    console.error(label+'_SETUP '+JSON.stringify({...measured,stderr:r.stderr}));
+    assert.equal(measured.success,false);assert.equal(typeof measured.setup,'string');assert.equal(typeof measured.elapsedMs,'number');
+    assert.fail('fixture setup incomplete: '+measured.setup+' wait; record='+JSON.stringify(measured)+'; stderr='+r.stderr);
+  }
+  assert.ifError(r.error);assert.equal(r.signal,null);assert.equal(r.status,expected,r.stderr);
+  return {r,measured};
+}
+if(control==='fixed'&&kind==='desk'){
+  // Owned zero-bound controls exercise the same record reader as ordinary cases.
+  // Restore by using the original probe path below; never mutate a shipped file.
+  for(const [name,probe,anchor,replacement,mode] of [
+    ['marker','desk-digest-shutdown.ts','MARKER_CONTAINMENT_MS=60000','MARKER_CONTAINMENT_MS=0','signal'],
+    ['parent-exit','desk-digest-shutdown.ts','PARENT_EXIT_CONTAINMENT_MS=60000','PARENT_EXIT_CONTAINMENT_MS=0','exit'],
+    ['refresh','desk-digest-lifetime.ts','REFRESH_CONTAINMENT_MS=60000','REFRESH_CONTAINMENT_MS=0','timeout'],
+  ]){
+    let source=fs.readFileSync(path.join(seats,'fixtures',probe),'utf8');assert.equal(source.split(anchor).length,2);
+    source=source.replace(anchor,replacement);
+    if(name==='parent-exit'){assert(source.includes("?'process.exit(0);':"));source=source.replace("?'process.exit(0);':","?'setInterval(()=>{},1000);':");}
+    const owned=path.join(root,'setup-'+name+'.ts'),record=path.join(root,'setup-'+name+'.json');fs.writeFileSync(owned,source);
+    const label=probe.includes('shutdown')?'DIGEST_SHUTDOWN':'DIGEST_LIFETIME';
+    assert.throws(()=>digestProbe(label,owned,file,mode,record,0),new RegExp('fixture setup incomplete: '+name+' wait'));
+    const measured=JSON.parse(fs.readFileSync(record,'utf8'));assert.equal(measured.setup,name);assert.equal(measured.success,false);assert(Number.isFinite(measured.elapsedMs)&&measured.elapsedMs>=0);
+    console.log('PASS '+label+' setup control: '+name+' wait diagnosed, native_rc=2 never accepted as rejection');
+  }
+}
 if(control==='fixed'&&kind==='desk'){
   const lifetime=path.join(seats,'fixtures/desk-digest-lifetime.ts'),broken=path.join(root,'seats/desk-slot-retained.ts'),noGroup=path.join(root,'seats/desk-no-group.ts');
   const src=fs.readFileSync(file,'utf8'),release='digestRefreshing.delete(win.key);',group='process.kill(-child.pid, "SIGKILL")';assert.equal(src.split(release).length,2);assert.equal(src.split(group).length,2);
@@ -210,9 +244,9 @@ if(control==='fixed'&&kind==='desk'){
   const cases=['spawn','error','malformed','read','timeout'].flatMap(mode=>[[mode,file,0],[mode,broken,1]] as const);cases.push(['timeout',noGroup,1]);
   for(const [mode,candidate,expected] of cases){
     const record=path.join(root,'lifetime-'+mode+'-'+path.basename(candidate)+'.json');
-    const r=completedCommand('bun',[lifetime,candidate,mode,record]);assert.ifError(r.error);assert.equal(r.signal,null);assert.equal(r.status,expected,r.stderr);
+    const {r,measured}=digestProbe('DIGEST_LIFETIME',lifetime,candidate,mode,record,expected);
     assert(fs.statSync(record).isFile(),'fault probe must actually reach its measured cleanup');
-    const measured=JSON.parse(fs.readFileSync(record,'utf8'));assert.equal(measured.mode,mode);assert.equal(measured.success,expected===0);
+    assert.equal(measured.mode,mode);assert.equal(measured.success,expected===0);
     console.log('DIGEST_LIFETIME '+JSON.stringify({candidate:path.basename(candidate),nativeCode:r.status,...measured}));
     console.log((expected?'EXPECTED_REJECTION ':'PASS ')+'desk digest '+mode+' native_rc='+r.status+(expected?' cleanup removed':''));
   }
@@ -222,8 +256,8 @@ if(control==='fixed'&&kind==='desk'){
   assert.equal(src.split(cleanup).length,2);fs.writeFileSync(broken,src.replace(cleanup,'/* fix removed: detached job trees outlive the parent */'));
   for(const mode of ['exit','signal','SIGINT','SIGHUP'])for(const [candidate,expected] of [[file,0],[broken,1]] as const){
     const record=path.join(root,'shutdown-'+mode+'-'+expected+'.json');
-    const r=completedCommand('bun',[path.join(seats,'fixtures/desk-digest-shutdown.ts'),candidate,mode,record]);assert.ifError(r.error);assert.equal(r.signal,null);assert.equal(r.status,expected,r.stderr);
-    assert(fs.statSync(record).isFile());const measured=JSON.parse(fs.readFileSync(record,'utf8'));assert.equal(measured.mode,mode);assert.equal(measured.success,expected===0);
+    const {r,measured}=digestProbe('DIGEST_SHUTDOWN',path.join(seats,'fixtures/desk-digest-shutdown.ts'),candidate,mode,record,expected);
+    assert(fs.statSync(record).isFile());assert.equal(measured.mode,mode);assert.equal(measured.success,expected===0);
     console.log('DIGEST_SHUTDOWN '+JSON.stringify({candidate:path.basename(candidate),nativeCode:r.status,...measured}));
   }
 }
