@@ -45,5 +45,5 @@ leg('manual check edited-tree refusal',()=>{const r=run('edited','edited');asser
 leg('manual check none',()=>{const r=run('none','none');assert.equal(r.status,0,r.stderr);assert.equal(r.added,0);});
 leg('manual check missing findings refused',()=>{const r=run('bad','bad');assert.equal(r.status,3,r.stderr);assert.equal(r.added,0);assert.match(r.stderr,/FINDINGS/);});
 leg('manual check bounded helper',()=>{const r=run('slow','slow',{WHEELHOUSE_MANUAL_CHECK_TIMEOUT_MS:'200'});assert.equal(r.status,3,r.stderr);assert.equal(r.added,0);assert.match(r.stderr,/timed out/);});
-leg('manual check verifier required',()=>{fs.writeFileSync(factory+'/seats/seats.json','{"seats":{}}');try{const r=run('no-seat');assert.equal(r.status,2,r.stderr);assert.match(r.stderr,/verifier/);assert.equal(r.added,0);}finally{fs.writeFileSync(factory+'/seats/seats.json',JSON.stringify(roster));}});
+leg('manual check verifier required',()=>{fs.writeFileSync(factory+'/seats/seats.json',JSON.stringify({seats:{reviewer:{...roster.seats.verifier,role:'reviewer'}}}));try{const r=run('no-seat');assert.equal(r.status,2,r.stderr);assert.match(r.stderr,/verifier/);assert.equal(r.added,0);}finally{fs.writeFileSync(factory+'/seats/seats.json',JSON.stringify(roster));}});
 save();if(legs.some(x=>x.error))process.exitCode=1;
