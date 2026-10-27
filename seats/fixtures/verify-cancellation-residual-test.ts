@@ -6,6 +6,9 @@ import { spawn } from 'node:child_process';
 import { parseLsof, parsePs } from './verify-cancellation-residual.ts';
 
 const [root, canary, fixture, runtime] = process.argv.slice(2);
+const outputControl = process.argv[6];
+assert(outputControl === undefined || outputControl === '--ordinary-retention-control' || outputControl === '--writer-output-control');
+const ordinaryControl = outputControl === '--ordinary-retention-control';
 for (const file of [canary, fixture, path.join(runtime, 'verify.ts')]) assert(fs.statSync(file).isFile());
 assert(!fs.existsSync(root)); fs.mkdirSync(root);
 const persistent = process.env.WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT!;
@@ -35,6 +38,8 @@ async function run(args: string[], env: NodeJS.ProcessEnv) {
 }
 const ledger = path.join(path.dirname(root), 'groups.retention-residual');
 const cases = ['ordinary', 'writer', 'lsof-error', 'ps-error', 'lsof-timeout', 'ps-timeout'];
+if (ordinaryControl) cases.splice(1);
+else if (outputControl === '--writer-output-control') cases.splice(0, cases.length, 'writer');
 for (const name of cases) {
   const dir = path.join(root, name), target = path.join(dir, 'canary'), work = path.join(target, 'deleted-scratch'), control = path.join(dir, 'control'), bin = path.join(dir, 'bin');
   fs.mkdirSync(control, { recursive: true }); fs.mkdirSync(bin);
@@ -53,8 +58,18 @@ for (const name of cases) {
       fs.appendFileSync(ledger, writer.pid + '\n');
       await waitFor(() => fs.existsSync(path.join(control, 'waiting')), writer, 'writer readiness');
     }
-    const result = await run([...(writer ? ['--preload', seam] : []), canary, target, fixture, runtime], env);
+    const preload = writer ? seam : ordinaryControl ? path.join(import.meta.dir, 'verify-cancellation-residual-output-test.ts') : null;
+    const result = await run([...(preload ? ['--preload', preload] : []), canary, target, fixture, runtime], env);
     fs.writeFileSync(path.join(proof, 'test-exit.json'), JSON.stringify({ name, writerPid: writer?.pid ?? null, ...result }, null, 2) + '\n', { mode: 0o600 });
+    // A real ordinary failure belongs to the canary, not a second assertion in
+    // this driver. Keep both native streams (including its JSON record), finish
+    // the planted checks, and return failure to the suite.
+    if (name === 'ordinary' && result.code !== 0) {
+      process.stdout.write(result.stdout);
+      process.stderr.write(result.stderr);
+      process.exitCode = 1;
+      continue;
+    }
     const record = JSON.parse(fs.readFileSync(path.join(proof, 'result.json'), 'utf8'));
     assert.equal(record.code, 1); assert.equal(record.subject.code, 37); assert.equal(record.subject.stdoutEOF, true); assert.equal(record.subject.stderrEOF, true);
     if (name === 'ordinary') {
@@ -66,6 +81,10 @@ for (const name of cases) {
     assert.equal(result.code, 1); assert(result.stderr.includes('FAIL verify-cancellation retention:'));
     assert.equal(record.scratchGone, false); assert(record.failure.includes('AssertionError'));
     const residual = record.residual; assert(residual && !residual.captureError);
+    const lines = result.stdout.split('\n').filter(line => line.startsWith('RETENTION_RESIDUAL '));
+    assert.equal(lines.length, 1, 'failed canary must emit exactly one complete log record');
+    assert.deepEqual(JSON.parse(lines[0].slice('RETENTION_RESIDUAL '.length)), record);
+    console.log(lines[0]);
     const ready = JSON.parse(fs.readFileSync(path.join(control, 'ready'), 'utf8'));
     assert.equal(ready.pid, writer!.pid); assert.equal(residual.before.error, null); assert.equal(residual.after.error, null);
     for (const stamp of [residual.before, residual.after]) {
@@ -102,4 +121,4 @@ for (const name of cases) {
     if (writer?.pid) { try { process.kill(-writer.pid, 'SIGKILL'); } catch (error: any) { if (error.code !== 'ESRCH') throw error; } await writerClosed; fs.unlinkSync(ledger); }
   }
 }
-console.log('  ok    retention canary records the residual scratch and its writer when deletion does not hold');
+if (!ordinaryControl) console.log('  ok    retention canary records the residual scratch and its writer when deletion does not hold');

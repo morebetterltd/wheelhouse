@@ -736,6 +736,15 @@ command; it is a snapshot, not proof of who caused the recreation. Both streams,
 exit/signal/spawn errors and each command's five-second timeout are retained;
 `censusComplete: false` or enumeration errors mean incomplete evidence, not no
 writers. Native lsof can return nonzero with useful matches, which are retained.
+Every failing `scratchGone: false` canary also emits its whole record as one
+`RETENTION_RESIDUAL {json}` line in suite output. For a review sweep, read that
+line in `seats/verdicts/sweeps/*.selftest-sweep.log`: the review copy and its
+local verdicts directory are removed, so the file path alone is not durable.
+Parse the JSON after the prefix rather than searching a terminal rendering.
+The residual driver's ordinary case forwards the canary's native failure and
+record once, without turning it into a second assertion, and still fails the
+suite. Planted proof legs emit records too; use the unexpected canary's command
+path to identify the real failure, not a planted proof, when posting a finding.
 Passing canaries have no residual section and launch no census. A test-only
 preload delegates real deletion then lets a fixture-owned writer recreate and
 hold the path before returning; it proves this capture, not the historical cause.

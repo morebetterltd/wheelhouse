@@ -63,6 +63,8 @@ if (!record.failure) {
     record.retainedStatus = status;
   } catch (error) { record.failure = String(error); }
 }
+// The review copy (and its verdicts directory) may be removed after the sweep.
+if (!record.scratchGone) console.log("RETENTION_RESIDUAL " + JSON.stringify(record));
 fs.writeFileSync(path.join(proof, "result.json"), JSON.stringify(record, null, 2) + "\n", { mode: 0o600 });
 if (record.failure) console.error("FAIL verify-cancellation retention: " + record.failure);
 else console.log("verify-cancellation retention: PASS planted native37/stdout/stderr survive scratch deletion; FAIL line names " + JSON.stringify(record.retainedDiagnostics));
