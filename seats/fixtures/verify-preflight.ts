@@ -20,7 +20,7 @@ function stop(root: string, suite = "audit.selftest.sh") { return `selftest-swee
 
 async function unit() {
   // Protocol doubles only: no runDispatcherFullSweep, bd, task graph or model.
-  const root = path.join(allocation, "unit"); fs.mkdirSync(root); put(root, "seats/selftest-preflight.list", "# fixture audits\naudit.selftest.sh\nother.selftest.sh\n");
+  const root = path.join(allocation, mode === "quarantine-control" ? "unit-quarantine-control" : "unit"); fs.mkdirSync(root); put(root, "seats/selftest-preflight.list", "# fixture audits\naudit.selftest.sh\nother.selftest.sh\n");
   const main = "a".repeat(40), a = "b".repeat(40), b = "c".repeat(40), c = "d".repeat(40);
   const candidates = { main, candidates: [{ bead: "bead-a", tip: a }, { bead: "bead-b", tip: b }, { bead: "bead-c", tip: c }] };
   const log = path.join(root, "primary.log"); fs.writeFileSync(log, stop(root)); let calls = 0;
@@ -52,6 +52,10 @@ async function unit() {
     const file=path.join(root,'stopped-'+tip+'.log');fs.writeFileSync(file,`tip=${tip}\n${stop(root,suite)}finalTip=${tip}\n`);return{rc:1,tip,logPath:file,error:'invalid sweep timings: missing tier/full completed footer'};
   }}); assert(stopped[0].includes('bead-b cccccccccccc=FAIL')); assert(!stopped[0].includes('ERROR'));
   console.log('PASS unit protocol: completed preflight FAIL remains FAIL despite absent ordinary timing footer');
+  const quarantined = await attributePreflight({ ...input, runAudit: async(tip,suite) => {
+    const file=path.join(root,'quarantine-'+tip+'.log');fs.writeFileSync(file,`tip=${tip}\nselftest-sweep: START ${root}/seats/${suite}\nselftest-sweep: QUARANTINED-FAIL ${root}/seats/${suite} rc=1 elapsed=0s\nfinalTip=${tip}\n`);return{rc:0,tip,logPath:file,timings:{suites:[{suite}]}};
+  }}); assert(quarantined[0].includes('bead-b cccccccccccc=FAIL'), 'quarantined audit must not pass merely because runner exits0'); assert(!quarantined[0].includes('=PASS'));
+  console.log('PASS unit protocol: quarantined audit failure is FAIL even when its runner exits0');
   assert.deepEqual(failedPreflightAudits(stop(root),root,["audit.selftest.sh"]),["audit.selftest.sh"]);
   for (const [name, legacy] of [["call removed", []], ["failure relabelled PASS", [expected.replace("bead-b cccccccccccc=FAIL", "bead-b cccccccccccc=PASS")]], ["main omitted", [expected.replace(/main [a-f0-9]+=PASS /, "")]]] as const) {
     assert.throws(() => assert.deepEqual(legacy, [expected])); console.log(`CONTROL unit ${name}: unchanged attribution-line oracle rejects`);
@@ -122,6 +126,8 @@ async function integration() {
   const runtime=path.join(allocation,"removed");const files=execFileSync("git",["-C",template,"ls-files","-z","--","seats"],{encoding:"utf8",policyTimeoutMs:10000}).split("\0").filter(Boolean);for(const file of files){const from=path.join(template,file),to=path.join(runtime,file);fs.mkdirSync(path.dirname(to),{recursive:true});if(fs.lstatSync(from).isSymbolicLink())fs.symlinkSync(fs.readlinkSync(from),to);else fs.copyFileSync(from,to);}
   const target=path.join(runtime,"seats/verify.ts"),source=fs.readFileSync(target,"utf8"),start=source.indexOf('  const preflightAttribution = options.preflightCandidates && rc === 1 ? await (await import("./preflight-attribution"))'),end=source.indexOf('\n  }) : [];',start)+'\n  }) : [];'.length;assert(start>=0&&end>start);fs.writeFileSync(target,source.slice(0,start)+'  const preflightAttribution: string[] = [];'+source.slice(end));
   const control=spawnSync("bun",[import.meta.path,template,allocation,"first-only",target],{env:{...process.env,WHEELHOUSE_PREFLIGHT_EVIDENCE:undefined},encoding:"utf8",policyTimeoutMs:180000});records.push({name:"hook-removed",status:control.status,signal:control.signal,error:control.error?.message,stdout:control.stdout,stderr:control.stderr});save();assert.ifError(control.error);assert.equal(control.signal,null);assert.equal(control.status,1);assert(control.stderr.includes("missing preflight attribution"));console.log("CONTROL attribution call removed: same first leg native1 at missing preflight attribution, not setup");
+  const moduleFile=path.join(runtime,"seats/preflight-attribution.ts"),moduleText=fs.readFileSync(moduleFile,"utf8"),guard=' && !failures.length && !preflightFailure';assert(moduleText.includes(guard));fs.writeFileSync(moduleFile,moduleText.replace(guard,''));
+  const quarantineControl=spawnSync("bun",[path.join(runtime,"seats/fixtures/verify-preflight.ts"),template,allocation,"quarantine-control"],{env:{...process.env,WHEELHOUSE_PREFLIGHT_EVIDENCE:undefined},encoding:"utf8",policyTimeoutMs:30000});records.push({name:"quarantine-guard-removed",status:quarantineControl.status,signal:quarantineControl.signal,error:quarantineControl.error?.message,stdout:quarantineControl.stdout,stderr:quarantineControl.stderr});save();assert.ifError(quarantineControl.error);assert.equal(quarantineControl.signal,null);assert.equal(quarantineControl.status,1);assert(quarantineControl.stderr.includes('quarantined audit must not pass merely because runner exits0'));console.log('CONTROL quarantined-failure guard removed: same module units native1 at quarantined audit must not pass merely because runner exits0');
 }
-if(mode==="unit") { await unit(); console.log("verify-preflight module units: PASS (NO graph-writing suite result claimed)"); }
+if(mode==="unit"||mode==="quarantine-control") { await unit(); console.log("verify-preflight module units: PASS (NO graph-writing suite result claimed)"); }
 else { if(mode!=="first-only")await unit();await integration();console.log("verify-preflight.selftest: PASS"); }

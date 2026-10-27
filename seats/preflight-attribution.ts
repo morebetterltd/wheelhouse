@@ -46,18 +46,19 @@ function auditResult(result: AttributionSweep, tip: string, suite: string): stri
     ?? /^selftest-sweep: PREFLIGHT FAIL (.+\/seats\/)([^/\n]+\.selftest\.sh) rc=[1-9][0-9]*$/m.exec(text);
   if (!first || first[2] !== suite) return "ERROR(audit did not start)";
   const subject = first[1] + suite;
-  const failures = text.split("\n").filter(line => line.startsWith(`selftest-sweep: FAIL ${subject} `));
+  const failures = text.split("\n").filter(line => line.startsWith(`selftest-sweep: FAIL ${subject} `) || line.startsWith(`selftest-sweep: QUARANTINED-FAIL ${subject} `));
+  const quarantined = failures.some(line => line.startsWith("selftest-sweep: QUARANTINED-FAIL "));
+  const preflightFailure = text.split("\n").find(line => line.startsWith(`selftest-sweep: PREFLIGHT FAIL ${subject} rc=`));
   if (failures.some(line => line.includes(" timed out after "))) return "ERROR(per-suite timeout)";
   const oneSuite = result.timings?.suites.length === 1 && result.timings.suites[0].suite === suite;
-  if (result.rc === 0 && !result.error && oneSuite) return "PASS";
+  if (result.rc === 0 && !result.error && oneSuite && !failures.length && !preflightFailure) return "PASS";
   const preflight = failedPreflightAudits(text, path.dirname(first[1].slice(0, -1)), [suite]);
   // A preflight STOP intentionally lacks the ordinary completed-inventory
   // footer. That timing-parser error is not an inability to execute the audit.
   const stoppedTiming = preflight.length === 1 && result.error?.startsWith("invalid sweep timings:");
   if (result.error && !stoppedTiming) return `ERROR(${reason(result.error)})`;
-  const preflightFailure = text.split("\n").find(line => line.startsWith(`selftest-sweep: PREFLIGHT FAIL ${subject} rc=`));
   const code = preflightFailure?.match(/ rc=([1-9][0-9]*)$/)?.[1] ?? failures.map(line => / rc=([1-9][0-9]*) elapsed=/.exec(line)?.[1]).find(Boolean);
-  if (result.rc === 1 && code === "1" && (oneSuite || stoppedTiming)) return "FAIL";
+  if ((result.rc === 1 || (result.rc === 0 && quarantined)) && code === "1" && (oneSuite || stoppedTiming)) return "FAIL";
   return `ERROR(${reason(code ? `audit exit ${code}` : `incomplete audit exit ${result.rc}`)})`;
 }
 
