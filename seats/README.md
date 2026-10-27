@@ -501,6 +501,7 @@ bun seats/adapter.ts spawn    <seat> [bead-id]          # start it
 bun seats/adapter.ts probe    <seat>                    # one-shot provider/model liveness check
 bun seats/adapter.ts dispatch <seat> <bead-id> <text>   # hand it a bead
 bun seats/adapter.ts steer    <seat> <text>             # redirect mid-turn
+bun seats/adapter.ts skills-check <seat>                # read-only skill visibility and clean Git paths
 bun seats/adapter.ts status                             # liveness, every seat
 bun seats/adapter.ts stop     <seat>                    # graceful; session kept
 bun seats/adapter.ts stop-all                           # stop every idle rostered seat; report busy seats
@@ -553,6 +554,32 @@ is refused. `resume` never fails on a missing cwd: it falls back to the seat
 worktree, then to the root. `dispatch` transparently stops and relaunches the
 seat, attached to the same session, when its cwd does not already match the
 seat worktree.
+
+Every bead-bound spawn or dispatch links the install root's factory skills
+(`.agents/skills/*/SKILL.md`) into the prepared worktree under both
+`.agents/skills` (Pi/Codex) and `.claude/skills` (Claude Code), using absolute
+symlinks. Existing project directories and committed project links win and are
+not overwritten; stale untracked factory links are repaired. Reviewer and walker
+scratch worktrees get the same links. A repeat preparation leaves correct links
+and exclude bytes unchanged; new factory entries appear on the next preparation.
+
+After `spawn <seat> <bead-id>` or dispatch, run
+`bun seats/adapter.ts skills-check <seat>`. It uses the recorded cwd, falling back
+to `.wheelhouse-worktrees/<seat>`, checks the harness's directory for the four
+factory skills, any additional factory entries, and the project's `verify-*`
+manuals, then prints one skill name per line. Missing manuals/skills, dirty skill
+paths or unreadable Git state exit **2**, naming the seat and entry. The check
+never repairs links, changes state, launches a model or proves harness discovery.
+Bare `spawn <seat>` starts at the install root and does not prepare a worktree;
+check after a bead-bound spawn/dispatch, not that unprepared root session.
+
+**Verified Git gotcha:** per-entry exclude rules for symlinks have **no trailing
+slash**, e.g. `/.agents/skills/intent` and `/.claude/skills/intent`. A rule ending
+in `/` matches a real directory and does not hide a symlink; native Git status
+still reports the link. Never exclude `/.agents/skills/` or `/.claude/skills/`
+wholesale: new project manual/map files must remain visible. Resolve the exclude
+file with `git -C <worktree> rev-parse --git-path info/exclude`; a linked
+worktree's `.git` is a file, not a directory.
 
 In an umbrella install, `Repo: UMBRELLA` selects the container's Git repository
 before any existing worktree is reused. The field may start a line or follow
@@ -837,7 +864,7 @@ When a branch changes `.agents/skills/verify-*/`, the reviewer prompt and verdic
 
 ### Required review tier
 
-For **every** review, `verify.ts` runs a dispatcher-owned sweep of **the tier the change requires** at the exact reviewed tip **before** starting the reviewer. It records the selected tier and first matching reason, not merely a generic PASS. The default is core, the 35 suites in tracked `seats/selftest-core.list`. Full is required when the paths changed from main's merge base to the tip include `seats/selftest-sweep.sh`, `seats/selftest-lib.sh`, `seats/selftest-sweep-lock.ts`, `seats/selftest-herald.sh`, `seats/python-invocations.ts`, `seats/selftest-core.list`, a full-tier root suite, a fixture not named for a core suite, or `seats/adapter.ts`, `seats/seat-worktree.ts`, `seats/verify.ts`, `seats/heavy-test.sh` or `seats/heavy-test-entry.ts`. Fixture ownership uses the longest known suite name: `adapter-rpc` is full, not the core `adapter` fixture. Shared/unknown fixtures conservatively require full. Deletions and both sides of renames count. The first matching path in sorted order is the reason; otherwise explicit “full sweep passes” or `selftest-sweep.sh` claim wording forces full with reason “Done line”; otherwise core/default. No nightly or quarantine override is implemented by this tier rule.
+For **every** review, `verify.ts` runs a dispatcher-owned sweep of **the tier the change requires** at the exact reviewed tip **before** starting the reviewer. It records the selected tier and first matching reason, not merely a generic PASS. The default is core, the 35 suites in tracked `seats/selftest-core.list`. Full is required when the paths changed from main's merge base to the tip include `seats/selftest-sweep.sh`, `seats/selftest-lib.sh`, `seats/selftest-sweep-lock.ts`, `seats/selftest-herald.sh`, `seats/python-invocations.ts`, `seats/selftest-core.list`, the nightly harness (`seats/nightly-sweep.ts` and `seats/nightly-state.ts`), a full-tier root suite, a fixture not named for a core suite, or `seats/adapter.ts`, `seats/seat-worktree.ts`, `seats/verify.ts`, `seats/heavy-test.sh` or `seats/heavy-test-entry.ts`. Fixture ownership uses the longest known suite name: `adapter-rpc` is full, not the core `adapter` fixture. Shared/unknown fixtures conservatively require full. Deletions and both sides of renames count. The first matching path in sorted order is the reason; otherwise explicit “full sweep passes” or `selftest-sweep.sh` claim wording forces full with reason “Done line”; otherwise core/default. The nightly-red brake below takes precedence; quarantine is independent of the path-selection rule.
 
 The command is `bash seats/selftest-sweep.sh --tier core|full`. Its header records `tier=core reason=default` or, for example, `tier=full reason=seats/adapter.ts`. The prompt and verdict name both fields; core coverage also carries the manifest's SHA-256. The historical `## Dispatcher full-sweep result` heading remains for record consumers; the explicit tier below it is the coverage, not the heading. APPROVE still needs integer rc=0, a pinned tip and a retained nonempty regular log; the actual tier must match the dispatcher's choice, and core hash/inventory must match the pinned manifest. A mismatch is INCOMPLETE.
 
@@ -896,6 +923,20 @@ outside this guarantee. The regression uses idle sleeping stubs, TERM-ignoring
 suites at 5-second and 120-second runner grace, a KILLed runner, a TERM-ignoring
 reviewer, a same-group orphan, and an unrelated same-cwd process in a different
 group which must remain alive.
+
+### Nightly full tier
+
+The supervisor attempts one full sweep per local day during `sweep-hour=` in `wheelhouse/.template-source` (default `03`, hours `00`–`23`). `sweep=off` disables it; otherwise it is enabled. `WHEELHOUSE_SUPERVISOR_SWEEP_HOUR` overrides the recorded hour. Choose an hour when this install is available. A due tick records `lastSweepDay` in `seats/run/supervisor.state.json` and logs its start or skip; a skipped day is not repeatedly queued. A manual retry is `bun seats/nightly-sweep.ts`.
+
+Presence of `seats/run/paused` suppresses the nightly. `WHEELHOUSE_SUPERVISOR_PAUSE_FILE` selects a different marker (absolute or relative to the install root). Contents do not matter, and the nightly never removes the marker or changes the install's pause/service configuration. A live host sweep holder also causes a logged skip, not another queued review-sized job. The runner's opt-in `WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT=1` closes the preflight/admission race: it withdraws only its own FIFO ticket and exits **75** before any suite START when busy. The nightly requests fresh FIFO admission even if an ancestor owns the endpoint; it never borrows a running review's token. Normal reviews still wait without an admission deadline, and ordinary nested benches/sweeps still reuse validated ancestor ownership. The no-wait flag is consumed at admission, so suites and their nested fixture runners do not inherit it.
+
+The job resolves `merge-target=` (default `main`) in the configured product repository, takes its local branch tip or an already-present `origin/<name>` fallback, and makes a detached scratch worktree. It does not fetch or test the supervisor's current topic checkout. It reuses the dispatcher's isolated graph, metrics-off HOME, host-budget PATH, runner launch and teardown, runs `bash seats/selftest-sweep.sh --tier full` with `WHEELHOUSE_SKIP_REAL_PI=1`, and retains `seats/verdicts/sweeps/nightly.<tip>.<pid>.<ms>.selftest-sweep.log`. Scratch is removed after the run; owned-child cancellation joins groups before removal.
+
+`seats/run/nightly-sweep.json` is the atomic latest completed result: `{date, tip, rc, logPath, elapsedMs, failedSuites}`. Red (`rc=1`) forces **every new review to full**, including digest-only changes and batch reuse, with `tier=full reason=nightly red <date> <tip>` in its log and receipt. A later completed green releases the brake; a missing record imposes none. An unreadable/invalid record conservatively requires full. Core receipts cannot authorize merges while this brake is active: the integrator checks current state, not just an old receipt.
+
+A pause, busy lock, setup/scratch failure or interruption writes the separate atomic `seats/run/nightly-sweep-missed.json` with date/reason; it does **not** replace a completed red result. Alerts show `nightly-sweep-red` (date, tip, failed suite names) or `nightly-sweep-missed` (reason) on the existing fleet-gate line and emit one herald inbox row on transition. Repeated red results refresh detail without repeated wakes; a later completed run clears an older missed alert, and green clears red.
+
+For fixture-only checks, an explicit `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` may name two tiny suites; names are remapped into the pinned scratch checkout. A selection smaller than the pinned full inventory is marked `filtered: true`: even native rc=0 cannot release the full-review brake, and it raises the missed-coverage alert. Its `lastCompleted` field preserves the previous full result, including a red alert that no later full green has cleared. Do not use filtered fixtures as production nightly receipts. Scheduled launches clear the pattern and tier environment overrides. Old already-running supervisors do not acquire this tick merely because a new script was copied: restart through the install's normal approved procedure. No LaunchAgent/systemd definition change is needed.
 
 ### Review an entire batch once
 

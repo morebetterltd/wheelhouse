@@ -92,9 +92,12 @@ import { hostBudgetEnabled, hostBudgetPath } from "./host-budget";
 import { heavyTestEntry } from "./heavy-test-entry";
 import { harnessNameForSeat, oneShotCommandForHarness, oneShotEnvForHarness, type HarnessName } from "./harness";
 import { effectiveRoster } from "./roster";
+import { linkFactorySkills } from "./seat-worktree";
 import { hasPool } from "./pool";
 import { finalAssistantText, liveLineCandidates, type FinalLineCandidate } from "./final-assistant-message";
 import { installReviewSignals, reviewCancelling, reviewChildrenStopped, reviewScratchCleanups, trackReviewChild } from "./verify-cancellation";
+// Nightly brake: quarantine's envelope/parser blocks remain independent.
+import { nightlyBrake } from "./nightly-state";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -219,7 +222,7 @@ function restoreCoreWorktreeConfig(repoRoot: string, before: CoreWorktreeConfig)
   } catch {}
 }
 
-export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "verify", tip = "HEAD"): string {
+export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "verify", tip = "HEAD", options: { throwOnError?: boolean; coordinatedSignals?: boolean } = {}): string {
   if (import.meta.main) installReviewSignals();
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `wheelhouse-${kind}-${process.pid}-`)));
   const stat = fs.lstatSync(dir);
@@ -231,6 +234,7 @@ export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "ve
     const info = scratchWorktreeInfo(repoRoot, dir);
     if (!info) throw new Error("scratch worktree identity could not be verified");
     fs.writeFileSync(info.ownerFile, JSON.stringify(owner) + "\n", { flag: "wx", mode: 0o600 });
+    linkFactorySkills(ROOT, dir, line => process.stderr.write(`${line}\n`));
   } catch (e: any) {
     restoreCoreWorktreeConfig(repoRoot, coreWorktreeBefore);
     if (fs.existsSync(path.join(dir, ".git"))) removeScratchWorktree(repoRoot, dir);
@@ -240,7 +244,9 @@ export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "ve
       try { if (fs.lstatSync(dir).ino === owner.ino && fs.lstatSync(dir).dev === owner.dev) fs.rmdirSync(dir); } catch {}
     }
     createdScratchCwds.delete(dir);
-    die(`could not create a detached scratch worktree for the ${kind} one-shot in ${repoRoot}: ${(e.stderr ?? e.message).toString().trim()}`);
+    const message = `could not create a detached scratch worktree for the ${kind} one-shot in ${repoRoot}: ${(e.stderr ?? e.message).toString().trim()}`;
+    if (options.throwOnError) throw new Error(message);
+    die(message);
   }
   let cleaned = false;
   const cleanup = () => {
@@ -257,7 +263,7 @@ export function makeScratchCwd(repoRoot: string, kind: "verify" | "review" = "ve
   process.on("exit", cleanup);
   // Importers such as walk.ts keep their existing scratch-only behavior;
   // this coordinator owns only the dispatcher entry point's child groups.
-  if (!import.meta.main) for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
+  if (!import.meta.main && !options.coordinatedSignals) for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
   return dir;
 }
 
@@ -1353,7 +1359,11 @@ function tierInventory(root: string, tip: string): string[] {
 function manifestAt(root: string, tip: string): CoreManifest {
   return parseCoreManifest(tierGit(root, "show", `${tip}:seats/selftest-core.list`), tierInventory(root, tip));
 }
-export function chooseSweepTier(root: string, tip: string, claim: string): SweepChoice {
+export function chooseSweepTier(root: string, tip: string, claim: string, installRoot = root): SweepChoice {
+  // Nightly-only policy block. Missing state preserves the ordinary selector;
+  // missed attempts cannot erase the last completed red result.
+  const brake = nightlyBrake(installRoot);
+  if (brake) return { tier: "full", reason: brake };
   const base = tierGit(root, "merge-base", "refs/heads/main", tip).toString().trim();
   if (!base) throw new Error("cannot establish main merge base for sweep tier");
   const knownSuites = [...new Set([...tierInventory(root, base), ...tierInventory(root, tip)])];
@@ -1364,6 +1374,9 @@ export function chooseSweepTier(root: string, tip: string, claim: string): Sweep
   const names = knownSuites
     .map(name => name.replace(/\.selftest\.sh$/, "")).sort((a, b) => b.length - a.length || a.localeCompare(b));
   const harness = new Set(["selftest-sweep.sh", "selftest-lib.sh", "selftest-sweep-lock.ts", "selftest-herald.sh", "python-invocations.ts", "selftest-core.list", "selftest-quarantine.list", "quarantine.ts", "adapter.ts", "seat-worktree.ts", "verify.ts", "heavy-test.sh", "heavy-test-entry.ts"].map(name => `seats/${name}`));
+  // Nightly's runner and brake are test-harness code, not ordinary daemon UI.
+  harness.add("seats/nightly-sweep.ts");
+  harness.add("seats/nightly-state.ts");
   // --no-renames includes both sides of deletions/renames; no pretty-printed
   // quoting, terminal wrapping or GIT_* redirect can hide a touched path.
   const touched = tierGit(root, "diff", "--name-only", "--no-renames", "-z", base, tip).toString().split("\0").filter(Boolean).sort();
@@ -1424,7 +1437,7 @@ function deriveBatchCandidates(repoRoot: string, tip: string, authors: Map<strin
     const claim = [beadClaim(c.bead), "", "Parsed work contract (validated before reviewer spawn):", JSON.stringify(contract, null, 2)].join("\n");
     // Manual scope belongs to this validated claim and immutable merged tip,
     // not the batch's union of changed files or its different contract/base.
-    return { ...c, author: authors.get(c.bead)!, claim, choice: chooseSweepTier(repoRoot, c.tip, claim),
+    return { ...c, author: authors.get(c.bead)!, claim, choice: chooseSweepTier(repoRoot, c.tip, claim, ROOT),
       manualScope: manualReviewContext(repoRoot, c.tip, contract) };
   });
   return { main, candidates };
@@ -1628,21 +1641,37 @@ function claimRequiresSweepCitation(claim: string): boolean {
   return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
 }
 
+// Nightly-only launch options; ordinary reviews keep their existing defaults.
+export interface SweepLaunchOptions {
+  logDir?: string;
+  logPrefix?: string;
+  fixtureSuites?: string[];
+  noWait?: boolean;
+  coordinatedSignals?: boolean;
+}
 // The exported name remains for existing callers which explicitly request full.
-export async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string, choice: SweepChoice = { tier: "full", reason: "caller" }): Promise<SweepResult> {
+export async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string, choice: SweepChoice = { tier: "full", reason: "caller" }, options: SweepLaunchOptions = {}): Promise<SweepResult> {
   // Separate from the reviewer's cwd: no writable graph or bd wrapper reaches
   // that process. Suites create their OWN fixture graphs, not one redirected
   // global graph (which would invalidate graph-isolation selftests).
-  const scratchCwd = makeScratchCwd(repoRoot, "review", tip);
+  const scratchCwd = makeScratchCwd(repoRoot, "review", tip, { throwOnError: true, coordinatedSignals: options.coordinatedSignals });
+  try {
   const groupsFile = path.join(scratchCwd, ".wheelhouse-review-groups");
   fs.writeFileSync(groupsFile, "", { flag: "wx", mode: 0o600 });
-  const logDir = path.join(VERDICTS_DIR, "sweeps");
+  const logDir = options.logDir ?? path.join(VERDICTS_DIR, "sweeps");
   fs.mkdirSync(logDir, { recursive: true });
-  const logPath = path.join(logDir, `${tip}.${process.pid}.${Date.now()}.selftest-sweep.log`);
+  const logPath = path.join(logDir, `${options.logPrefix ?? ""}${tip}.${process.pid}.${Date.now()}.selftest-sweep.log`);
   const started = Date.now();
   // Keep logical and physical cwd consistent for sweep child processes.
   const env: NodeJS.ProcessEnv = { ...process.env, PWD: scratchCwd, PATH: basePath, WHEELHOUSE_REAL_BD: realBd, WHEELHOUSE_SKIP_REAL_PI: "1", WHEELHOUSE_SELFTEST_REVIEW_GROUPS: groupsFile };
-  for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN", "WHEELHOUSE_SELFTEST_SWEEP_TIER"]) delete env[key];
+  for (const key of ["BEADS_DIR", "BEADS_DB", "WHEELHOUSE_SELFTEST_BD_ROOT", "WHEELHOUSE_ROOT", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "WHEELHOUSE_SELFTEST_SWEEP_PATTERN", "WHEELHOUSE_SELFTEST_SWEEP_TIER", "WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT"]) delete env[key];
+  // Nightly fixture selection is explicitly mapped into the PINNED checkout,
+  // never run against caller paths. The supervisor clears this test-only knob.
+  if (options.fixtureSuites) {
+    if (!options.fixtureSuites.length || options.fixtureSuites.some(name => !/^[A-Za-z0-9][A-Za-z0-9._-]*\.selftest\.sh$/.test(name))) throw new Error("invalid nightly fixture suite selection");
+    env.WHEELHOUSE_SELFTEST_SWEEP_PATTERN = options.fixtureSuites.map(name => path.join(scratchCwd, "seats", name)).join(" ");
+  }
+  if (options.noWait) env.WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT = "1";
   const actualTip = execFileSync("git", ["rev-parse", "HEAD"], { cwd: scratchCwd, encoding: "utf8", env }).trim();
   if (actualTip !== tip) die(`sweep scratch tip ${actualTip} differs from reviewed tip ${tip}`);
   fs.writeFileSync(logPath, `tip=${actualTip}\ncommand=bash seats/selftest-sweep.sh --tier ${choice.tier}\ntier=${choice.tier} reason=${choice.reason}\nWHEELHOUSE_SKIP_REAL_PI=1 (hermetic suites; no live login borrowed)\n`);
@@ -1740,8 +1769,8 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
   }
   const elapsedMs = Date.now() - started;
   fs.appendFileSync(logPath, `\nrc=${rc}\nelapsedMs=${elapsedMs}\n${error ? `error=${error}\n` : ""}`);
-  removeScratchWorktree(repoRoot, scratchCwd);
   return { required: true, rc, logPath, elapsedMs, tip, choice, timings, error };
+  } finally { removeScratchWorktree(repoRoot, scratchCwd); }
 }
 
 function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[] {
@@ -2014,7 +2043,7 @@ async function main(): Promise<void> {
   const scratchCwd = makeScratchCwd(repoRoot, "verify", tip);
   const sourceSnapshots = materializeReadOnlySources(scratchCwd, sourceDeclarations);
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
-  const ownTier = chooseSweepTier(repoRoot, tip, claim);
+  const ownTier = chooseSweepTier(repoRoot, tip, claim, ROOT);
   const selectedTier = [ownTier, ...(batchCandidates?.candidates.map(c => c.choice) ?? [])].find(c => c.tier === "full") ?? ownTier;
   const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);
   const requireSweepCitation = !!batchCandidates || !!sweep.batch || claimRequiresSweepCitation(claim);

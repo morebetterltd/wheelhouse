@@ -70,7 +70,7 @@ import { harnessNameForSeat, requirePiHarness } from "./harness";
 import { effectiveRoster } from "./roster";
 import { hasPool, loadPool, seatEntryFor } from "./pool";
 // SPLICE 1/6 (seat worktrees): the per-seat worktree module.
-import { SeatWorktreeError, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
+import { SeatWorktreeError, checkSeatSkills, ensureSeatWorktree, seatWorktreeDir, validateSegment } from "./seat-worktree";
 import { agentSettledEvent, barePidAlive, eventTimeIso, inspectProcessStart, lastEvent, openPaths, openPathsMatch, pidAlive, pidHoldsPath, seatIdentity, SeatIdentityUnverified } from "./seat-activity";
 import { seatTurnDisplay } from "./seat-turn-display";
 import { QUOTA_RE } from "./quota";
@@ -2217,6 +2217,23 @@ async function cmdStopAll(): Promise<void> {
   }
 }
 
+// No account, process, state lock or provider access: this is a filesystem/Git
+// check of the cwd the seat actually uses, not another spawn or repair path.
+function cmdSkillsCheck(name: string): void {
+  try {
+    validateSeatName(name);
+    const entry = parseRosterFile()[name];
+    if (!entry) throw new Error("not in the roster");
+    const harness = harnessNameForSeat(name, entry);
+    const cwd = readState().seats[name]?.cwd ?? seatWorktreeDir(ROOT, name);
+    const skills = checkSeatSkills(ROOT, path.resolve(ROOT, cwd), harness);
+    for (const skill of skills) console.log(skill);
+  } catch (e: any) {
+    process.stderr.write(`STOP: ${name}: ${e.message}\n`);
+    process.exit(2);
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 const [cmd, ...argvRest] = process.argv.slice(2);
@@ -2252,6 +2269,12 @@ async function main(): Promise<void> {
     case "steer":
       if (rest.length !== 2) die("usage: adapter.ts steer <seat> <text>");
       return cmdSteer(validateSeatName(rest[0]), rest[1]);
+    case "skills-check":
+      if (rest.length !== 1) {
+        process.stderr.write("STOP: usage: adapter.ts skills-check <seat>\n");
+        process.exit(2);
+      }
+      return cmdSkillsCheck(rest[0]);
     case "status":
       return cmdStatus();
     case "stop":
@@ -2267,7 +2290,7 @@ async function main(): Promise<void> {
       if (rest.length !== 1) die("usage: adapter.ts reset <seat>");
       return cmdReset(validateSeatName(rest[0]));
     default:
-      die("usage: adapter.ts spawn|probe|dispatch|steer|status|stop|stop-all|resume|reset ...");
+      die("usage: adapter.ts spawn|probe|dispatch|steer|skills-check|status|stop|stop-all|resume|reset ...");
   }
 }
 

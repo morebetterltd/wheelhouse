@@ -357,10 +357,13 @@ finish_current_suite(){
 
 acquire_lock(){
   local previous="" result rc
-  # A project bench or verify.ts may already own admission. Reuse only a
-  # validated ancestor's token/FIFO head, never a caller-supplied bypass flag.
-  if bun "$LOCK_HELPER" inherited "$LOCK"; then return 0; else rc=$?; fi
-  [ "$rc" = 75 ] || { info "STOP: selftest-sweep ancestry check failed (exit $rc)"; exit 2; }
+  # Ordinary nested runs reuse only validated ancestor/FIFO ownership. A
+  # nightly requests fresh admission: even an ancestor's live review is busy,
+  # not permission to run another nightly payload under its token.
+  if [ "${WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT:-0}" != 1 ]; then
+    if bun "$LOCK_HELPER" inherited "$LOCK"; then return 0; else rc=$?; fi
+    [ "$rc" = 75 ] || { info "STOP: selftest-sweep ancestry check failed (exit $rc)"; exit 2; }
+  fi
   while :; do
     result="$(WHEELHOUSE_SELFTEST_SWEEP_CAPTURE_IDENTITY=1 bun "$LOCK_HELPER" acquire "$LOCK" "$$" "$LOCK_TOKEN" "")"; rc=$?
     case "$rc" in
@@ -369,8 +372,16 @@ acquire_lock(){
         WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY=""
         case "$result" in *$'\n'*) WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY="${result#*$'\n'}" ;; esac
         export WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY
+        # Admission-only: nested fixture runners keep ordinary wait semantics.
+         unset WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT
         return 0 ;;
-      75) ENROLLED=1 ;; # Validated, durably registered waiter, not a Bun error.
+      75) ENROLLED=1
+          # Opt-in nightly admission: EXIT withdraws only our validated ticket.
+          # Ordinary reviews retain FIFO waiting. Status 75 means skipped.
+          if [ "${WHEELHOUSE_SELFTEST_SWEEP_NO_WAIT:-0}" = 1 ]; then
+            info "selftest-sweep: SKIP lock busy $LOCK $result"
+            exit 75
+          fi ;; # Validated waiter, not a Bun error.
       *) info "STOP: selftest-sweep lock helper failed (exit $rc)"; exit 2 ;;
     esac
     if [ "$previous" != "$result" ]; then
