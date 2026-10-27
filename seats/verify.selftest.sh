@@ -1034,9 +1034,9 @@ RECEIPT_CONTROL="$FIX/receipt-control.ts"
 bun - "$VERIFY" "$RECEIPT_CONTROL" <<'JS' || exit 2
 import fs from 'node:fs';import assert from 'node:assert/strict';
 let s=fs.readFileSync(process.argv[2],'utf8');
-const call='await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);';
+const call='await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier, { preflightCandidates: batchCandidates });';
 assert.equal(s.split(call).length,2);
-s=s.replace(call,'(claimRequiresSweepCitation(claim) ? await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier) : {required:false,rc:null,logPath:null,elapsedMs:0,tip});');
+s=s.replace(call,'(claimRequiresSweepCitation(claim) ? await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier, { preflightCandidates: batchCandidates }) : {required:false,rc:null,logPath:null,elapsedMs:0,tip});');
 const start=s.indexOf('      // Setup/spawn/pinning failures are not completed BOUNCE/DISCOVER');
 const end=s.indexOf('      if (sweep.logPath && requireSweepCitation)',start);
 assert(start>0 && end>start);s=s.slice(0,start)+s.slice(end);
@@ -1068,7 +1068,7 @@ else fail "receipt regression negative control was insensitive (exit $CONTROL_RC
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
 # Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
 cp -f "$SWEEP_PROJ/seats/verify.ts" "$FIX/verify-with-sweep.ts"
-bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
+bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier, { preflightCandidates: batchCandidates });";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/review-sweep-old.lock" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEEP_PROJ/seats/verdicts/bead-sweep-old.md"; then pass "reproduction: slowed sweep exceeds reviewer command limit without dispatcher evidence"; else fail "old sweep was not unproven rc=$RC out=$OUT"; fi
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-sweep-bypassed fleet/bead-1 worker-1
