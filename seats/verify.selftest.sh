@@ -711,9 +711,7 @@ EOF
   else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
 }
 manual_scope_cases() {
-  if bun "$HERE/fixtures/verify-manual-scope.ts" "$VERIFY" "$FIX/manual-scope" "${WHEELHOUSE_VERIFY_MANUAL_SCOPE_CASE:-all}"; then
-    pass 'manual scope prompt/metadata fixtures'
-  else fail 'manual scope prompt/metadata fixtures'; fi
+  bun "$HERE/fixtures/verify-manual-scope.ts" "$VERIFY" "$FIX/manual-scope" "${WHEELHOUSE_VERIFY_MANUAL_SCOPE_CASE:-all}" || fail 'manual scope prompt/metadata fixtures'
 }
 if [ -n "${WHEELHOUSE_VERIFY_SELFTEST_CASE:-}" ]; then
   case "$WHEELHOUSE_VERIFY_SELFTEST_CASE" in

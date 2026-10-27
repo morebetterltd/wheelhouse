@@ -113,3 +113,4 @@ try {
   for (const layout of ["single", "umbrella"]) { const p = setup(layout); for (const name of ["unscoped", "scoped", "untouched", "bounce"]) if (selected === "all" || selected === name) await review(p, name); }
   for (const name of ["unscoped", "scoped", "untouched", "bounce"]) if (selected === "all" || selected === name) console.log(`PASS manual scope ${name}: prompt/metadata and native verdict in single + umbrella product repos`);
 } finally { save(); }
+console.log('  ok    manual scope prompt/metadata fixtures');
