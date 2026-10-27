@@ -194,6 +194,18 @@ else
   fail "Integration remote-only goal ref did not resolve before merge-target/origin-HEAD: $(cat "$OUT" 2>/dev/null)"
 fi
 
+if env -u WHEELHOUSE_SKIP_BD PATH="$BIN:$PATH" bun "$HERE/fixtures/seat-worktree-goal-base.ts" "$HERE" "$FIX" contained; then
+  pass "contained goal starts at default tip; setup note names goal/default refs, SHAs and holds-nothing reason"
+else
+  fail "strict-ancestor goal did not start from the default line with an explanatory note"
+fi
+
+if env -u WHEELHOUSE_SKIP_BD PATH="$BIN:$PATH" bun "$HERE/fixtures/seat-worktree-goal-base.ts" "$HERE" "$FIX" unmerged; then
+  pass "goal with a commit the default line lacks remains the worker branch base"
+else
+  fail "unmerged goal work was bypassed"
+fi
+
 if bun "$HERE/fixtures/seat-worktree-skills.ts" "$HERE" "$FIX/factory-skills"; then
   pass "factory skills link both harness locations; exact excludes, repairs, idempotence and project skills survive"
 else
@@ -201,7 +213,7 @@ else
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-  echo "seat-worktree.selftest: PASS (7 checks)"
+  echo "seat-worktree.selftest: PASS (9 checks)"
 else
   echo "seat-worktree.selftest: FAIL ($FAILED failure(s))"
   exit 1
