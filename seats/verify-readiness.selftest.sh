@@ -31,12 +31,13 @@ async function check(name:string,mutant=false){
  const file=path.join(root,"seats",name+".ts");
  let code=source;
  if(mutant){const old='if (!sawOutput) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT"';assert.equal(code.split(old).length,2);code=code.replace(old,'if (false) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT"');}
- fs.writeFileSync(file,instrument(code)+'\nexport {runOneShot};\n');
+ assert.equal((code.match(/^export function runOneShot\(/gm)??[]).length,1,"one production runOneShot export");
+ fs.writeFileSync(file,instrument(code));
  const {runOneShot}=await import(pathToFileURL(file).href);
  process.env.WHEELHOUSE_TEST_WATCHDOG_DIR=dir;
  const silent=name!=="ready-output";
  const env={...process.env,PI_CODING_AGENT_DIR:path.join(dir,"agent"),STUB_REPLY_FILE:reply,STUB_SILENT:silent?"1":"0"};
- const result=runOneShot("node",[pi,"--mode","json"],{cwd:dir,env,timeoutMs:900000,firstOutputTimeoutMs:1,noEventTimeoutMs:1,maxBuffer:1024*1024,harness:"pi"});
+ const result=runOneShot("node",[pi,"--mode","json"],{cwd:dir,env,stdin:"Readiness fixture prompt delivered on stdin.\n",timeoutMs:900000,firstOutputTimeoutMs:1,noEventTimeoutMs:1,maxBuffer:1024*1024,harness:"pi"});
  let ended=false;result.then(()=>{ended=true;});
  try{
   await ready(dir,()=>ended);

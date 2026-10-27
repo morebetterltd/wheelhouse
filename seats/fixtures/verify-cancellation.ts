@@ -107,7 +107,10 @@ printf '%s\\n' "$$" > "$CANCEL_CASE/$role.pid.new"; mv -f "$CANCEL_CASE/$role.pi
 if [ "$role" = reviewer ] && [ "$CANCEL_PHASE" = reviewer-orphan ]; then exit 0; fi
 wait
 `, { mode: 0o755 });
-  fs.writeFileSync(path.join(bin, "pi"), '#!/usr/bin/env bash\nprintf \'entered\\n\' > "$CANCEL_CASE/pi-entered"\nexec bash "$CANCEL_IDLE" reviewer\n', { mode: 0o755 });
+  // Match the print-mode stdin contract before exercising child lifetime.
+  // In particular, the orphan leg must consume its prompt before its leader
+  // exits, rather than testing an unread input pipe alongside cancellation.
+  fs.writeFileSync(path.join(bin, "pi"), '#!/usr/bin/env bash\nset -eu\nprintf \'entered\\n\' > "$CANCEL_CASE/pi-entered"\ncat > "$CANCEL_CASE/reviewer.prompt"\n[ -s "$CANCEL_CASE/reviewer.prompt" ] || { echo "reviewer fixture requires stdin prompt" >&2; exit 1; }\nexec bash "$CANCEL_IDLE" reviewer\n', { mode: 0o755 });
   // Feed a valid work contract through the existing bd stub, never bypass the gate.
   const contract = path.join(dir, "contract.md");
   fs.writeFileSync(contract, `Trace: Verifier cancellation regression fixture
@@ -137,7 +140,10 @@ esac
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(project, "seats/selftest-core.list"), "idle.selftest.sh\n");
   fs.writeFileSync(path.join(project, "seats/idle.selftest.sh"), '#!/usr/bin/env bash\nset -eu\n[[ "$CANCEL_PHASE" = sweep* ]] || exit 0\nexec bash "$CANCEL_IDLE" suite\n', { mode: 0o755 });
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMPDIR: tmp, HOME: path.join(dir, "home"), CANCEL_CASE: dir, CANCEL_CONTRACT: contract, CANCEL_IDLE: idle, CANCEL_PHASE: phase, CANCEL_GROUP_LEDGER: ledger, CANCEL_CONTROLLER_PID: String(process.pid), WHEELHOUSE_SELFTEST_SWEEP_LOCK: targetLock };
+  const env: NodeJS.ProcessEnv = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMPDIR: tmp, HOME: path.join(dir, "home"), CANCEL_CASE: dir, CANCEL_CONTRACT: contract, CANCEL_IDLE: idle, CANCEL_PHASE: phase, CANCEL_GROUP_LEDGER: ledger, CANCEL_CONTROLLER_PID: String(process.pid), WHEELHOUSE_SELFTEST_SWEEP_LOCK: targetLock,
+    // The outer host lane may pin its installed helper; these endpoints and
+    // alias/replacement instrumentation belong ONLY to this private copy.
+    WHEELHOUSE_SELFTEST_SWEEP_LOCK_HELPER: path.join(project, "seats/selftest-sweep-lock.ts") };
   delete env.WHEELHOUSE_SELFTEST_SWEEP_PATTERN;
   // Do not couple reviewer teardown to the runner's deadline grace.
   if (phase === "sweep-stubborn-long-grace") env.WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S = "120";
