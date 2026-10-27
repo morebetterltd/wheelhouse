@@ -68,12 +68,17 @@ for (const name of cases) {
     const residual = record.residual; assert(residual && !residual.captureError);
     const ready = JSON.parse(fs.readFileSync(path.join(control, 'ready'), 'utf8'));
     assert.equal(ready.pid, writer!.pid); assert.equal(residual.before.error, null); assert.equal(residual.after.error, null);
+    for (const stamp of [residual.before, residual.after]) {
+      assert.equal(typeof stamp.inode, 'string'); assert.match(stamp.inode, /^\d+$/);
+      assert.equal(typeof stamp.device, 'string'); assert.match(stamp.device, /^\d+$/);
+    }
     assert.equal(residual.after.inode, ready.inode); assert.equal(residual.after.device, ready.device);
     assert.notEqual(residual.before.inode, residual.after.inode); assert.equal(residual.sameInode, false);
     assert.deepEqual(residual.enumerationErrors, []);
     assert.deepEqual(residual.entries.map((entry: any) => entry.path).sort(), ['.', 'nested', 'nested/leftover.txt', 'outside-link', 'writer-open.log'].sort());
-    for (const entry of residual.entries) { assert(['directory', 'file', 'symlink'].includes(entry.type)); assert.equal(typeof entry.size, 'number'); assert.equal(typeof entry.mtimeMs, 'number'); }
-    assert.equal(residual.entries.find((e: any) => e.path === 'outside-link').type, 'symlink');
+    assert.deepEqual(Object.fromEntries(residual.entries.map((e: any) => [e.path, e.type])), { '.': 'directory', nested: 'directory', 'nested/leftover.txt': 'file', 'outside-link': 'symlink', 'writer-open.log': 'file' });
+    for (const entry of residual.entries) { assert(Number.isFinite(entry.size) && entry.size >= 0); assert(Number.isFinite(entry.mtimeMs) && entry.mtimeMs > 0); }
+    assert.equal(residual.entries.find((e: any) => e.path === 'nested/leftover.txt').size, Buffer.byteLength('fixture residual\n'));
     for (const cmd of Object.values(residual.captures) as any[]) {
       assert.equal(typeof cmd.code === 'number' || cmd.code === null, true); assert.equal(typeof cmd.stderr, 'string'); assert.equal(typeof cmd.stdout, 'string'); assert.equal(cmd.timeoutMs, 5000);
     }
