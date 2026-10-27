@@ -865,4 +865,7 @@ else
   pass "installed-layout harness-switch scratch leg skipped until copied seats machinery is present"
 fi
 
+bun "$ROOT/seats/fixtures/upgrade-runbook-evidence.ts" "$TEMPLATE" "$TMP/evidence-ignore"
+pass "printed install/upgrade evidence ignores, installed guard and owner-decision stop"
+
 echo "upgrade-runbook.selftest: PASS ($PASS checks)"
