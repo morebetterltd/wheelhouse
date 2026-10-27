@@ -573,7 +573,7 @@ WHEELHOUSE_INTAKE_ROOT="$REFUSE_PROJ" BEADS_ACTOR=commander bun "$HERE/intake.ts
 bun -e 'import fs from "node:fs";const[src,dest,id]=process.argv.slice(1);fs.writeFileSync(dest,fs.readFileSync(src,"utf8").replace(/^Signal:.*$/m,"Signal: "+id));' "$FIX/dispatch-contract.md" "$FIX/produced-contract.md" "$PRODUCED_SIGNAL" || exit 2
 cp -f "$REFUSE_PROJ/seats/intake.jsonl" "$FIX/produced-ledger.before"
 WHEELHOUSE_DISPATCH_FORCE=1 WHEELHOUSE_CONTRACT_FIXTURE="$FIX/produced-contract.md" WHEELHOUSE_INTAKE_ROOT="$REFUSE_PROJ" WHEELHOUSE_INTAKE_FIXTURE="$REFUSE_PROJ/seats/intake.jsonl" run dispatch worker-1 producer-refusal 'must never reach a seat'
-[ "$RC" = 1 ] && says "refused: signal $PRODUCED_SIGNAL was produced by commander, not the producer fixture-producer" && pass 'produced-by refusal: commander disposition names signal and producer; force cannot bypass' || fail "produced-by refusal rc=$RC: $OUT"
+[ "$RC" = 1 ] && says "refused: signal $PRODUCED_SIGNAL was produced by commander, not the producer seat \"fixture-producer\"" && pass 'produced-by refusal: commander disposition names signal and producer; force cannot bypass' || fail "produced-by refusal rc=$RC: $OUT"
 fgit -C "$REFUSE_PROJ" worktree list --porcelain > "$FIX/produced-worktrees.after"
 fgit -C "$CONTRACT_WT" status --porcelain > "$FIX/produced-status.after"
 LAUNCHES_AFTER="$(wc -l < "$HOME_FIX/.pi-seats-contract-refusal/worker-1/launches.jsonl" | tr -d ' ')"
