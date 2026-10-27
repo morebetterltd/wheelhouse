@@ -348,7 +348,14 @@ Both terminals must then exit 0; `A.out` contains `A finished`, and `B.out` cont
 
 The template owns `seats/` the way it owns the contracts: `seat-env.sh`, `adapter.ts`, `seat-worktree.ts`, `verify.ts`, `walk.ts`, `needs.ts`, `desk.ts`, `principal-sentinel.sh`, `inbox-hook.sh`, `inbox-hook.selftest.sh`, `courier.ts`, `channels.ts`, `comms.ts`, `transports/` (including `transports/teams.ts`), `prune.ts`, `floor.ts`, `manual.ts`, `cockpit.sh`, `recover.ts`, `intent-check.sh`, `pool.ts`, `roster.ts`, `staffing.ts`, `fleet-snapshot.ts`, `seat-activity.ts`, `jev.ts`, their selftests, `seats.json.example`, `channels.json.example`, `pool.json.example`, and `seats/README.md` are byte-identical in every project, and an upgrade replaces them the same way. That file-by-file copy is how the integrate/close intent gate reaches existing installs; after the copy, `seats/intent-check.sh` should exist and `bash seats/intent-check.selftest.sh` should pass before you rely on the gate. Some copied selftests need template history as their fixture; they first use `wheelhouse/.template-source`'s `path=` if it is a live repository carrying `commit=`, otherwise they fetch `commit=` from `source=` into `wheelhouse/.template-cache/` under this install. What the copy can never touch is what the template does not ship: your `seats/seats.json` roster, `seats/channels.json`, `seats/integration-refs.txt`, `seats/state.json`, `seats/run/`, `seats/logs/`, `seats/verdicts/`, `seats/comms.jsonl` — none of those exist in the template, so a file-by-file copy of the template's `seats/` cannot reach them. That is why the copy is a loop over the template's files rather than a `cp -R` of the directory onto yours in reverse:
 
+Before running this block, check `git ls-files -- evidence/` at the install root. Any output **stops this upgrade step for an owner decision**; adding an ignore rule does not untrack existing files. For task captures, first transcribe scrubbed decisive output onto the bead, then, with the owner's decision recorded, use `git rm -r --cached evidence/`: this removes them from the index while keeping the files on disk and in Git history. Product files the owner keeps under root `evidence/` are the owner's decision, not something this upgrade untracks automatically. The copied `seats/no-tracked-evidence.selftest.sh` fails the core tier until that ownership/location decision is settled; do not bypass it or report the upgrade complete while it fails.
+
 ```bash
+tracked_evidence=$(git ls-files -- evidence/) || { echo "STOP: cannot inspect tracked root evidence/" >&2; exit 1; }
+if [ -n "$tracked_evidence" ]; then
+  echo "STOP: root evidence/ is already tracked; ask the owner before continuing this upgrade step" >&2
+  exit 1
+fi
 mkdir -p seats
 for f in "$TEMPLATE"/seats/*; do
   if [ -d "$f" ]; then
@@ -359,7 +366,7 @@ for f in "$TEMPLATE"/seats/*; do
   fi
 done
 if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
-for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/staffing.json' 'seats/verdicts/'; do
+for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/staffing.json' 'seats/verdicts/' '/evidence/'; do
   grep -qxF "$e" .gitignore 2>/dev/null || printf '%s\n' "$e" >> .gitignore
 done
 seats/install-fleet-pre-push-guard.sh || { echo "STOP: fleet pre-push guard installation failed" >&2; exit 1; }
@@ -369,7 +376,7 @@ The copy does not remove retired selftests: existing installs must delete `seats
 
 The installer above protects both the container and the separate product Git root named by `product-repo=` in `wheelhouse/.template-source`. Preserve that value during upgrades; for an older install using the default, correct it before running the installer if the product is separate (absolute paths or paths relative to the install root are accepted). Each repository keeps its own hooks location, including a shared `.beads/hooks`, and its previous pre-push hook. Re-running refreshes the guard path without nesting wrappers or losing the previous hook. The product does not need a `seats/` directory: both hooks invoke the guard shipped with this install. Review the per-repository installation output; invalid/missing product roots stop the command rather than silently leaving them unguarded. The guard remains a bypassable tripwire, not credential isolation.
 
-`seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. Current template seats include optional dynamic-staffing pool support (`seats/pool.ts`, `seats/roster.ts`, `seats/staffing.ts`, `seats/fleet-snapshot.ts`, `seats/seat-activity.ts`, `seats/jev.ts`, `seats/pool.json.example`, and their selftests); copying the template files does not create `seats/pool.json`, so existing fixed-roster installs keep their current behavior unless they deliberately add a pool. The `.gitignore` lines keep the per-machine runtime state out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing.
+`seats/` lands at the install ROOT, beside `wheelhouse/`, because every path the contracts print — `seats/seat-env.sh`, `bun seats/adapter.ts ...` — is root-relative; `BOOTSTRAP.md` step 2 puts it there for the same reason. Current template seats include optional dynamic-staffing pool support (`seats/pool.ts`, `seats/roster.ts`, `seats/staffing.ts`, `seats/fleet-snapshot.ts`, `seats/seat-activity.ts`, `seats/jev.ts`, `seats/pool.json.example`, and their selftests); copying the template files does not create `seats/pool.json`, so existing fixed-roster installs keep their current behavior unless they deliberately add a pool. The `.gitignore` lines keep the per-machine runtime state and root `evidence/` captures out of git, and the guard on each makes the block safe to re-run; an install that already has them appends nothing.
 
 ### Optional host build budget for existing installs
 

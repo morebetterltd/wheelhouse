@@ -865,4 +865,11 @@ else
   pass "installed-layout harness-switch scratch leg skipped until copied seats machinery is present"
 fi
 
+# Minimal installed history fixtures do not carry this new template recipe.
+# The recipe itself drives the copied guard in a real scratch install.
+if [ "$TEMPLATE" = "$ROOT" ]; then
+  bun "$ROOT/seats/fixtures/upgrade-runbook-evidence.ts" "$TEMPLATE" "$TMP/evidence-ignore"
+  pass "printed install/upgrade evidence ignores, installed guard and owner-decision stop"
+fi
+
 echo "upgrade-runbook.selftest: PASS ($PASS checks)"
