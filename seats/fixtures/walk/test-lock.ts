@@ -35,7 +35,7 @@ async function until(predicate:()=>boolean,actors:ReturnType<typeof start>[],lab
 function gate(r:any){if(r.error||r.signal||!r.stdoutEOF||!r.stderrEOF)throw new Error('NATIVE_GATE '+JSON.stringify(r));}
 async function holder(lock:string) {
  const env={...process.env,WHEELHOUSE_HEAVY_TEST_PAUSE:path.join(fleet,'no-fixture-pause')};
- const h=start('bun',[fleet+'/seats/selftest-sweep-lock.ts','supervise',lock,'/bin/sleep','4'],env);
+ const h=start('bun',[fleet+'/seats/selftest-sweep-lock.ts','supervise',lock,'bash','-c','exec sleep 4','holder'],env);
  await until(()=>fs.existsSync(lock+'/wheelhouse-selftest-sweep'),[h],'real holder publication');
  const marker=JSON.parse(fs.readFileSync(lock+'/wheelhouse-selftest-sweep','utf8'));return {h,marker};
 }
