@@ -417,8 +417,9 @@ function spawnWalker(oneShot: ReturnType<typeof oneShotCommandForHarness>, scrat
     cwd: scratchCwd,
     env,
     encoding: "utf8",
+    input: oneShot.stdin,
     policyTimeoutMs: TIMEOUT_MS,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
 }
 

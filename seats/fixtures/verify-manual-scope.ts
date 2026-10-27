@@ -67,7 +67,7 @@ function setup(layout: string) {
   const config = path.join(root, "case.json");
   fs.writeFileSync(path.join(bin, "bd"), ["#!/usr/bin/env bun", "const fs=require('fs');", `const c=JSON.parse(fs.readFileSync(${JSON.stringify(config)},'utf8'));`, "const a=process.argv.slice(2).filter(x=>x!=='--readonly');", "if(a[0]==='show')console.log(c.display);", "else if(a[0]==='init')fs.mkdirSync('.beads',{recursive:true});", "else if(a[0]==='where')console.log(JSON.stringify({path:fs.realpathSync('.beads')}));", "else if(a[0]==='create')console.log('{\"id\":\"fixture-bead\"}');", "else if(a[0]!=='metrics')process.exit(1);", ""].join("\n"), { mode: 0o755 });
   fs.writeFileSync(path.join(root, "seed.json"), JSON.stringify(seed));
-  fs.writeFileSync(path.join(bin, "pi"), ["#!/usr/bin/env bun", "const fs=require('fs');", `const root=${JSON.stringify(root)};`, "const c=JSON.parse(fs.readFileSync(root+'/case.json','utf8'));", "fs.writeFileSync(root+'/prompt.json',JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),account:process.env.PI_CODING_AGENT_DIR}));", "const event=JSON.parse(fs.readFileSync(root+'/seed.json','utf8'));event.message.content=[{type:'text',text:c.reply}];", "console.log(JSON.stringify(event));console.log(JSON.stringify({type:'agent_end',messages:[event.message]}));", ""].join("\n"), { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "pi"), ["#!/usr/bin/env bun", "const fs=require('fs');", `const root=${JSON.stringify(root)};`, "const c=JSON.parse(fs.readFileSync(root+'/case.json','utf8'));", "fs.writeFileSync(root+'/prompt.json',JSON.stringify({args:process.argv.slice(2),stdin:fs.readFileSync(0,'utf8'),cwd:process.cwd(),account:process.env.PI_CODING_AGENT_DIR}));", "const event=JSON.parse(fs.readFileSync(root+'/seed.json','utf8'));event.message.content=[{type:'text',text:c.reply}];", "console.log(JSON.stringify(event));console.log(JSON.stringify({type:'agent_end',messages:[event.message]}));", ""].join("\n"), { mode: 0o755 });
   return { layout, root, repo, bin, home, config, comparisonBase, changed, untouched, literalDiff, nativeDiff };
 }
 const basic = `Trace: manual scope fixture\nIntegration: fleet/manual-base\nSignal: isa-gap: V9\nSkills: intent@1.0.0 outcomes@1.0.0\n\nIntent:\nMake the counter result accurate without changing its verification contract.\n\nOutcomes:\n- O1 The counter works.\n  consumer: machine — fixture consumer\n  surface: /counter\n  check: run — inspect /counter; a features/counter.md mention here is not a map surface\n`;
@@ -87,7 +87,7 @@ async function review(p: any, name: string) {
   Object.assign(native, { stdoutEOF, stderrEOF, stdout: Buffer.concat(out).toString(), stderr: Buffer.concat(err).toString() });
   const record: any = { ...p, name, branch, tip, text, reply, native }; records.push(record); save();
   assert.equal(native.code, name === "bounce" ? 2 : 0, `${tag} ${p.layout}/${name}: native verdict path: ${native.stderr}`); assert.equal(native.signal, null); assert(stdoutEOF && stderrEOF);
-  const prompt = JSON.parse(fs.readFileSync(path.join(p.root, "prompt.json"), "utf8")); record.prompt = prompt.args.at(-1);
+  const prompt = JSON.parse(fs.readFileSync(path.join(p.root, "prompt.json"), "utf8")); record.prompt = prompt.stdin; assert(!prompt.args.includes(prompt.stdin));
   record.verdict = fs.readFileSync(path.join(p.root, "seats/verdicts", `manual-${name}.md`), "utf8"); save();
   assert(record.prompt.includes(`Tip SHA at dispatch: ${tip}`));
   const lines = (s: string, prefix: string) => s.split("\n").filter(line => line.startsWith(prefix));

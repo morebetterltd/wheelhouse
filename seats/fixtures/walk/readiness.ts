@@ -82,7 +82,7 @@ async function drive(source:string,dir:string,mode:string,args:string[]){
     if(mode!=="gui"){
       await until(()=>has(dir,"verifier.json")&&has(dir,"armed"),()=>ended,"verifier readiness and armed clock");
       const info=JSON.parse(fs.readFileSync(path.join(dir,"verifier.json"),"utf8"));
-      assert.equal(info.stdin,"ignored","fixture verifier stdin must be ignored, not the open caller pipe");
+      assert.equal(info.stdin,"open-pipe","fixture verifier stdin must be the prompt pipe (whose EOF is checked), not ignored");
       put(dir,"readiness-observed");put(dir,"release");
       if(mode==="timeout"||mode==="interrupt")await until(()=>has(dir,"holding"),()=>ended,"verifier holding after output");
       if(mode==="timeout")put(dir,"expire");

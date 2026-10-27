@@ -46,7 +46,7 @@ function run(w: World, expected: number, selected?: string, error?: string) {
     assert(fs.statSync(verdict).isFile(), "review verdict actually exists"); assert(invoked().length, "model actually ran");
     const text = fs.readFileSync(verdict, "utf8"); assert(text.includes(`- verifier-seat: ${selected} (`), text);
     assert(text.includes(`- verdict: ${{ 0: "APPROVE", 2: "BOUNCE", 3: "DISCOVER" }[expected]}`), "fresh verdict must match the native exit");
-    if (w.args.includes("--fallback-promotion")) { assert(text.includes(badge)); assert(text.includes(`- fallback-promotion-comment: ${commentId}`)); const argv = JSON.parse(fs.readFileSync(path.join(mirrorDir, "argv.json"), "utf8")); assert(argv.at(-1).includes("full REVIEWER.md contract")); assert(argv.at(-1).includes(badge)); }
+    if (w.args.includes("--fallback-promotion")) { assert(text.includes(badge)); assert(text.includes(`- fallback-promotion-comment: ${commentId}`)); const argv = JSON.parse(fs.readFileSync(path.join(mirrorDir, "argv.json"), "utf8")); const prompt = fs.readFileSync(path.join(mirrorDir, "prompt.txt"), "utf8"); assert(!argv.includes(prompt)); assert(prompt.includes("full REVIEWER.md contract")); assert(prompt.includes(badge)); }
   } else { assert(!fs.existsSync(verdict), "refusal must not publish a verdict"); }
   return r;
 }

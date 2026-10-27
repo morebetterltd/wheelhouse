@@ -594,13 +594,13 @@ interface OneShotRunResult {
   outcome?: "no-verdict";
 }
 
-function runOneShot(
+export function runOneShot(
   bin: string,
   args: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number; harness: HarnessName; marker?: { seat: string; bead: string } }
+  opts: { cwd: string; env: NodeJS.ProcessEnv; stdin: string; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number; harness: HarnessName; marker?: { seat: string; bead: string } }
 ): Promise<OneShotRunResult> {
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["ignore", "pipe", "pipe"], detached: true });
+    const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "pipe"], detached: true });
     const markerFile = opts.marker ? path.join(ROOT, "seats", "run", `verify.${opts.marker.seat}.json`) : null;
     if (markerFile) {
       fs.mkdirSync(path.dirname(markerFile), { recursive: true });
@@ -686,8 +686,13 @@ function runOneShot(
     };
     child.stdout?.on("data", (chunk: Buffer) => collect(stdoutChunks, () => stdoutBytes, (n) => { stdoutBytes = n; }, chunk));
     child.stderr?.on("data", (chunk: Buffer) => collect(stderrChunks, () => stderrBytes, (n) => { stderrBytes = n; }, chunk));
+    let stdinError: (Error & { code?: string }) | undefined;
     child.on("error", (error: Error & { code?: string }) => finish({ error }));
-    child.on("close", (status, signal) => finish(sawFinalVerdictMessage && (signal || status === 143) ? { status: 0, signal: null } : { status, signal }));
+    child.on("close", (status, signal) => finish(sawFinalVerdictMessage && (signal || status === 143) ? { status: 0, signal: null, error: stdinError } : { status, signal, error: stdinError }));
+    // end() streams with backpressure and closes stdin so print-mode CLIs see EOF.
+    // An early exit can close the pipe: retain its error without an unhandled event.
+    child.stdin?.on("error", (error) => { stdinError = error; });
+    child.stdin?.end(opts.stdin);
   });
 }
 
@@ -2109,6 +2114,7 @@ async function main(): Promise<void> {
     const res = await runOneShot(oneShot.bin, oneShot.args, {
       cwd: scratchCwd,
       env,
+      stdin: oneShot.stdin,
       timeoutMs,
       firstOutputTimeoutMs,
       noEventTimeoutMs,
