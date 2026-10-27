@@ -951,9 +951,9 @@ else
 fi
 
 if bash "$SCRIPT_DIR/fixtures/daemon-memory.sh" herald "$SCRIPT_DIR" "$FIX"; then
-  pass "24-hour-equivalent herald retained footprint and state bounds; removal controls rejected"
+  pass "24-hour-equivalent herald owned-state footprint and state bounds; removal controls rejected"
 else
-  fail "herald retained memory or removal controls exceeded the named bounds"
+  fail "herald owned-state retention or removal controls exceeded the named bounds"
 fi
 
 if [ -n "${WHEELHOUSE_QJGW_EVIDENCE:-}" ] && [ -f "$FAKE_TMUX_CALLS_LOG" ]; then

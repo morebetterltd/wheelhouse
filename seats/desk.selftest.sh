@@ -277,9 +277,9 @@ fi
 stop_fixture_desks
 assert_no_fixture_desks
 if bash "$HERE/fixtures/daemon-memory.sh" desk "$HERE" "$FIX"; then
-  pass "24-hour-equivalent desk retained footprint and resource bounds; removal controls rejected"
+  pass "24-hour-equivalent desk owned-state footprint and resource bounds; removal controls rejected"
 else
-  fail "desk retained memory or removal controls exceeded the named bounds"
+  fail "desk owned-state retention or removal controls exceeded the named bounds"
 fi
 if [ "$FAIL" -eq 0 ]; then echo "desk.selftest: PASS ($PASS checks)"; exit 0; fi
 echo "desk.selftest: FAIL ($FAIL failed, $PASS passed)" >&2; exit 1

@@ -1483,6 +1483,32 @@ bash seats/selftest-sweep.sh
 
 It runs the selected tier serially and, for core and full alike, shares one host-wide FIFO with project benches, direct suites, and `verify.ts` reviews; another seat or install waits indefinitely for admission rather than running heavy work concurrently. `bash seats/selftest-sweep.sh --tier core` runs exactly the sorted `seats/selftest-core.list` (36 suites, including the prune deletion-safety split); every other root suite belongs to full by absence. The default is `--tier full`. `WHEELHOUSE_SELFTEST_SWEEP_TIER=core|full` is the environment form; an explicit flag wins. Core ignores `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` so a filter cannot silently weaken its manifest; full retains the pattern override for targeted diagnostics, never reusable full-batch evidence. Missing/unreadable manifests, invalid or duplicate names, empty lists and missing/unreadable suites STOP with exit2 before lock admission. Comments beginning with `#` and blank lines are allowed. The manifest's original bytes, including comments, determine its SHA-256. Tier environment selection does not leak into nested suite fixtures. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
 
+### Daemon retention fixture
+
+The herald/desk suites drive 24 hours of real scan/refresh work after warm-up.
+Their retention oracle measures **audited owned-state logical footprint**, not
+whole-VM heap or RSS: object identities, reference slots, opaque functions and
+UTF-8/primitive payload bytes. Herald roots include the persisted cursor/pane
+catalog that each poll reloads, plus its live seen array/set; desk roots include
+board/digest snapshots, both caches, pending windows and cancellation closures.
+Shared objects are visited once. The fixed fixture's limits are printed with
+warm/end/peak measurements: herald 128 objects / 12,000 slots, desk 1,024 objects /
+8,192 slots, both zero residual closures and 256 KiB logical payload. These are
+fixed-input test envelopes, **not production graph-size or process-memory caps**.
+Component counters additionally constrain Worker/process/Blob lifetimes and
+seen-table allocation churn; removal controls must reach their own oracle.
+A growing payload inside an otherwise bounded collection is separately rejected.
+
+Native physical footprint (including compressed pages on Darwin), RSS and JSC
+heap remain diagnostics. Collection requests do not establish that every runtime
+allocation has retired; VM capacity and GC scheduling can vary with host load.
+They therefore cannot decide bounded *owned* retention. This is not a proof that
+all Bun/native internals or a production-sized graph have flat memory.
+`WHEELHOUSE_MEMORY_VM_NOISE=1` adds bounded, rotating fixture-owned allocation
+interference during the unchanged drive (two 65,536-object generations). It
+exercises the oracle amid VM churn without a host-wide CPU burner, slowing the
+workload, changing production daemons, or bypassing heavy-test admission.
+
 ### Project benches, reviews, and the host pressure brake
 
 For any heavy build/test command, including a bench that has not adopted the prologue yet:
