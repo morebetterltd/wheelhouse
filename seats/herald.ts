@@ -49,7 +49,9 @@ const PID_FILE = path.join(SEATS_DIR, "run", "herald.pid");
 const COMMANDER_PANE_FILE = path.join(SEATS_DIR, "run", "commander-pane.json");
 const TARGET_FILE = path.join(SEATS_DIR, "run", "herald.target.json");
 const INTERVAL_MS = Number(process.env.WHEELHOUSE_HERALD_INTERVAL_MS || 1000);
-const MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
+const RAW_MAX_SEEN = Number(process.env.WHEELHOUSE_HERALD_MAX_SEEN || 5000);
+const MAX_SEEN = Number.isFinite(RAW_MAX_SEEN) && RAW_MAX_SEEN >= 1 ? Math.floor(RAW_MAX_SEEN) : 5000;
+const MAX_PANE_HISTORY = 128;
 const READ_CHUNK_BYTES = Math.max(1024, Number(process.env.WHEELHOUSE_HERALD_READ_CHUNK_BYTES || 64 * 1024));
 const POKE_PHRASE = "check the fleet inbox";
 const POKE_STABILITY_MS = Math.max(0, Number(process.env.WHEELHOUSE_HERALD_POKE_STABILITY_MS || 3000));
@@ -121,10 +123,17 @@ function readInboxSeen(): string[] {
   return ids.slice(-MAX_SEEN);
 }
 
-let currentSeen = readInboxSeen();
+let seenIds = new Set(readInboxSeen());
+let currentSeen = Array.from(seenIds);
 
 function rememberSeen(seen: Set<string>): void {
+  // Empty polls must not allocate another MAX_SEEN-entry hash table/array.
+  // Writers only add ids; equal size means the remembered window is unchanged.
+  if (seen.size === currentSeen.length) return;
   currentSeen = Array.from(seen).slice(-MAX_SEEN);
+  // Rebuild only after a changed batch, so a large catch-up cannot pin the
+  // hash table's high-water capacity through all subsequent idle polls.
+  seenIds = new Set(currentSeen);
 }
 
 function readState(): HeraldState {
@@ -143,7 +152,23 @@ function readState(): HeraldState {
 
 let stateWriteCounter = 0;
 
+function trimPaneHistory(state: HeraldState): boolean {
+  const fields = ["lastPokedByPane", "firstDeferredAtByPane", "firstDeferredInboxSizeByPane"] as const;
+  const panes = [...new Set(fields.flatMap(field => Object.keys(state[field] ?? {})))];
+  if (panes.length <= MAX_PANE_HISTORY) return false;
+  // Keep the current target even if its deferred episode began a long time ago.
+  // Retired tmux pane ids otherwise accumulated in all three persisted maps.
+  const target = readLastTarget()?.target;
+  const current = target && panes.includes(target) ? [target] : [];
+  const recency = (pane: string) => Math.max(state.lastPokedByPane?.[pane] ?? 0, state.firstDeferredAtByPane?.[pane] ?? 0);
+  const recent = panes.reverse().sort((a, b) => recency(b) - recency(a)).filter(pane => !current.includes(pane));
+  const keep = new Set([...current, ...recent.slice(0, MAX_PANE_HISTORY - current.length)]);
+  for (const field of fields) for (const pane of Object.keys(state[field] ?? {})) if (!keep.has(pane)) delete state[field]![pane];
+  return true;
+}
+
 function writeState(state: HeraldState): void {
+  trimPaneHistory(state);
   fs.mkdirSync(SEATS_DIR, { recursive: true });
   const { seen: _seen, ...persisted } = state;
   const body = JSON.stringify(persisted) + "\n";
@@ -968,10 +993,15 @@ function heartbeat(state: HeraldState, force: boolean): void {
 
 function scanOnce(): number {
   const state = readState();
-  const seen = new Set(state.seen);
+  const seen = seenIds;
   let appended = 0;
-  let stateDirty = false;
-  for (const file of logFiles()) {
+  let stateDirty = trimPaneHistory(state);
+  const files = logFiles();
+  const present = new Set(files.map(file => path.relative(ROOT, file)));
+  // A retired log's offset is not live state. Re-created files are adopted at
+  // EOF, just like other cursorless logs, rather than inheriting an old cursor.
+  for (const rel of Object.keys(state.logs)) if (!present.has(rel)) { delete state.logs[rel]; stateDirty = true; }
+  for (const file of files) {
     const rel = path.relative(ROOT, file);
     const priorRecord = state.logs[rel];
     if (!priorRecord) {

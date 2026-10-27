@@ -22,14 +22,14 @@ The main files here:
   dispatch, pushes the previous bead's branch before a move, enforces the
   worktree cap. Install policy in `wheelhouse/.template-source` may opt out
   with `seat_push=off` or `seat_worktrees=per-task`.
-- `herald.ts` — non-LLM Dispatch Office daemon and delivery carrier: tails logs from their saved cursor (first cursorless sight starts at EOF), appends deduplicated inbox records, and supplies identity-guarded `--hook` delivery. Manual `--drain` is the fallback/test seam for unwired installs.
+- `herald.ts` — non-LLM Dispatch Office daemon and delivery carrier: tails logs from their saved cursor (first cursorless sight starts at EOF), appends deduplicated inbox records, and supplies identity-guarded `--hook` delivery. Manual `--drain` is the fallback/test seam for unwired installs. The cursor catalog drops retired log paths; a recreated cursorless path is adopted at EOF. Pane cooldown/defer history keeps at most 128 pane ids, retaining the current target. The seen-id horizon defaults to 5000 (finite `WHEELHOUSE_HERALD_MAX_SEEN` values of at least 1 override it, rounded down); idle polls reuse that bounded set instead of copying it.
 - `needs.ts` — append-only human-needs ledger: opens, lists, answers, shows, and closes durable requests in `seats/needs.jsonl`.
 - `intake.ts` — durable signal intake: post, dispose, list, show and audit signals in `seats/intake.jsonl`.
 - `channels.ts` — reads and validates install-owned `seats/channels.json` declarations for principal/stakeholder channels.
 - `comms.ts` — the single declared-channel send gate; sends by channel name, confirms read-back, and records refs in ignored `seats/comms.jsonl`.
 - `report-issues.ts` — commander-run, opt-in publisher for `template-report` tasks: dry-runs or files routed GitHub issues with scrubbed bodies, dedupe, and `external-ref` writeback.
 - `digest.ts` — read-only fleet digest for a time window: shipped work, open/cleared needs, review/sent-back work, failures, and alerts in commander, human, or JSON form.
-- `desk.ts` — local web desk for `/needs` and the read-only `/board` kanban.
+- `desk.ts` — local web desk for `/needs` and the read-only `/board` kanban. Digest refreshes admit at most two windows concurrently and use the existing read-only digest JSON CLI in short-lived processes, avoiding retained native allocations from recreated Worker VMs. The bounded digest LRU is unchanged. Each job is reaped before its slot is released; timeout/error cleanup kills its isolated process group. Normal exit and SIGTERM/SIGINT/SIGHUP also cancel active job groups. Additional windows keep their cached/empty response until a later request can schedule them; page handlers do not wait for digest work.
 - `inbox-hook.sh` — anchored, quiet Claude Code SessionStart/UserPromptSubmit/PostToolUse(Bash) inbox wrapper; starts no Bun when the inbox is absent or already read.
 - `inbox-hook.selftest.sh` — proves context formats, write-before-bookkeeping, budgeted rows, identity guard and manual-path deduplication on owned fixtures.
 - `principal-sentinel.sh` — Claude Code Stop hook that turns final assistant `@principal:` lines into durable needs.
@@ -1595,6 +1595,32 @@ bash seats/selftest-sweep.sh
 ```
 
 It runs the selected tier serially and, for core and full alike, shares one host-wide FIFO with project benches, direct suites, and `verify.ts` reviews; another seat or install waits indefinitely for admission rather than running heavy work concurrently. `bash seats/selftest-sweep.sh --tier core` runs exactly the sorted `seats/selftest-core.list` (including the prune deletion-safety split); every other root suite belongs to full by absence. The default is `--tier full`. `WHEELHOUSE_SELFTEST_SWEEP_TIER=core|full` is the environment form; an explicit flag wins. Core ignores `WHEELHOUSE_SELFTEST_SWEEP_PATTERN` so a filter cannot silently weaken its manifest; full retains the pattern override for targeted diagnostics, never reusable full-batch evidence. Missing/unreadable manifests, invalid or duplicate names, empty lists and missing/unreadable suites STOP with exit2 before lock admission. Comments beginning with `#` and blank lines are allowed. The manifest's original bytes, including comments, determine its SHA-256. Tier environment selection does not leak into nested suite fixtures. The default remains `/tmp/wheelhouse-selftest-sweep.lock`, independent of `TMPDIR`; `WHEELHOUSE_SELFTEST_SWEEP_LOCK` overrides it. A new lock is an atomically published directory containing exactly `wheelhouse-selftest-sweep` (versioned marker with pid, hostname, start time and run token), `pid`, and `started`. Unmarked, malformed, symlinked, foreign-host or extra-entry locks STOP with exit 2 without moving or removing them; do not point the override at an existing folder. Valid numeric-pid legacy files remain readable for the file-to-directory transition. Release requires this invocation's recorded directory identity and token, not merely a matching pid.
+
+### Daemon retention fixture
+
+The herald/desk suites drive 24 hours of real scan/refresh work after warm-up.
+Their retention oracle measures **audited owned-state logical footprint**, not
+whole-VM heap or RSS: object identities, reference slots, opaque functions and
+UTF-8/primitive payload bytes. Herald roots include the persisted cursor/pane
+catalog that each poll reloads, plus its live seen array/set; desk roots include
+board/digest snapshots, both caches, pending windows and cancellation closures.
+Shared objects are visited once. The fixed fixture's limits are printed with
+warm/end/peak measurements: herald 128 objects / 12,000 slots, desk 1,024 objects /
+8,192 slots, both zero residual closures and 256 KiB logical payload. These are
+fixed-input test envelopes, **not production graph-size or process-memory caps**.
+Component counters additionally constrain Worker/process/Blob lifetimes and
+seen-table allocation churn; removal controls must reach their own oracle.
+A growing payload inside an otherwise bounded collection is separately rejected.
+
+Native physical footprint (including compressed pages on Darwin), RSS and JSC
+heap remain diagnostics. Collection requests do not establish that every runtime
+allocation has retired; VM capacity and GC scheduling can vary with host load.
+They therefore cannot decide bounded *owned* retention. This is not a proof that
+all Bun/native internals or a production-sized graph have flat memory.
+`WHEELHOUSE_MEMORY_VM_NOISE=1` adds bounded, rotating fixture-owned allocation
+interference during the unchanged drive (two 65,536-object generations). It
+exercises the oracle amid VM churn without a host-wide CPU burner, slowing the
+workload, changing production daemons, or bypassing heavy-test admission.
 
 ### Project benches, reviews, and the host pressure brake
 
