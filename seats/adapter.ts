@@ -574,7 +574,7 @@ function rpcReplyProgress(rec: RpcSeat, command: Record<string, unknown>, id: st
       logBytes: current.log, stderrBytes: current.stderr, fifoUnreadBytes: fifoBytes, ...descriptors };
     const detail = `${rpcSeat(rec)} has not answered ${command.type} across ${quietReports >= 6 ? quietReports : reports} reports; ` +
       `${fifoBytes === 0 ? 'command taken from FIFO (unread bytes 0, non-consuming descriptor)' : fifoBytes === null ? 'FIFO unread bytes unknown' : `FIFO unread bytes ${fifoBytes} (command consumption not established)`}; ` +
-      `CPU time delta ${facts.cpuDeltaMs === null ? 'unknown' : facts.cpuDeltaMs + ' ms'}; seat log byte size ${facts.logBytes ?? 'unknown'}${quietReports ? ' unchanged' : ''}; stderr log byte size ${facts.stderrBytes ?? 'unknown'}; ` +
+      `CPU time delta ${facts.cpuDeltaMs === null ? 'unknown' : facts.cpuDeltaMs + ' ms'}; seat log byte size ${facts.logBytes ?? 'unknown'}${quietReports ? current.log === anchor.log ? ' unchanged' : ' no growth (size changed)' : ''}; stderr log byte size ${facts.stderrBytes ?? 'unknown'}; ` +
       `fd 0: ${facts.fd0}; fd 1: ${facts.fd1}; ${recovery}`;
     if (!noted) {
       appendSeatLog(rec.log, { type: 'wheelhouse_note', at: new Date().toISOString(), message: 'rpc unanswered: ' + detail, rpc: facts });
@@ -590,8 +590,10 @@ function rpcReplyProgress(rec: RpcSeat, command: Record<string, unknown>, id: st
       const givingUp = budget !== null && now - start >= budget;
       if (!reporting && !givingUp) return;
       const current = sample();
-      const quiet = current.cpu !== null && previous.cpu !== null && current.cpu === previous.cpu &&
-        current.log !== null && current.log === previous.log && current.stderr !== null && current.stderr === previous.stderr;
+      // Only increases are progress; log truncation/rotation is not seat work.
+      const quiet = current.cpu !== null && previous.cpu !== null && current.cpu <= previous.cpu &&
+        current.log !== null && previous.log !== null && current.log <= previous.log &&
+        current.stderr !== null && previous.stderr !== null && current.stderr <= previous.stderr;
       if (reporting) {
         reports++;
         if (quiet) quietReports++; else { quietReports = 0; anchor = current; }
