@@ -38,11 +38,17 @@ socket.on("data", data => {
         input.pause(); input.close(); fs.closeSync(0);
         send({ type: "pipe-closed" });
         break;
+      case "burn": {
+        const until = performance.now() + 80;
+        while (performance.now() < until) Math.sqrt(Math.random());
+        send({ type: 'burned' }); break;
+      }
       case "exit": process.exit(0);
     }
   }
 });
 process.on("SIGTERM", () => send({ type: "term", pid: process.pid }));
+for (const signal of ['SIGINT','SIGHUP']) process.on(signal, () => send({type:'signal',signal,pid:process.pid}));
 input.on("line", line => {
   const command = JSON.parse(line);
   if (command.type === "get_state") {

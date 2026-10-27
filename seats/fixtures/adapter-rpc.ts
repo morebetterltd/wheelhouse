@@ -9,8 +9,8 @@ const root = path.resolve(process.argv[2]);
 const runtime = path.join(root, "runtime/seats");
 const peerFile = path.join(import.meta.dir, "adapter-rpc-peer.mjs");
 const clockFile = path.join(import.meta.dir, "adapter-rpc-clock.ts");
-const caseNames = ["held-reply", "dead-peer", "closed-pipe", "backpressure", "partial-eof", "missing-log", "lost-log", "replaced-log"];
-// Optional exact-case diagnosis; the unfiltered full sweep still runs all8.
+const caseNames = ["held-reply", "swallowed-reply", "unbudgeted-reply", "working-reply", "dead-peer", "closed-pipe", "backpressure", "partial-eof", "missing-log", "lost-log", "replaced-log"];
+// Optional exact-case diagnosis; the unfiltered full sweep runs every case.
 const wanted = process.env.WHEELHOUSE_TEST_RPC_CASES?.split(",").map(s => s.trim());
 if (wanted) assert(wanted.every(name => caseNames.includes(name)), "unknown RPC case selection");
 const cases = caseNames.filter(name => !wanted || wanted.includes(name));
@@ -83,10 +83,12 @@ for (const kind of cases) {
   delete env.WHEELHOUSE_RPC_TIMEOUT_MS;
   delete env.WHEELHOUSE_PROMPT_ACK_MS;
   delete env.WHEELHOUSE_FIFO_WRITE_MS;
+  delete env.WHEELHOUSE_RPC_GIVE_UP_AFTER_MS;
+  if (['held-reply','swallowed-reply','unbudgeted-reply','working-reply'].includes(kind)) env.WHEELHOUSE_RPC_VIRTUAL_CLOCK = '1';
   const invocations: any[] = [];
-  function cli(args: string[], preload = false) {
+  function cli(args: string[], preload = false, extra: Record<string,string> = {}) {
     const command = ["bun", ...(preload ? ["--preload", clockFile] : []), path.join(project, "seats/adapter.ts"), ...args];
-    const child = Bun.spawn(command, { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn(command, { env: {...env,...extra}, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const finished = Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
       .then(([rc, out, err]) => {
         const result = { args, rc, out, err };
@@ -152,6 +154,87 @@ for (const kind of cases) {
       fs.unlinkSync(log);
       const forbidden = next("held");
       await assertSourceLost(cli(["dispatch", "reviewer-1", "new-bead", kind], true), forbidden);
+      continue;
+    }
+    if (['held-reply','swallowed-reply','unbudgeted-reply','working-reply'].includes(kind)) {
+      const notes = () => fs.readFileSync(log,'utf8').trim().split('\n').map(line=>JSON.parse(line)).filter(row=>row.type==='wheelhouse_note'&&/^rpc (unanswered|answered late):/.test(row.message));
+      const assertFacts = (message:string) => {
+        assert.match(message,/seat "reviewer-1" \(pid \d+\) has not answered get_state across \d+ reports/);
+        assert.match(message,/command taken from FIFO \(unread bytes 0, non-consuming descriptor\)|FIFO unread bytes unknown/);
+        assert.match(message,/CPU time delta \d+ ms; seat log byte size \d+/);
+        assert(message.includes(`fd 0: FIFO held by pid ${pid}`),message);
+        assert(message.includes(`fd 1: pipe to seat-event-log held by pid ${pid}`),message);
+        assert(message.includes('Recovery: bun seats/adapter.ts stop reviewer-1 (session kept), then bun seats/adapter.ts dispatch reviewer-1'),message);
+        assert(message.includes('bun seats/adapter.ts resume reviewer-1'),message);
+      };
+      const rounds = kind==='held-reply'?2:1;
+      for(let round=0;round<rounds;round++) {
+        fs.writeFileSync(stateFile,JSON.stringify(state)); // force the same owned cross-bead preflight each round
+        for(const file of ['progress','observe','armed','step','history.jsonl']) fs.rmSync(path.join(clock,file),{force:true});
+        let barrier=next('holding');send('hold');await barrier;
+        barrier=next('held');
+        const request=cli(['dispatch','reviewer-1','new-bead',kind],true,kind==='swallowed-reply'?{WHEELHOUSE_RPC_GIVE_UP_AFTER_MS:'40000'}:{});
+        const beforeExit=(event:Promise<any>)=>Promise.race([event,request.finished.then(result=>{throw Error('client exited before held barrier: '+JSON.stringify(result));})]);
+        const held=await beforeExit(barrier);
+        const armed=fileSignal(path.join(clock,'armed'));try{await beforeExit(armed.promise);}finally{armed.close();}
+        fs.writeFileSync(path.join(clock,'observe'),'native WAIT observation\n');
+        let logical=0,observations=0,named=false;
+        async function tick(nextLogical=logical+5001) {
+          const wait=fileSignal(path.join(clock,'progress'),()=>fs.existsSync(path.join(clock,'progress'))&&JSON.parse(fs.readFileSync(path.join(clock,'progress'),'utf8')).observations>observations);
+          logical=nextLogical;fs.writeFileSync(path.join(clock,'step'),String(logical));
+          try{await beforeExit(wait.promise);}finally{wait.close();}
+          const progress=JSON.parse(fs.readFileSync(path.join(clock,'progress'),'utf8'));observations=progress.observations;
+          if(observations<6)assert(!progress.message.includes('has not answered'),progress.message);
+          if(progress.message.includes('has not answered')){assertFacts(progress.message);named=true;}
+          else assert.match(progress.message,/pipe open; process alive; waiting for a signal, not a timeout/);
+          return progress;
+        }
+        if(kind==='working-reply') {
+          for(let i=0;i<36;i++) {
+            if(i<12){const burned=next('burned');send('burn');await burned;}
+            else fs.appendFileSync(i<24?log:log.replace(/\.jsonl$/,'.stderr.log'),i<24?'{}\n':'fixture stderr progress\n');
+            const progress=await tick();assert(!progress.message.includes('has not answered'),'working seat must not be named');
+          }
+          assert.equal(named,false);assert.equal(notes().length,0);
+        } else if(kind==='swallowed-reply') {
+          for(let i=0;i<6;i++)await tick();
+        } else {
+          for(let i=0;i<20&&!named;i++)await tick();
+          assert(named,'six consecutive no-progress reports must name the seat');
+          await tick();await tick(); // no duplicate note while still unanswered
+          if(logical<60001)await tick(60001);
+          assert(logical>60000,'unset-budget control must pass old 20s/60s budgets');
+        }
+        if(kind==='swallowed-reply') {
+          const forbidden=fileSignal(path.join(clock,'progress'),()=>JSON.parse(fs.readFileSync(path.join(clock,'progress'),'utf8')).observations>observations);
+          fs.writeFileSync(path.join(clock,'step'),'60001');
+          try {
+            const outcome=await Promise.race([request.finished.then(result=>({result})),forbidden.promise.then(()=>({continued:true}))]);
+            if('continued' in outcome){request.child.kill('SIGTERM');await request.finished;throw Error('budget ignored: native WAIT after 60001ms, before owned-client cancellation');}
+            assert.equal(outcome.result.rc,3,outcome.result.err);assert.match(outcome.result.err,/^STOP: seat "reviewer-1" \(pid \d+\) has not answered get_state/m);assertFacts(outcome.result.err);
+            assert.deepEqual(JSON.parse(fs.readFileSync(stateFile,'utf8')),state,'budget leaves seat state untouched');
+            assert.equal(peer.closed,false);assert.doesNotThrow(()=>process.kill(pid,0));
+            const unanswered=notes();assert.equal(unanswered.length,1);assert.equal(unanswered[0].rpc.id,held.id);
+          }finally{forbidden.close();}
+        } else {
+          barrier=next('released');send('release');await barrier;
+          const result=await request.finished;
+          assert.equal(result.rc,0,result.err);assert.match(result.out,/dispatched new-bead to reviewer-1/);
+          assert.doesNotMatch(result.out+result.err,/timed out|WEDGED/);
+          const after=JSON.parse(fs.readFileSync(stateFile,'utf8')).seats['reviewer-1'];
+          assert.equal(after.pid,pid);assert.equal(after.sessionFile,state.seats['reviewer-1'].sessionFile);assert.equal(after.lastBead,'new-bead');
+          if(kind!=='working-reply') {
+            const pair=notes().filter(row=>row.rpc.id===held.id);assert.equal(pair.length,2);
+            assert(pair[0].message.startsWith('rpc unanswered:'));assert(pair[1].message.startsWith('rpc answered late:'));
+            assert.equal(pair[0].rpc.command,'get_state');assert.equal(pair[0].rpc.noProgressReports,6);assert.equal(pair[0].rpc.cpuDeltaMs,0);
+            assert.equal(typeof pair[0].rpc.logBytes,'number');assert('fifoUnreadBytes' in pair[0].rpc);assert(pair[0].rpc.fd0.includes(String(pid)));assert(pair[0].rpc.fd1.includes(String(pid)));
+            assert(pair[1].rpc.reports>=pair[0].rpc.reports);assertFacts(result.err);
+          }
+        }
+        assert(!events.some(event=>event.type==='term'||event.type==='signal'),'diagnosis/budget never signals the seat');
+      }
+      if(kind==='held-reply') {assert.equal(notes().length,4);assert.equal(new Set(notes().map(row=>row.rpc.id)).size,2);}
+      console.log(`PASS ${kind}: controlled WAIT clock; facts/recovery and once-only note pairs; same live unsignalled pid/session; budget policy verified`);
       continue;
     }
     const waitingForDrain = kind === "backpressure" || kind === "partial-eof";
