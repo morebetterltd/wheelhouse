@@ -1648,6 +1648,7 @@ export interface SweepLaunchOptions {
   fixtureSuites?: string[];
   noWait?: boolean;
   coordinatedSignals?: boolean;
+  preflightCandidates?: import("./preflight-attribution").PreflightCandidates;
 }
 // The exported name remains for existing callers which explicitly request full.
 export async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string, choice: SweepChoice = { tier: "full", reason: "caller" }, options: SweepLaunchOptions = {}): Promise<SweepResult> {
@@ -1768,12 +1769,20 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
     catch (e: any) { error = e.message; rc = 1; }
   }
   const elapsedMs = Date.now() - started;
+  const preflightAttribution = await (await import("./preflight-attribution")).attributePreflight({
+    rc, logPath, scratchCwd, candidates: options.preflightCandidates,
+    runAudit: (auditTip, suite) => runDispatcherFullSweep(repoRoot, auditTip, realBd, basePath,
+      { tier: "full", reason: "preflight attribution" }, { ...options, preflightCandidates: undefined,
+        fixtureSuites: [suite], logPrefix: "preflight.", noWait: false }),
+  });
+  if (preflightAttribution.length) fs.appendFileSync(logPath, preflightAttribution.join("\n") + "\n");
   fs.appendFileSync(logPath, `\nrc=${rc}\nelapsedMs=${elapsedMs}\n${error ? `error=${error}\n` : ""}`);
-  return { required: true, rc, logPath, elapsedMs, tip, choice, timings, error };
+  return { required: true, rc, logPath, elapsedMs, tip, choice, timings, error,
+    ...(preflightAttribution.length ? { preflightAttribution } : {}) };
   } finally { removeScratchWorktree(repoRoot, scratchCwd); }
 }
 
-function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[] {
+export function sweepPromptLines(sweep: SweepResult & { preflightAttribution?: string[] }, requireCitation: boolean): string[] {
   if (!sweep.logPath) return [];
   return [
     ``,
@@ -1788,6 +1797,8 @@ function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
     ...sweepTimingLines(sweep),
+    ...(sweep.preflightAttribution ?? []),
+    ...(sweep.preflightAttribution?.length ? ["On each CANDIDATE line, say whether that candidate's own tip fails each attributed audit; main=FAIL means it already fails on main, ERROR means the run could not complete, and attribution cannot approve a failed sweep."] : []),
     ...(sweep.error ? [`- error: ${sweep.error}`] : []),
     sweep.batch ? `This is batch coverage, not a new sweep at the candidate alone. Reviewed tip ${sweep.tip} is an ancestor of batch tip ${sweep.batch.tip}, whose first-parent chain reaches current main. This reuses only the sweep, not another reviewer's judgment.` : `This dispatcher gate runs for every review, regardless of the bead's wording, outside your model command timeout in the detached scratch worktree at the reviewed tip. Its result is recorded with your verdict. If rc is not 0, you cannot approve.`,
     ...(requireCitation ? [`You must cite rc=${sweep.rc} and the exact log path in your final evidence.`] : []),
@@ -2045,7 +2056,7 @@ async function main(): Promise<void> {
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
   const ownTier = chooseSweepTier(repoRoot, tip, claim, ROOT);
   const selectedTier = [ownTier, ...(batchCandidates?.candidates.map(c => c.choice) ?? [])].find(c => c.tier === "full") ?? ownTier;
-  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);
+  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier, { preflightCandidates: batchCandidates });
   const requireSweepCitation = !!batchCandidates || !!sweep.batch || claimRequiresSweepCitation(claim);
   const sweepPrompt = sweepPromptLines(sweep, requireSweepCitation);
 
