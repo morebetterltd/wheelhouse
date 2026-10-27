@@ -3,11 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 const [file,mode,record]=process.argv.slice(2);
-assert(['spawn','error','malformed','read','timeout'].includes(mode));
 const root=path.dirname(path.dirname(file)),fixture=path.dirname(root);
 assert(fs.lstatSync(path.join(fixture,'.wheelhouse-selftest-fixture')).isFile());
 assert(record.startsWith(root+path.sep));
-assert(!fs.readFileSync(file,'utf8').includes('const args=process.argv.slice(2);'));
 process.env.WHEELHOUSE_DESK_ROOT=root;process.env.WHEELHOUSE_NEEDS_ROOT=root;
 process.env.WHEELHOUSE_DESK_DIGEST_TIMEOUT_MS='500';
 // Host-load containment only, not a digest refresh SLA.
@@ -18,6 +16,8 @@ const nativeSpawn=Bun.spawn.bind(Bun);let injected=false,readRefused=false,child
 function alive(pid:number){try{process.kill(pid,0);return true;}catch(e:any){if(e.code==='ESRCH')return false;throw e;}}
 let grandchild=0;
 try{
+assert(['spawn','error','malformed','read','timeout'].includes(mode));
+assert(!fs.readFileSync(file,'utf8').includes('const args=process.argv.slice(2);'));
 fs.writeFileSync(grandchildFile,'setInterval(()=>{},1000);\n');
 fs.writeFileSync(fault,mode==='error'?'process.exit(7);\n':mode==='malformed'?'console.log(JSON.stringify({bad:true}));\n':mode==='timeout'?`import fs from 'node:fs';const child=Bun.spawn([process.execPath,${JSON.stringify(grandchildFile)}],{stdin:'ignore',stdout:'ignore',stderr:'ignore'});fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));setInterval(()=>{},1000);\n`:'setInterval(()=>{},1000);\n');
 Bun.spawn=((options:any)=>{

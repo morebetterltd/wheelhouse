@@ -1,6 +1,6 @@
 // Real parent termination must not strand the detached read-only job tree.
 import fs from 'node:fs';import path from 'node:path';import assert from 'node:assert/strict';
-const [file,mode,record]=process.argv.slice(2);assert(['exit','signal','SIGINT','SIGHUP'].includes(mode));const signal=mode==='exit'?null:mode==='signal'?'SIGTERM':mode;
+const [file,mode,record]=process.argv.slice(2);const signal=mode==='exit'?null:mode==='signal'?'SIGTERM':mode;
 const root=path.dirname(path.dirname(file)),fixture=path.dirname(root);
 assert(fs.lstatSync(path.join(fixture,'.wheelhouse-selftest-fixture')).isFile());assert(record.startsWith(root+path.sep));
 // Host-load containment only, not a startup or shutdown SLA.
@@ -9,6 +9,7 @@ let setup='marker',started=performance.now(),written=false,parent:any,tree:any;
 function alive(pid:number){try{process.kill(pid,0);return true;}catch(e:any){if(e.code==='ESRCH')return false;throw e;}}
 const base=record+'.fixture';
 try{
+assert(['exit','signal','SIGINT','SIGHUP'].includes(mode));
 fs.mkdirSync(base);
 const marker=path.join(base,'tree.json'),grandchildFile=path.join(base,'grandchild.ts'),fault=path.join(base,'digest.ts'),driver=path.join(base,'parent.ts');
 fs.writeFileSync(grandchildFile,'setInterval(()=>{},1000);\n');
