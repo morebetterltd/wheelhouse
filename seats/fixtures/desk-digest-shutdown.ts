@@ -7,7 +7,8 @@ const base=record+'.fixture';fs.mkdirSync(base);
 const marker=path.join(base,'tree.json'),grandchildFile=path.join(base,'grandchild.ts'),fault=path.join(base,'digest.ts'),driver=path.join(base,'parent.ts');
 fs.writeFileSync(grandchildFile,'setInterval(()=>{},1000);\n');
 fs.writeFileSync(fault,`import fs from 'node:fs';const c=Bun.spawn([process.execPath,${JSON.stringify(grandchildFile)}],{stdin:'ignore',stdout:'ignore',stderr:'ignore'});fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({child:process.pid,grandchild:c.pid}));setInterval(()=>{},1000);\n`);
-fs.writeFileSync(driver,`import fs from 'node:fs';process.env.WHEELHOUSE_DESK_DIGEST_TIMEOUT_MS='60000';const spawn=Bun.spawn.bind(Bun);Bun.spawn=((o)=>spawn({...o,cmd:[o.cmd[0],${JSON.stringify(fault)},...o.cmd.slice(2)]}));const d=await import(${JSON.stringify(file)});d.scheduleDigestRefresh();while(!fs.existsSync(${JSON.stringify(marker)}))await Bun.sleep(1);${mode==='exit'?'process.exit(0);':'setInterval(()=>{},1000);'}\n`);
+const ending=mode==='exit'?'process.exit(0);':'setInterval(()=>{},1000);';
+fs.writeFileSync(driver,`import fs from 'node:fs';process.env.WHEELHOUSE_DESK_DIGEST_TIMEOUT_MS='60000';const spawn=Bun.spawn.bind(Bun);Bun.spawn=((o)=>spawn({...o,cmd:[o.cmd[0],${JSON.stringify(fault)},...o.cmd.slice(2)]}));const d=await import(${JSON.stringify(file)});d.scheduleDigestRefresh();while(!fs.existsSync(${JSON.stringify(marker)}))await Bun.sleep(1);${ending}\n`);
 function alive(pid:number){try{process.kill(pid,0);return true;}catch(e:any){if(e.code==='ESRCH')return false;throw e;}}
 const parent=Bun.spawn([process.execPath,driver],{env:{...process.env,WHEELHOUSE_DESK_ROOT:root,WHEELHOUSE_NEEDS_ROOT:root},stdin:'ignore',stdout:'ignore',stderr:'pipe',detached:true});let tree:any;
 try{
