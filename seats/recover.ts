@@ -51,6 +51,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { completedSpawnSync as spawnSync } from "./native-command";
 import { seatIdentity } from "./seat-activity";
+import { missingPiSessionCwd } from "./pi-session-cwd";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const SEATS_DIR = path.join(ROOT, "seats");
@@ -70,6 +71,7 @@ interface SeatRecord {
   log?: string;
   sessionId?: string | null;
   sessionFile?: string | null;
+  cwd?: string;
   model?: string;
   lastBead?: string;
   lastDispatchAt?: string;
@@ -139,7 +141,12 @@ function classify(rec: SeatRecord): { cls: Cls; detail: string } {
   else if (rec.pid == null && rec.stoppedAt) gone = `stopped gracefully at ${rec.stoppedAt}`;
   else gone = `pid ${rec.pid ?? "?"} gone`;
 
-  if (sessionIntact) return { cls: "DEAD", detail: `${gone}; session intact` };
+  if (sessionIntact) {
+    const missingCwd = missingPiSessionCwd(rec.sessionFile!, rec.cwd);
+    return { cls: "DEAD", detail: missingCwd
+      ? `${gone}; session-file cwd is gone: ${missingCwd}; session continuity will be dropped on resume`
+      : `${gone}; session intact` };
+  }
   return { cls: "STALE", detail: `${gone}; no session artifacts` };
 }
 
