@@ -75,6 +75,7 @@ for (const name of cases) {
     if (name === 'ordinary') {
       assert.equal(result.code, 0, result.stderr); assert.equal(record.scratchGone, true); assert.equal(record.failure, null);
       assert(!('residual' in record)); assert(!fs.readdirSync(proof).some(n => n.startsWith('residual-')), 'passing canary must not run capture');
+      assert(!result.stdout.split('\n').some(line => line.startsWith('RETENTION_RESIDUAL ')), 'passing canary must not emit a residual record');
       console.log('PASS retention residual ordinary: scratchGone true, no residual object or capture files');
       continue;
     }

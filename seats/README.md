@@ -752,7 +752,8 @@ If a real run fails with `scratchGone: false`, keep the record and post its
 scrubbed contents as an intake finding with `bun seats/intake.ts post --kind
 finding --source verify-cancellation --title 'Retention scratch remained'
 --ref path/to/result.json --from-stdin` (pipe it through
-`seats/evidence-scrub.sh` first). Intake text has a 64 KiB limit: for a larger
+`seats/evidence-scrub.sh` first). When the review copy is gone, use the retained
+sweep log as `--ref` instead of the deleted result path. Intake text has a 64 KiB limit: for a larger
 record, post a summary with its reference and carry the complete scrubbed record
 into the produced task's comments. Do not retry away the failure or guess a cure;
 the captured finding becomes separate causal investigation work. This preserves
