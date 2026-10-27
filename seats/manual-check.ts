@@ -70,6 +70,8 @@ function readonlyTools(out:string,cwd:string) {
   const real=command("sh",["-c","command -v git"]);
   fs.writeFileSync(path.join(bin,"git"),`#!/usr/bin/env bash\ncase "\u0024{1:-}" in\nstatus|log|show|diff|rev-parse|ls-files|ls-tree|cat-file) exec ${JSON.stringify(real)} "\u0024@";;\nbranch) [ "\u0024#" = 2 ] && [ "\u0024{2:-}" = --list ] && exec ${JSON.stringify(real)} "\u0024@";;\nesac\necho 'manual-check: read-only version-control command refused' >&2\nexit 2\n`,{mode:0o755});
   fs.writeFileSync(path.join(bin,"gh"),'#!/bin/sh\necho "manual-check: publication unavailable" >&2\nexit 2\n',{mode:0o755});
+  // Keep this shim outside cwd: our integrity snapshot would correctly call
+  // coordinator-created files an edit. Placement reversal is in the history.
   return readonlyBdPath(ROOT,`${bin}${path.delimiter}${hostBudgetPath(ROOT)}`,out);
 }
 function failure(message:string) {
@@ -115,7 +117,9 @@ async function main(argv:string[]) {
     fs.writeFileSync(path.join(dir,'prompt.txt'),prompt);fs.writeFileSync(path.join(dir,'before.json'),JSON.stringify({tip,original:JSON.parse(original),scratch:JSON.parse(before),cwd,manual:manual.file,manualVersion:manual.version,skillVersion:skill.match(/^version:\s*(.+)$/m)?.[1],since,features:manual.features.map(f=>f.slug)},null,2));
     const one=oneShotCommandForHarness(selected.harness,brief,selected.entry.provider,selected.entry.model,prompt,selected.harness==='claude-code'?'Read,Bash,Glob,Grep':'read,bash',selected.entry.disallowedTools);
     if(selected.harness==='pi')one.args.splice(one.args.length-1,0,'--tools','read,bash');
-    const marker=path.join(ROOT,`seats/run/manual-check.${selected.name}.json`);fs.writeFileSync(marker,JSON.stringify({pid:process.pid,repo:product,at:new Date().toISOString()})+'\n');
+    // Walk dispatch recognizes this shared marker, not a parallel private lane.
+    // Keep the shared prefix; see the ownership regression in the history.
+    const marker=path.join(ROOT,`seats/run/walk.${selected.name}.json`);fs.writeFileSync(marker,JSON.stringify({pid:process.pid,bead:'manual-check',repo:product,startedAt:new Date().toISOString()})+'\n');
     let run;try {run=await manualCheckChild(one.bin,one.args,cwd,oneShotEnvForHarness(selected.harness,selected.dir,{...process.env,PATH:readonlyTools(dir,cwd),WHEELHOUSE_ROOT:ROOT,RUN_DIR:path.join(dir,'runtime'),EVIDENCE_DIR:path.join(dir,'evidence')}),budget);}finally{fs.unlinkSync(marker);}
     fs.writeFileSync(path.join(dir,'native.json'),JSON.stringify(run,null,2)+'\n');fs.writeFileSync(path.join(dir,'stdout.txt'),run.stdout);fs.writeFileSync(path.join(dir,'stderr.txt'),run.stderr);
     fs.appendFileSync(path.join(ROOT,'seats/logs/manual-check.out.log'),`tip=${tip} repo=${product}\n--- stdout ---\n${run.stdout}\n--- stderr ---\n${run.stderr}\n`);

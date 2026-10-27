@@ -14,7 +14,7 @@ fs.writeFileSync(agent+'/auth.json','{"stub":true}');
 const roster={seats:{verifier:{role:'verifier',harness:'pi',provider:'openai',model:'fixture',account:{dir:agent}}}};fs.writeFileSync(factory+'/seats/seats.json',JSON.stringify(roster));
 const findings='FINDINGS:\n- drift — counter — The reach step returns 404 at /countr.\n- unmapped — /search — A recent hand commit adds an unmapped search route.\n- break — about — The mapped about endpoint returns HTTP 500.\n';
 const stub=`#!/usr/bin/env node
-const fs=require('fs');fs.appendFileSync(process.env.MANUAL_CALLS,JSON.stringify({pid:process.pid,cwd:process.cwd(),argv:process.argv.slice(2),prompt:process.argv.at(-1)})+'\\n');
+const fs=require('fs');let slot=null,slotLive=false;const marker=process.env.WHEELHOUSE_MANUAL_CHECK_ROOT+'/seats/run/walk.verifier.json';if(fs.existsSync(marker)){slot=JSON.parse(fs.readFileSync(marker,'utf8'));process.kill(slot.pid,0);slotLive=true;}fs.appendFileSync(process.env.MANUAL_CALLS,JSON.stringify({pid:process.pid,cwd:process.cwd(),slot,slotLive,argv:process.argv.slice(2),prompt:process.argv.at(-1)})+'\\n');
 if(process.env.MANUAL_MODE==='edited')fs.writeFileSync('changed-by-stub','not allowed');
 const reply=process.env.MANUAL_MODE==='none'?'FINDINGS: none\\n':process.env.MANUAL_MODE==='bad'?'not a findings block\\n':${JSON.stringify(findings)};
 if(process.env.MANUAL_MODE==='slow'){process.on('SIGTERM',()=>{});setTimeout(()=>{process.stdout.write('FINDINGS: none\\n');process.exit(0)},3000);}else process.stdout.write(reply);
@@ -47,5 +47,6 @@ leg('manual check none',()=>{const r=run('none','none');assert.equal(r.status,0,
 leg('manual check missing findings refused',()=>{const r=run('bad','bad');assert.equal(r.status,3,r.stderr);assert.equal(r.added,0);assert.match(r.stderr,/FINDINGS/);});
 leg('manual check bounded helper',()=>{const r=run('slow','slow',{WHEELHOUSE_MANUAL_CHECK_TIMEOUT_MS:'200'});assert.equal(r.status,3,r.stderr);assert.equal(r.added,0);assert.match(r.stderr,/timed out/);});
 leg('manual check verifier required',()=>{fs.writeFileSync(factory+'/seats/seats.json',JSON.stringify({seats:{reviewer:{...roster.seats.verifier,role:'reviewer'}}}));try{const r=run('no-seat');assert.equal(r.status,2,r.stderr);assert.match(r.stderr,/verifier/);assert.equal(r.added,0);}finally{fs.writeFileSync(factory+'/seats/seats.json',JSON.stringify(roster));}});
+leg('manual check occupies the shared verifier slot',()=>{const r=run('shared-slot','none');assert.equal(r.status,0,r.stderr);const call=JSON.parse(fs.readFileSync(calls,'utf8').trim().split('\n').at(-1)!);assert(call.slot&&call.slotLive,'verifier slot invisible to walk dispatch');assert.equal(call.slot.bead,'manual-check');});
 leg('manual check default tip despite a checkout without manual',()=>{git('branch','legacy',legacy);git('switch','legacy');const oldBranches=git('branch','--list');try{const r=run('default-tip');assert.equal(r.status,0,r.stderr);assert.match(r.stdout,/checked=1/);assert.equal(r.artifacts['before.json'].tip,tip);assert.equal(r.branches,oldBranches);assert.equal(r.tree,'');}finally{git('switch','main');}});
 save();if(legs.some(x=>x.error))process.exitCode=1;
