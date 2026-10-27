@@ -1641,7 +1641,7 @@ function claimRequiresSweepCitation(claim: string): boolean {
   return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
 }
 
-// Nightly-only launch options; ordinary reviews keep their existing defaults.
+// Optional sweep launch context; ordinary reviews keep their existing defaults.
 export interface SweepLaunchOptions {
   logDir?: string;
   logPrefix?: string;
@@ -1769,12 +1769,12 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
     catch (e: any) { error = e.message; rc = 1; }
   }
   const elapsedMs = Date.now() - started;
-  const preflightAttribution = await (await import("./preflight-attribution")).attributePreflight({
+  const preflightAttribution = options.preflightCandidates && rc === 1 ? await (await import("./preflight-attribution")).attributePreflight({
     rc, logPath, scratchCwd, candidates: options.preflightCandidates,
     runAudit: (auditTip, suite) => runDispatcherFullSweep(repoRoot, auditTip, realBd, basePath,
       { tier: "full", reason: "preflight attribution" }, { ...options, preflightCandidates: undefined,
         fixtureSuites: [suite], logPrefix: "preflight.", noWait: false }),
-  });
+  }) : [];
   if (preflightAttribution.length) fs.appendFileSync(logPath, preflightAttribution.join("\n") + "\n");
   fs.appendFileSync(logPath, `\nrc=${rc}\nelapsedMs=${elapsedMs}\n${error ? `error=${error}\n` : ""}`);
   return { required: true, rc, logPath, elapsedMs, tip, choice, timings, error,
