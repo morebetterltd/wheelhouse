@@ -99,6 +99,25 @@ list that slug with its reach and end state. For an update, name the new
 reach/proof text that must appear. This is a claim about the finished work,
 not an assertion that an entry for an unbuilt feature already exists.
 
+Also read the manual's frontmatter. When it says `surface: none` and any
+ordinary outcome names a product surface, add two duties to that first work:
+
+- A manual-sections outcome: "The verification manual has Launch, Doctor,
+  Drive, Evidence and Cleanup sections for <project>." Use
+  `consumer: machine — the verifier reading the manual`,
+  `surface: .agents/skills/verify-<project>/SKILL.md`, and
+  `check: run — bun seats/manual.ts check --repo <repo> prints manual ok
+  with a feature count`. The finished manual replaces `surface: none` with
+  those five usable sections; `manual ok: no surface` does not satisfy it.
+- The map-entry outcome above for each newly named product surface. The
+  manual-sections outcome is owed once per project, not once per feature.
+
+A no-surface declaration is not permission to invent a surface: artifact-only
+work still owes neither outcome. See `examples/first-feature.md` against
+`seats/fixtures/verification/no-surface` for a complete first-feature contract.
+The drafting lint requires the manual-sections outcome as well as the map entry
+in this case and names whichever is missing.
+
 Make the proposed locator explicit in the ordinary outcome's `surface:`.
 For example, moving Increment into Counter's Actions toolbar can name
 `/counter#actions` instead of merely `/counter`; its existing map slug is

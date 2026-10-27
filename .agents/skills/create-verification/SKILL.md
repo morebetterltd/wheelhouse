@@ -139,9 +139,11 @@ data lacks a necessary precondition, report that failure; never weaken the
 journey to make it pass. The map describes consumer behavior, not implementation
 internals. See [the adapted example](references/feature-map-example/README.md).
 
-### When there is no runnable surface
+### When there is nothing to launch
 
-Do not invent an application or count a specimen as the product. Still write
+Use this case only when the scan finds no server, CLI entry, app target or
+documented run command and the owner names none. Do not invent an application
+or count a specimen as the product. Still write
 `.agents/skills/verify-<project>/SKILL.md`, with its normal name, description and
 version plus this frontmatter field:
 
@@ -149,13 +151,15 @@ version plus this frontmatter field:
 surface: none
 ```
 
-Its entire body is two sentences saying the repository currently has no
-runnable consumer surface and that no live journey can be driven yet. Write
-an empty `features/README.md` index with no feature entries and no feature
+Its entire body is two sentences: name what was looked for and that the owner
+named no runnable consumer surface; then say no live journey can be driven yet.
+Write an empty `features/README.md` index with no feature entries and no feature
 files. Do not fabricate the five runnable sections or a successful drive.
-The install still links the manual for each harness. When a real surface is
-introduced, that work must replace this declaration with the five-section
-manual and its feature entry before claiming the surface works.
+The install still links the manual for each harness. The first work whose
+outcomes name a product surface owes `## Launch` and `## Drive` along with
+Doctor, Evidence and Cleanup, replacing `surface: none`, and that surface's
+feature-map entry. The outcomes skill adds the manual-sections and map-entry
+outcomes to that work; do not defer the promise to an unrelated later task.
 
 ### Prove the generated manual before handing it over
 

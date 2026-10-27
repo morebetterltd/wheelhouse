@@ -590,7 +590,7 @@ fi
 bun seats/manual.ts check --repo "$repo" || { echo "FAIL verification manual — stop" >&2; exit 1; }
 ```
 
-Paste the check output. For a runnable repo expect `manual ok: N features`, and compare the map against the scan: the structural check cannot discover an omitted feature. Follow the create skill's own proof and cleanup instructions; do not describe an unrun recipe as verified. If the product genuinely has no runnable surface, follow its `surface: none` exception: two-sentence manual, empty feature index, no invented live proof. The current check prints `manual ok: 0 features` for that declaration; report `surface: none` explicitly alongside it.
+Paste the check output. For a runnable repo expect `manual ok: N features`, and compare the map against the scan: the structural check cannot discover an omitted feature. Follow the create skill's own proof and cleanup instructions; do not describe an unrun recipe as verified. If the product genuinely has no runnable surface, follow its `surface: none` exception: two-sentence manual, empty feature index, no invented live proof. The check prints `manual ok: no surface` for that declaration; report it as stubbed, and the first work whose outcomes name a product surface owes Launch, Doctor, Drive, Evidence and Cleanup sections plus that surface's map entry.
 
 Commit the manual and link **locally on that product repo's default line**, as recorded in the survey/interview. Check `git -C "$repo" symbolic-ref --short HEAD` against that record before committing; if it is detached, on another line, or has unrelated staged changes, stop and resolve the checkout with the owner rather than switching or merging their work. In an umbrella install, inspect status and stage only the new manual directory and compatibility link, then `git -C "$repo" commit -m "Add the verification manual for $project"`. In a single-repo install, include those exact paths in the step-5 install commit below, using that same subject. This product-owned manual is committed even when the factory files were deliberately excluded. The commit stays local: **never push from this step**; question 4b and `wheelhouse/INTEGRATOR.md` govern later push authority; creating a manual grants none.
 
@@ -723,7 +723,7 @@ Run each of these and paste what it prints:
   bun seats/manual.ts features --repo "$repo" --json
   ```
 
-  Require `manual ok: N features` and the resolving link. A declared `surface: none` currently prints `manual ok: 0 features`; name that declaration, not a successful live journey. Read the feature inventory against the scan and report its count per repo. Any nonzero check or link failure stops this procedure just as a contract-integrity FAIL does; do not hand back a partial install as success.
+  Require `manual ok: N features` and the resolving link. A declared `surface: none` prints `manual ok: no surface`; name that declaration, not a successful live journey. Read the feature inventory against the scan and report its count per repo. Any nonzero check or link failure stops this procedure just as a contract-integrity FAIL does; do not hand back a partial install as success.
 
 - **Check `GRAPH.md`'s version-stamped claims against the CLI you actually have.** It states that this build has no `in_review` status, so the review queue is a `needs-review` label instead.
 
@@ -970,6 +970,8 @@ Step 5's checks verified the FILES. This step verifies the FLEET, by the only me
 Five things, in this order.
 
 **Hand back what is now true.** Plainly, and with the two halves kept apart, because a principal who cannot tell them apart will trust the stubs:
+
+For any `surface: none` repo, list its two-sentence manual and empty feature index as stubbed, not live-proven; the first surface-naming work owes the five manual sections (including Launch and Drive) and that surface's map entry.
 
 - what exists — the files, each product repo's verification-manual path and number of mapped features, the graph, the shape you installed and where worktrees go, the merge policy, the fleet's push/PR/deploy authority, and the reserved actions in the principal's own words, and anything you corrected on the way through: the `wheelhouse/AGENTS.md` override from step 5, any `GRAPH.md` status correction from its verification, and which `.beads/` durability shape you found at its commit and what was chosen about it;
 - what is deliberately STUBBED and therefore not yet true — any repo declaring `surface: none` has no live journey yet (name each one), `wheelhouse/crew/bench.sh` exits non-zero on purpose, the worker's gotchas section is empty because gotchas are earned rather than invented, and the ISA's claims are empty for the same reason.
