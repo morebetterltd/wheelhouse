@@ -78,7 +78,7 @@ await leg('no-surface manual', () => {
   const repo = copy('no-surface'), dir = repo + '/' + relativeManual;
   fs.writeFileSync(dir + '/SKILL.md', '---\nname: verify-five-features\ndescription: No runnable surface.\nversion: 1.0.0\nsurface: none\n---\nThis repository has no runnable consumer surface. No live journey can be driven yet.\n');
   for (const slug of slugs) fs.unlinkSync(dir + '/features/' + slug + '.md'); fs.writeFileSync(dir + '/features/README.md', '# Features\n\nNo entries yet.\n');
-  const r = run(['check'], repo); assert.equal(r.code, 0); assert.equal(r.stdout, 'manual ok: 0 features\n');
+  const r = run(['check'], repo); assert.equal(r.code, 0); assert.equal(r.stdout, 'manual ok: no surface\n');
   const listed = run(['features', '--json'], repo); assert.equal(listed.code, 0); assert.deepEqual(JSON.parse(listed.stdout), []);
   fs.copyFileSync(reference + '/' + relativeManual + '/features/counter.md', dir + '/features/counter.md'); fs.appendFileSync(dir + '/features/README.md', '\n- [Counter](./counter.md)\n');
   const invalid = run(['check'], repo); assert.equal(invalid.code, 2); assert.match(invalid.stderr, /surface: none requires an empty feature map/);
