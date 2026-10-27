@@ -778,6 +778,17 @@ From the install root, run `bun seats/manual.ts check --repo <repo>` for each pr
 
 Commit a newly written manual and its link locally on that product repo's recorded default line with subject `Add the verification manual for <project>`. Inspect status and stage only those exact paths, never the shared `.agents/skills/` parent or unrelated upgrade changes. If the checkout is not on that line or has unrelated staged changes, stop and resolve it rather than switching or merging the owner's work. Do not push from this step; the integrator's recorded authority governs anything leaving the machine. Report each manual's path and mapped-feature count, naming any `surface: none` declaration. The later container upgrade commit is separate from these product-owned paths.
 
+### Keep the verification manual honest
+
+The read-only maintain pass drives mapped features daily at local 05 (`WHEELHOUSE_MANUAL_CHECK_HOUR`), posts each finding to producer intake, and is disabled by `manual_check=off`; preserve any existing opt-out:
+
+```bash
+grep -q '^manual_check=' wheelhouse/.template-source \
+  || printf '\nmanual_check=on\n' >> wheelhouse/.template-source
+```
+
+No manual is invented by the schedule: install/upgrade's manual-creation and proof step supplies it. See `seats/README.md`, **Daily manual check**, for evidence, failure and rerun commands.
+
 ### Carry ISA direction changes to the producer
 
 The copied supervisor syncs changed open claims from `wheelhouse/ISA.md` into

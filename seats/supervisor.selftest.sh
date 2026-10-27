@@ -196,6 +196,8 @@ printf 'digest=off\n' > "$PROJ/wheelhouse/.template-source"
 (cd "$PROJ" && WHEELHOUSE_SUPERVISOR_ROOT="$PROJ" WHEELHOUSE_SUPERVISOR_NOW=2026-01-02T06:00:00 WHEELHOUSE_DIGEST_HOUR=6 "$PROJ/seats/supervisor.sh" --once) >/dev/null 2>&1
 d4="$(call_count --notify "$PROJ/seats/run/digest-calls.log")"
 if [ "$d4" = 1 ]; then pass "digest=off disables daily digest"; else fail "digest=off still ran digest count=$d4"; fi
+# No service/launch-agent is installed by the manual-check clock fixture.
+if bun "$HERE/fixtures/manual-check-supervisor.ts" "$HERE/supervisor.sh" "$FIX/manual-check-clock"; then pass "daily manual check configured hour, once and off"; else fail "manual check tick regression"; fi
 # canary: if crashLoop marker is removed, the no-fourth-restart property fails.
 CAN="$FIX/canary"; mkdir -p "$CAN/seats"; cp "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; perl -0pi -e 's/j\.crashLoop=rs\.length>=3;/j.crashLoop=false;/' "$CAN/seats/supervisor.sh"
 if cmp -s "$PROJ/seats/supervisor.sh" "$CAN/seats/supervisor.sh"; then fail "canary edit did not change supervisor"; else

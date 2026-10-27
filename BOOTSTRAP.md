@@ -124,6 +124,7 @@ mkdir -p wheelhouse
   echo "seat_push=on"
   echo "seat_worktrees=per-seat"
   echo "cleanup=on"
+  echo "manual_check=on"
   echo "sweep=on"
   echo "sweep-hour=03"
   echo "isa_signals=on"
@@ -140,6 +141,8 @@ The `github-issue-*` lines are install-owned alerts configuration. Empty is the 
 The `github-report=off` line is the written default for publishing template-class findings: only the literal `github-report=on` enables the commander-run publisher, `seats/report-issues.ts`. `github-report-routes=` empty means the single default route `template-report -> <owner/repo>` parsed from this file's `source=` line; add a product route as `<label>:<owner/repo>`, separated by commas or semicolons. The publisher is commander-run, dry-run by default, scrubs issue bodies with `seats/evidence-scrub.sh`, refuses credential-shaped text, and uses `gh`'s own login rather than any token under `seats/run/`.
 
 The `seat_push=on`, `seat_worktrees=per-seat`, and `cleanup=on` lines record the default install policy for seat machinery. Leave them at the default unless this install's recorded authority requires an opt-out: `seat_push=off` means the adapter never pushes branches, `seat_worktrees=per-task` means the adapter uses the install's existing task worktree instead of creating/moving `.wheelhouse-worktrees/<seat>`, and `cleanup=off` disables automatic cleanup while `cleanup=report` writes a would-remove report without deleting.
+
+`manual_check=on` runs the read-only mapped-feature maintain pass daily at local 05 (override `WHEELHOUSE_MANUAL_CHECK_HOUR`); each finding goes to producer intake, and `manual_check=off` disables it.
 
 Every later step reads `path=` out of that file rather than trusting `$TEMPLATE` to still be set:
 

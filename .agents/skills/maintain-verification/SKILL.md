@@ -1,7 +1,7 @@
 ---
 name: maintain-verification
 description: 'Audit a project verification manual and feature map against source and live consumer journeys, reporting drift, unmapped features and breakage without editing files.'
-version: 1.0.0
+version: 1.1.0
 ---
 
 Adapted under MIT; see the [source and license notice](../NOTICE-pstack.md).
@@ -53,6 +53,7 @@ remove a feature or entry point merely to make the pass shorter.
 ### One live pass
 
 Use the manual's own Launch, Doctor, Drive, Evidence and Cleanup instructions.
+Retain evidence of every attempted mapped drive under the evidence directory the dispatcher names (`--out`); never put it in product source. [Version migration](migrations/1.1.0.md) keeps earlier run stamps honest.
 Require isolated state and a non-production endpoint; never stop, replace or
 reconfigure an installed instance or service to make room. If safe isolation
 is unavailable, record a `break` and do not touch the shared instance.
