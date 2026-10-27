@@ -186,16 +186,35 @@ function testLaneInfo(){
   if(!on) return {...observed,on,sig,detail:"",thresholdMs,heldMs};
   // One bounded native table supplies the command and ancestry. An unreadable
   // table is unknown, never evidence of release or a made-up holder command.
-  const ps=spawnSync("ps",["-axo","pid=,ppid=,lstart=,command="],{encoding:"utf8",policyTimeoutMs:2000});
+  // An opt-in fixture still reads the real native table. Invalid overrides
+  // fail closed, with the same physical containment checks as fixtureDocker.
+  const fixturePs=process.env.WHEELHOUSE_SELFTEST_FIXTURE_NONCE!==undefined?process.env.WHEELHOUSE_ALERTS_FIXTURE_PS:undefined;
+  const psBin=fixturePs===undefined?"ps":fixtureDocker(fixturePs);
+  const ps=psBin?spawnSync(psBin,["-axo","pid=,ppid=,lstart=,command="],{encoding:"utf8",policyTimeoutMs:2000}):{status:null,error:{message:"fixture ps executable unavailable"},stdout:"",stderr:""};
   const rows=new Map<number,{parent:number;started:number;command:string}>();
-  if(ps.error||ps.signal||ps.status!==0||ps.stderr||ps.stdout.length>4*1024*1024) return {status:"unavailable",on:false,sig,detail:"holder process table unavailable",thresholdMs};
-  for(const line of ps.stdout.trimEnd().split("\n")){
+  const tableSkipped={count:0,sample:""};
+  let holderAmbiguous=false;
+  const skip=(line:string)=>{ tableSkipped.count++; if(tableSkipped.count===1) tableSkipped.sample=line.slice(0,160); };
+  for(const line of String(ps.stdout??"").slice(0,4*1024*1024).trimEnd().split("\n").filter(Boolean)){
     const m=/^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+[\d:]+\s+\d{4})\s+(.*)$/.exec(line);
-    if(!m||!Number.isFinite(Date.parse(m[3]))||rows.has(Number(m[1]))) return {status:"unavailable",on:false,sig,detail:"holder process table incomplete",thresholdMs};
-    rows.set(Number(m[1]),{parent:Number(m[2]),started:Date.parse(m[3]),command:m[4]});
+    if(!m||!Number.isFinite(Date.parse(m[3]))){ skip(line); continue; }
+    const pid=Number(m[1]), row={parent:Number(m[2]),started:Date.parse(m[3]),command:m[4]}, prior=rows.get(pid);
+    if(prior){
+      // Never replace the holder's good row with a duplicate. Conflicting
+      // parsed holder identities are unknown, not an arbitrary first/last win.
+      if(pid===observed.pid&&(prior.parent!==row.parent||prior.started!==row.started||prior.command!==row.command)) holderAmbiguous=true;
+      skip(line); continue;
+    }
+    rows.set(pid,row);
   }
+  const table={tableRows:rows.size,tableSkipped};
+  const unavailable=(reason:string,pid=observed.pid)=>({status:"unavailable",on:false,sig,thresholdMs,...table,
+    detail:`${reason}: pid=${pid}; rows=${table.tableRows}; skipped=${tableSkipped.count}; first skipped=${tableSkipped.sample}`});
+  if(ps.error||ps.signal||ps.status!==0||ps.stderr||String(ps.stdout??"").length>4*1024*1024) return unavailable("holder process table unavailable");
+  if(holderAmbiguous) return unavailable("holder process row ambiguous");
   const holder=rows.get(observed.pid);
-  if(!holder||!rows.has(process.pid)) return {status:"unavailable",on:false,sig,detail:"holder process row absent",thresholdMs};
+  if(!holder) return unavailable("holder process row absent");
+  if(!rows.has(process.pid)) return unavailable("alert process row absent",process.pid);
   const state=readJson(path.join(SEATS,"state.json"))?.seats??{};
   let seat="unknown", cursor=observed.pid;
   const seen=new Set<number>();
@@ -221,7 +240,7 @@ function testLaneInfo(){
       }
     }
   }
-  return {...observed,on,sig,thresholdMs,heldMs,seat,command:holder.command,
+  return {...observed,on,sig,thresholdMs,heldMs,seat,command:holder.command,...table,
     detail:`pid=${observed.pid}; command=${holder.command}; admitted=${observed.started}; heldMs=${heldMs}; waiting=${observed.waiting}; seat=${seat}`};
 }
 function alertRow(active:boolean, prior:AlertState|undefined, signature=""):AlertState{ const n=now(); if(active){ if(prior?.active&&prior.signature===signature) return {...prior, active:true}; return {active:true,since:n,lastFiredAt:n,needId:prior?.needId??null,signature}; } return {active:false,since:null,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature}; }

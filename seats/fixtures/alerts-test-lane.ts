@@ -42,10 +42,22 @@ setTimeout(()=>process.exit(94),120000).unref();
 `);
 const lock = path.join(seats, "run/lane.lock"), markerFile = path.join(lock, "wheelhouse-selftest-sweep");
 const snapshot = path.join(seats, "run/fleet-snapshot.json"), inbox = path.join(seats, "inbox.jsonl"), log = path.join(seats, "logs/alerts.log");
-const env = { ...process.env, HOME: path.join(root, "home"), TMPDIR: base, PATH: bin + path.delimiter + process.env.PATH,
+const env: Record<string, string | undefined> = { ...process.env, HOME: path.join(root, "home"), TMPDIR: base, PATH: bin + path.delimiter + process.env.PATH,
   WHEELHOUSE_ALERTS_ROOT: root, WHEELHOUSE_ALERTS_FIXTURE_TEST_LOCK: lock,
   GIT_CEILING_DIRECTORIES: base + path.delimiter + path.dirname(base) };
 assert(env.WHEELHOUSE_SELFTEST_FIXTURE_NONCE, "generic tests must disable host lane observation");
+// This executable wraps /bin/ps; only the extra rows are synthetic. The real
+// host/holder/alert rows and native status remain authoritative on every call.
+const psExtra = path.join(base, "ps-extra.txt"), psRaw = path.join(base, "ps-latest.txt"), psWrapper = path.join(bin, "lane-ps");
+fs.writeFileSync(psExtra, "");
+fs.writeFileSync(psWrapper, `#!/bin/sh
+/bin/ps "$@" > ${JSON.stringify(psRaw)}
+rc=$?
+/bin/cat ${JSON.stringify(psRaw)}
+[ "$rc" = 0 ] || exit "$rc"
+/bin/cat ${JSON.stringify(psExtra)}
+`, { mode: 0o700 });
+env.WHEELHOUSE_ALERTS_FIXTURE_PS = psWrapper;
 const children: ChildProcess[] = [];
 const ownedHolders = new Set<number>();
 function command(command: string, args: string[], cwd = root, extra: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -109,15 +121,30 @@ const alertRows = () => fs.existsSync(inbox) ? fs.readFileSync(inbox, "utf8").sp
 const rows = () => alertRows().filter(r => r.source?.name === "test-lane-held");
 const active = () => json(snapshot).alerts["test-lane-held"]?.active === true;
 function reset() { for (const f of [snapshot, inbox, log]) fs.rmSync(f, { force: true }); }
+let sourceControl = "";
 async function check(at: number) {
   const reader = await parentLease(SH);
   try {
     const r = await command("bun", ["--preload", clock, file, "check", "--json"], root, { LANE_NOW: String(at) });
     const value = JSON.parse(r.stdout); assert.deepEqual(value, json(snapshot), "published snapshot equals actual CLI output");
     const observed = json(observationFile);
-    const evidence = { at, nativeCode: r.code, observed, active: value.alerts["test-lane-held"]?.active, alertNames: alertRows().map(r => r.source?.name), laneRows: rows().length };
+    // Capture immediately, including the exact table the wrapper delivered and
+    // a fresh native observation. A later retry cannot recover a vanished row.
+    if (observed.status === "unavailable") {
+      const n = fs.existsSync(path.join(base, "checks.jsonl")) ? fs.readFileSync(path.join(base, "checks.jsonl"), "utf8").trim().split("\n").length + 1 : 1;
+      if (fs.existsSync(psRaw)) fs.copyFileSync(psRaw, path.join(base, `ps-input.${n}.txt`));
+      fs.copyFileSync(psExtra, path.join(base, `ps-extra.${n}.txt`));
+      const table = await new Promise<{ stdout: string; stderr: string; error: string | null }>(resolve => {
+        const child = execFile("/bin/ps", ["-axo", "pid=,ppid=,lstart=,command="], { env, encoding: "utf8", timeout: 15000, killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => resolve({ stdout, stderr, error: error?.message ?? null }));
+        children.push(child); child.stdin?.end();
+      });
+      fs.writeFileSync(path.join(base, `ps-table.${n}.txt`), table.stdout);
+      fs.writeFileSync(path.join(base, `ps-table.${n}.stderr`), table.stderr);
+      fs.writeFileSync(path.join(base, `ps-table.${n}.result.txt`), JSON.stringify({ error: table.error }));
+    }
+    const evidence = { at, nativeCode: r.code, sourceControl, observed, active: value.alerts["test-lane-held"]?.active, alertNames: alertRows().map(r => r.source?.name), laneRows: rows().length };
     fs.appendFileSync(path.join(base, "checks.jsonl"), JSON.stringify(evidence) + "\n");
-    console.log("CAPTURE lane check " + JSON.stringify(evidence));
+    console.log((sourceControl === "TABLE_SKIP" ? "CAPTURE lane source-control check " : "CAPTURE lane check ") + JSON.stringify(evidence));
     return value;
   } finally { fs.closeSync(reader); }
 }
@@ -128,6 +155,7 @@ function mutate(needle: string, replacement: string) {
 async function sensitive(name: string, needle: string, replacement: string, at: number, oracle: () => void | Promise<void>, preserve = false) {
   if (!preserve) reset();
   mutate(needle, replacement);
+  sourceControl = name;
   let writer = -1, blocked = false;
   // Reproduce the formerly accidental input race on EVERY fixture execution.
   // An independent native EX lease is released only after the reader actually
@@ -147,6 +175,7 @@ async function sensitive(name: string, needle: string, replacement: string, at: 
     console.log(`REJECT lane ${name}: actual check exit=0; consumer assertion fails with source control ${JSON.stringify(needle)}`);
     if (blocked) console.log("CAPTURE lane contention: actual EX writer blocked SH reader; writer released before CLI; FIRE_DETAIL still rejects its missing field");
   } finally {
+    sourceControl = "";
     writerBlocked = undefined;
     if (writer >= 0) fs.closeSync(writer);
     fs.writeFileSync(file, implementation);
@@ -216,6 +245,46 @@ try {
   console.log("  ok    test-lane-held fires for a holder past threshold with waiters");
   running(marker, originalMarker);
   console.log("  ok    test-lane-held leaves the holder running");
+  const nativeTable = await command("/bin/ps", ["-axo", "pid=,ppid=,lstart=,command="]);
+  fs.writeFileSync(path.join(base, "ps-case-source.txt"), nativeTable.stdout);
+  const nativeLines = nativeTable.stdout.trimEnd().split("\n");
+  const nativeRow = (pid: number) => {
+    const matches = nativeLines.filter(line => Number(/^\s*(\d+)\s/.exec(line)?.[1]) === pid);
+    assert.equal(matches.length, 1, "actual native case subject exists exactly once: " + pid);
+    return matches[0];
+  };
+  // Use this stable, unrelated real process for the exact duplicate, never a
+  // fabricated whole table or an invented holder identity.
+  assert.notEqual(process.pid, marker.pid);
+  const unrelated = nativeRow(process.pid), holderRow = nativeRow(marker.pid);
+  const extraRows = `fixture row without pid\n9999999 1 - fixture-unreadable-start\n${unrelated}\n`;
+  fs.writeFileSync(psExtra, extraRows);
+  const unrelatedOracle = () => {
+    const observed = json(observationFile);
+    assert.equal(observed.status, "held", "TABLE_SKIP: holder remains observable");
+    assert.equal(observed.tableSkipped.count, 3, "TABLE_SKIP: all three unrelated rows counted");
+    assert.equal(observed.tableSkipped.sample, "fixture row without pid", "TABLE_SKIP: first skipped row retained");
+    assert(observed.tableRows > 0, "TABLE_SKIP: real parsed table retained");
+    fired();
+    for (const field of [`pid=${marker.pid}`, "lane-idle-holder.cjs", marker.started, "waiting=1", "seat=worker-lane", "heldMs=120001"]) assert(rows()[0].detail.includes(field), "TABLE_SKIP: " + field);
+    running(marker, originalMarker);
+  };
+  reset(); await check(old); unrelatedOracle();
+  await sensitive("TABLE_SKIP", 'if(!m||!Number.isFinite(Date.parse(m[3]))){ skip(line); continue; }',
+    'if(!m||!Number.isFinite(Date.parse(m[3]))) return {status:"unavailable",on:false,sig,detail:`fixture fatal skipped row: rows=${rows.size}; skipped=${tableSkipped.count}; first skipped=${line.slice(0,160)}`,thresholdMs,tableRows:rows.size,tableSkipped};', old, unrelatedOracle);
+  fs.writeFileSync(psExtra, extraRows + holderRow + " fixture-conflicting-command\n");
+  const ambiguousOracle = () => {
+    const observed = json(observationFile);
+    assert(observed.status === "unavailable" && observed.detail.startsWith("holder process row ambiguous") && /rows=\d+; skipped=4; first skipped=/.test(observed.detail), "TABLE_AMBIGUOUS: conflicting holder row must explain unavailable");
+    assert(observed.tableRows > 0 && observed.tableSkipped.count === 4, "TABLE_AMBIGUOUS: row counts retained");
+    assert(!active() && rows().length === 0 && alertRows().length === 0, "TABLE_AMBIGUOUS: no inbox row for ambiguous holder");
+    running(marker, originalMarker);
+  };
+  reset(); await check(old); ambiguousOracle();
+  await sensitive("TABLE_AMBIGUOUS", 'if(holderAmbiguous) return unavailable("holder process row ambiguous");', '', old, ambiguousOracle);
+  fs.writeFileSync(psExtra, "");
+  reset(); await check(old); fired(); running(marker, originalMarker);
+  console.log("  ok    test-lane-held ignores process-table rows that are not the holder's");
   await sensitive("FIRE", '"test-lane-held":testLane,', '"test-lane-held":{...testLane,on:false},', old, fired);
   for(const [needle,field] of [
     ['pid=${observed.pid}; ',`pid=${marker.pid}`], ['command=${holder.command}; ',"lane-idle-holder.cjs"],
@@ -256,7 +325,7 @@ try {
   await sensitive("ANCESTRY",'if(record.pid===cursor&&Math.abs','if(false&&record.pid===cursor&&Math.abs',unknownOld,
     ()=>assert(active()&&rows()[0].detail.includes("seat=worker-lane"),"ANCESTRY: verified seat ancestor required"));
   await finish();
-  console.log("alerts test lane: PASS (real private lock/FIFO; 15 source sensitivity controls; bounded helpers)");
+  console.log("alerts test lane: PASS (real private lock/FIFO; 17 source sensitivity controls; bounded helpers)");
 } finally {
   for (const run of supervised) {
     clearTimeout(run.timer);
@@ -276,6 +345,6 @@ try {
   for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   if (process.env.WHEELHOUSE_TEST_LANE_EVIDENCE) {
     const target = process.env.WHEELHOUSE_TEST_LANE_EVIDENCE; fs.mkdirSync(target, { recursive: true });
-    for (const f of fs.readdirSync(base)) if (f.endsWith(".log") || f === "checks.jsonl" || f === "observation.json") fs.copyFileSync(path.join(base, f), path.join(target, f));
+    for (const f of fs.readdirSync(base)) if (f.endsWith(".log") || /^ps-.*\.(txt|stderr)$/.test(f) || f === "checks.jsonl" || f === "observation.json") fs.copyFileSync(path.join(base, f), path.join(target, f));
   }
 }
