@@ -2503,19 +2503,46 @@ signal_cleanup_case() {
   local dispatcher_pid=$!
   dir=""
   printf 'FIXTURE_WAIT verify: %s scratch registration and clobber receipt, pid=%s\n' "$label" "$dispatcher_pid" >&2
-  local enum enum_rc
+  local enum enum_rc observer_total=0 observer_consecutive=0 observer_failed=0 observer_last_stderr=""
+  pid_file="$HOME_FIX/.pi-seats-$ns/reviewer/pi-pid.txt"
   while kill -0 "$dispatcher_pid" 2>/dev/null; do
-    enum_rc=0; enum="$(git -C "$sig_proj" worktree list --porcelain 2> "$FIX/$ns-worktrees.stderr")" || enum_rc=$?
-    if [ "$enum_rc" != 0 ]; then fail "$label worktree observer failed rc=$enum_rc: $(cat "$FIX/$ns-worktrees.stderr")"; break; fi
+    enum_rc=0; enum="$(SIGNAL_OBSERVER_DISPATCHER_PID="$dispatcher_pid" git -C "$sig_proj" worktree list --porcelain 2> "$FIX/$ns-worktrees.stderr")" || enum_rc=$?
+    # signal-observer-retry:start
+    if [ "$enum_rc" != 0 ]; then
+      observer_total=$((observer_total + 1)); observer_consecutive=$((observer_consecutive + 1))
+      cp -f "$FIX/$ns-worktrees.stderr" "$FIX/$ns-worktrees-last.stderr"
+      printf 'attempt=%s consecutive=%s rc=%s\n' "$observer_total" "$observer_consecutive" "$enum_rc" >> "$FIX/$ns-worktrees-failures.log"
+      cat "$FIX/$ns-worktrees-last.stderr" >> "$FIX/$ns-worktrees-failures.log"
+      observer_last_stderr="$(cat "$FIX/$ns-worktrees-last.stderr")"
+      observer_last_stderr="${observer_last_stderr//$'\n'/ }"
+      observer_last_stderr="${observer_last_stderr//$'\r'/ }"
+      if [ "$observer_consecutive" -ge 40 ]; then
+        fail "$label worktree observer failed persistently after $observer_consecutive consecutive reads rc=$enum_rc: $observer_last_stderr"
+        observer_failed=1; break
+      fi
+      kill -0 "$dispatcher_pid" 2>/dev/null || break
+      sleep 0.05
+      continue
+    fi
+    observer_consecutive=0
+    # signal-observer-retry:end
     dir="$(printf '%s\n' "$enum" | awk '/^worktree /{p=substr($0,10); n=p; sub(/^.*\//,"",n); if (n ~ /^wheelhouse-verify-[0-9]+-/) print p}' | sed -n '1p')"
     [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/reviewer/core-worktree-clobber.txt" ] && break
     sleep 0.05
   done
-  if [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/reviewer/core-worktree-clobber.txt" ]; then pass "$label fixture reached a registered scratch worktree and clobber receipt"
-  else fail "$label fixture exited before complete scratch/clobber setup: $(cat "$out_file" 2>/dev/null)"; return 1; fi
+  if [ "$observer_total" -gt 0 ]; then printf 'OBSERVER_TRANSIENTS %s: %s\n' "$observer_total" "$observer_last_stderr"; fi
+  if [ "$observer_failed" = 0 ] && [ -n "$dir" ] && [ -s "$HOME_FIX/.pi-seats-$ns/reviewer/core-worktree-clobber.txt" ]; then pass "$label fixture reached a registered scratch worktree and clobber receipt"
+  else
+    if [ "$observer_failed" = 0 ]; then fail "$label fixture exited before complete scratch/clobber setup: $(cat "$out_file" 2>/dev/null)"; fi
+    # A failed observer still owns a stalled fixture dispatcher. Join it before
+    # returning, including in the negative controls, rather than leaking it.
+    kill -TERM "$dispatcher_pid" 2>/dev/null || true
+    wait "$dispatcher_pid" 2>/dev/null || true
+    if [ -s "$pid_file" ]; then kill "$(cat "$pid_file")" 2>/dev/null || true; fi
+    return 1
+  fi
   kill -"$sig" "$dispatcher_pid" 2>/dev/null || true
   wait "$dispatcher_pid" 2>/dev/null; wait_rc=$?
-  pid_file="$HOME_FIX/.pi-seats-$ns/reviewer/pi-pid.txt"
   if [ -s "$pid_file" ]; then kill "$(cat "$pid_file")" 2>/dev/null || true; fi
   if [ "$wait_rc" = "$expect" ]; then pass "$label exits with signal-shaped status $expect"
   else fail "$label exit status was $wait_rc, expected $expect; out=$(cat "$out_file" 2>/dev/null)"; fi
@@ -2527,6 +2554,82 @@ signal_cleanup_case() {
 }
 signal_cleanup_case TERM 143 sigterm SIGTERM
 signal_cleanup_case INT 130 sigint SIGINT
+
+signal_observer_controls() {
+  local fixed="$FIX/signal-observer-fixed.sh" legacy="$FIX/signal-observer-legacy.sh" wrap="$FIX/signal-observer-bin"
+  awk '/^signal_cleanup_case\(\) \{$/ {emit=1} emit {print} emit && /^}$/ {exit}' "${BASH_SOURCE[0]}" > "$fixed"
+  # Restore only the exact pre-change first-error break in an owned copy.
+  LEGACY_OBSERVER_LINE='    if [ "$enum_rc" != 0 ]; then fail "$label worktree observer failed rc=$enum_rc: $(cat "$FIX/$ns-worktrees.stderr")"; break; fi' \
+    perl -0pe 's{    # signal-observer-retry:start\n.*?    # signal-observer-retry:end\n}{$ENV{LEGACY_OBSERVER_LINE} . "\n"}se' "$fixed" > "$legacy"
+  if cmp -s "$fixed" "$legacy" || grep -Fq '# signal-observer-retry:start' "$legacy" \
+    || ! grep -Fq 'then fail "$label worktree observer failed rc=$enum_rc:' "$legacy"; then
+    fail "signal observer canary: pre-change break did not replace the retry block"
+    return 1
+  fi
+  mkdir -p "$wrap"
+  cat > "$wrap/git" <<'GIT_OBSERVER'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$#" = 5 ] && [ "$1" = -C ] && [ "$2" = "$SIGNAL_OBSERVER_TARGET" ] \
+  && [ "$3" = worktree ] && [ "$4" = list ] && [ "$5" = --porcelain ]; then
+  n=0; [ ! -f "$SIGNAL_OBSERVER_COUNT" ] || IFS= read -r n < "$SIGNAL_OBSERVER_COUNT"
+  if [ "$n" = 0 ]; then
+    # Deterministic fault replay, not another race: the real dispatcher first
+    # reaches model entry, so the third deferred Git read cannot land mid-add.
+    # This 300s gate is setup containment, not an admission/readiness SLA.
+    began=$SECONDS
+    while [ ! -s "$SIGNAL_OBSERVER_RECEIPT" ] && kill -0 "$SIGNAL_OBSERVER_DISPATCHER_PID" 2>/dev/null; do
+      if [ "$((SECONDS - began))" -ge 300 ]; then echo 'SETUP signal observer model-entry containment expired' >&2; exit 2; fi
+      sleep 0.05
+    done
+    [ -s "$SIGNAL_OBSERVER_RECEIPT" ] || { echo 'SETUP signal observer dispatcher exited before model entry' >&2; exit 2; }
+  fi
+  n=$((n + 1)); printf '%s\n' "$n" > "$SIGNAL_OBSERVER_COUNT"
+  if [ "$SIGNAL_OBSERVER_MODE" = persistent ] || [ "$n" -le 2 ]; then
+    printf '%s\n' 'fatal: failed to read .git/worktrees/x/commondir: Result too large' >&2
+    exit 128
+  fi
+fi
+exec "$SIGNAL_OBSERVER_REAL_GIT" "$@"
+GIT_OBSERVER
+  chmod +x "$wrap/git"
+  local kind fn mode ns label code observed count
+  for kind in transient legacy persistent; do
+    fn="$fixed"; mode=transient; [ "$kind" != legacy ] || fn="$legacy"; [ "$kind" != persistent ] || mode=persistent
+    ns="sigint-observer-$kind"; label="SIGINT-$kind"; count="$FIX/$ns-count"
+    code=0
+    (
+      FAILED=0
+      . "$fn"
+      SIGNAL_OBSERVER_MODE="$mode" SIGNAL_OBSERVER_TARGET="$FIX/proj-$ns" \
+        SIGNAL_OBSERVER_RECEIPT="$HOME_FIX/.pi-seats-$ns/reviewer/core-worktree-clobber.txt" \
+        SIGNAL_OBSERVER_COUNT="$count" SIGNAL_OBSERVER_REAL_GIT="$GIT_BIN" PATH="$wrap:$PATH" \
+        signal_cleanup_case INT 130 "$ns" "$label"
+      observed=$?
+      printf 'OBSERVER_CONTROL_RESULT %s case_rc=%s failures=%s\n' "$kind" "$observed" "$FAILED"
+      [ "$observed" = 0 ] && [ "$FAILED" = 0 ]
+    ) > "$FIX/$ns-control.stdout" 2> "$FIX/$ns-control.stderr" || code=$?
+    observed=0; [ ! -f "$count" ] || IFS= read -r observed < "$count"
+    printf 'OBSERVER_CONTROL %s native=%s calls=%s\n' "$kind" "$code" "$observed"
+    cat "$FIX/$ns-control.stdout"
+    cat "$FIX/$ns-control.stderr" >&2
+    if [ "$kind" = transient ] && [ "$code" = 0 ] && [ "$observed" = 3 ] \
+      && grep -Fxq 'OBSERVER_TRANSIENTS 2: fatal: failed to read .git/worktrees/x/commondir: Result too large' "$FIX/$ns-control.stdout" \
+      && grep -Fq "$label exits with signal-shaped status 130" "$FIX/$ns-control.stdout"; then
+      pass "signal observer survives two exact Git128 reads, then real Git and SIGINT cleanup pass"
+    elif [ "$kind" = legacy ] && [ "$code" = 1 ] && [ "$observed" = 1 ] \
+      && grep -Fq 'worktree observer failed rc=128: fatal: failed to read .git/worktrees/x/commondir: Result too large' "$FIX/$ns-control.stdout"; then
+      pass "signal observer canary: pre-change first-error break rejects the same transient at Git128"
+    elif [ "$kind" = persistent ] && [ "$code" = 1 ] && [ "$observed" = 40 ] \
+      && grep -Fq 'worktree observer failed persistently after 40 consecutive reads rc=128' "$FIX/$ns-control.stdout" \
+      && grep -Fq 'OBSERVER_TRANSIENTS 40:' "$FIX/$ns-control.stdout"; then
+      pass "signal observer refuses 40 persistent Git128 reads without a verified worktree"
+    else
+      fail "signal observer $kind control: native=$code calls=$observed (setup or intended oracle did not match)"
+    fi
+  done
+}
+signal_observer_controls
 RUN_PROJ="$PROJ"; VDIR="$PROJ/seats/verdicts"; VARGV="$HOME_FIX/.pi-seats-alpha/reviewer/argv.json"
 
 phase "11. real pi — local model spawn/parse/record and stripped-verdict control (SKIP-able)"
