@@ -392,11 +392,12 @@ function cachedHostNames(fd: number, expectedId: string, members: Record<string,
 const HELD_IDENTITY = "WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY";
 type HeldIdentity = { lock: string; hostId: string; identity: string; pid: number; token: string; hostname: string; parentPid: number;
   identitySource?: IdentitySource; identityFailures?: { source: IdentitySource; reason: string }[] };
-function heldIdentity(parent: number, name: string): HeldIdentity | null {
+function heldIdentity(parent: number, name: string, sourceOnly?: IdentitySource): HeldIdentity | null {
   const raw = process.env[HELD_IDENTITY];
   if (!raw || raw.length > 4096) return null;
   let pin: HeldIdentity;
   try { pin = JSON.parse(raw); } catch { return null; }
+  if (sourceOnly && pin?.identitySource !== sourceOnly) return null;
   if (!pin || pin.lock !== path.join(descriptorPaths.get(parent)!, name) || !/^[0-9a-f]{64}$/.test(pin.hostId) ||
       !/^\d+:\d+$/.test(pin.identity) || !validPid(pin.pid) || !validPid(pin.parentPid) || !/^[0-9a-f]{32}$/.test(pin.token) || typeof pin.hostname !== "string") return null;
   let fd = -1;
@@ -416,7 +417,12 @@ function heldIdentity(parent: number, name: string): HeldIdentity | null {
     // the actual lock owner, not merely from a caller-exported environment.
     if (!sibling && !snapshotAncestorOwns(pin.pid)) return null;
     return pin;
-  } catch (e: any) { if (e.errno === 2) return null; throw e; }
+  } catch (e: any) {
+    // A file replacement is not the pinned directory. Leave release's existing
+    // identity-mismatch path to preserve it, not a new recovery-time refusal.
+    if (e.errno === 2 || e.errno === 20 || e.errno === os.constants.errno.ELOOP) return null;
+    throw e;
+  }
   finally { if (fd >= 0) fs.closeSync(fd); }
 }
 function admissionOutput(parent: number, name: string, snapshot: Snapshot) {
@@ -457,7 +463,7 @@ function hostCache(parent: number, lockName: string): Set<string> {
     // the original live owner/token/inode + native ancestry can now bind its
     // admission name, but only AFTER this hardware ID matched the cache above.
     // A hostname pin is provenance, never a hardware-ID override.
-    const pin = heldIdentity(parent, lockName);
+    const pin = heldIdentity(parent, lockName, "hostname");
     const recoveredName = pin?.identitySource === "hostname" &&
       pin.hostId === digest(`hostname:${pin.hostname}`) ? pin.hostname : undefined;
     for (const hostname of new Set([HOST, ...(recoveredName ? [recoveredName] : [])])) {
