@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 // Protocol double only; the lock and queued heavy-test child are real.
 const fs = require('fs'), path = require('path'), cp = require('child_process');
+if (process.argv[2] === '--holder') {
+  const dir = process.argv[3];
+  fs.writeFileSync(path.join(dir, 'holder-ready'), String(process.pid));
+  const poll = setInterval(() => {
+    if (!fs.existsSync(path.join(dir, 'holder-release'))) return;
+    clearInterval(poll); process.exit(0);
+  }, 10);
+} else {
 const dir = process.env.WALK_LOCK_CASE, mode = process.env.WALK_LOCK_MODE;
 const lock = process.env.WHEELHOUSE_SELFTEST_SWEEP_LOCK;
 let holder = null;
@@ -20,6 +28,9 @@ const pause = () => new Promise(resolve => setTimeout(resolve,10));
 (async()=>{
   if (mode === 'initial') {
     while (!fs.existsSync(path.join(dir,'holder-joined'))) await pause();
+    // Test-only adversity: the suite's cmp-guarded old-clock control uses 3s.
+    const delay = Number(process.env.WALK_LOCK_VERIFIER_DELAY_MS || 0);
+    if (delay) { fs.writeFileSync(path.join(dir,'verifier-delay-started'),String(delay)); await new Promise(resolve => setTimeout(resolve, delay)); }
     reply(); return;
   }
   while (!fs.existsSync(path.join(dir,'start-suite'))) await pause();
@@ -35,3 +46,4 @@ const pause = () => new Promise(resolve => setTimeout(resolve,10));
   setInterval(()=>{},1000);
   await new Promise(()=>{});
 })().catch(e=>{console.error(e);process.exitCode=1;});
+}

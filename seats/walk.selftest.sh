@@ -179,14 +179,73 @@ EOF
 }
 
 run_test_lock_fixture(){
-  local proj="$FIX/proj-test-lock" ns="walk-test-lock" lock_bin="$FIX/test-lock-bin"
+  local variant="${1:-normal}" proj="$FIX/proj-test-lock-${1:-normal}" ns="walk-test-lock-${1:-normal}" lock_bin="$FIX/test-lock-bin-${1:-normal}"
+  local fixture="$HERE/fixtures/walk/test-lock.ts" selected="" rc=0
   build_proj "$proj" "$ns"
   mkdir -p "$lock_bin"
+  LOCK_FIXTURE_OUT="$proj/test-lock.out"
+  LOCK_FAILURE_FILE="$proj/test-lock.failed-modes"
+  if [ "$variant" = canary ]; then
+    mkdir -p "$proj/seats/fixtures/walk"
+    cp -f "$CLOCK" "$proj/seats/fixtures/walk/readiness.ts"
+    fixture="$proj/seats/fixtures/walk/test-lock.ts"
+    bun - "$HERE/fixtures/walk/test-lock.ts" "$fixture" <<'TS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+let source=fs.readFileSync(process.argv[2],'utf8');
+for(const [old,next] of [
+ ["const INITIAL_CONTAINMENT_MS = 30_000;","const INITIAL_CONTAINMENT_MS = 900;"],
+ [" const payload = ['node', peer, '--holder', dir];"," const payload = ['bash', '-c', 'exec sleep 4'];"],
+]){assert.equal(source.split(old).length,2,'specific old-clock removal anchor');source=source.replace(old,next);}
+fs.writeFileSync(process.argv[3],source);
+TS
+    [ "$?" -eq 0 ] || return 2
+    if cmp -s "$HERE/fixtures/walk/test-lock.ts" "$fixture"; then
+      fail 'test-lock timing canary did not change its source'; return 2
+    fi
+    selected=initial
+  fi
   HOME="$HOME_FIX" PATH="$lock_bin:$RUN_PATH" WALK_LOCK_PEER_BIN="$lock_bin/pi" \
-    bun "$HERE/fixtures/walk/test-lock.ts" "$proj" "$HOME_FIX/.pi-seats-$ns/verifier" "$HERE/fixtures/contracts/valid.md" "$HERE/fixtures/walk/test-lock-peer.cjs"
+    WALK_LOCK_VERIFIER_DELAY_MS=3000 WHEELHOUSE_WALK_LOCK_CASE="$selected" WHEELHOUSE_WALK_LOCK_FAILURE_MODE_FILE="$LOCK_FAILURE_FILE" \
+    bun "$fixture" "$proj" "$HOME_FIX/.pi-seats-$ns/verifier" "$HERE/fixtures/contracts/valid.md" "$HERE/fixtures/walk/test-lock-peer.cjs" > "$LOCK_FIXTURE_OUT" 2>&1 || rc=$?
+  cat "$LOCK_FIXTURE_OUT"
+  return "$rc"
+}
+report_test_lock_failures(){
+  local mode
+  if [ -s "$LOCK_FAILURE_FILE" ]; then
+    while IFS= read -r mode; do fail "test-lock timing assertions failed: $mode"; done < "$LOCK_FAILURE_FILE"
+  else fail 'test-lock timing assertions failed: setup'; fi
+}
+run_test_lock_canary(){
+  local rc=0
+  run_test_lock_fixture canary || rc=$?
+  if [ "$rc" -ne 1 ]; then fail "test-lock timing canary must fail, got $rc"; return 1; fi
+  if bun - "$LOCK_FIXTURE_OUT" <<'TS'
+import fs from 'node:fs';import assert from 'node:assert/strict';
+const text=fs.readFileSync(process.argv[2],'utf8'),lines=text.split('\n').filter(line=>line.startsWith('TEST_LOCK_CASE '));
+assert.equal(lines.length,1,'one case record, not a generic setup failure');
+const record=JSON.parse(lines[0].slice('TEST_LOCK_CASE '.length));
+assert.equal(record.mode,'initial');assert.equal(record.budget,900);assert.equal(record.status,3);assert.equal(record.signal,null);
+assert(record.stdoutEOF&&record.stderrEOF&&record.delayStarted,'valid delayed verifier and both EOFs required');
+assert(record.reason.includes('timed out after 900ms during run verifier walk'));
+assert(Array.isArray(record.stderrTail)&&record.stderrTail.length<=20);assert(Array.isArray(record.queue));
+assert(text.indexOf(lines[0])<text.indexOf('AssertionError',text.indexOf(lines[0])+lines[0].length),'record precedes assertion error');
+TS
+  then
+    ( report_test_lock_failures ) > "$LOCK_FIXTURE_OUT.fail-line"
+    if grep -Fxq '  FAIL  test-lock timing assertions failed: initial' "$LOCK_FIXTURE_OUT.fail-line"; then
+      pass 'test-lock timing canary: cmp-guarded sleep4/budget900 copy rejects planted 3s verifier delay with initial TEST_LOCK_CASE'
+      pass 'test-lock timing failure line names initial (same suite failure formatter)'
+    else fail 'test-lock timing failure line omitted the case mode'; return 1; fi
+  else fail 'test-lock timing canary lacks its intended case/status/reason record'; return 1; fi
 }
 # This path invokes no bd command and never runs the legacy review seed suite.
-if [ "${WHEELHOUSE_WALK_TEST_LOCK_ONLY:-0}" = 1 ]; then run_test_lock_fixture; exit $?; fi
+if [ "${WHEELHOUSE_WALK_TEST_LOCK_ONLY:-0}" = 1 ]; then
+  rc=0; run_test_lock_fixture || rc=$?
+  if [ "$rc" -ne 0 ]; then report_test_lock_failures; fi
+  run_test_lock_canary || rc=1
+  exit "$rc"
+fi
 
 run_work_fixture(){
   local proj="$FIX/proj-work" ns="walk-work"
@@ -218,7 +277,8 @@ TS
 }
 
 phase 'work walk test-lock timing (no graph writes)'
-if run_test_lock_fixture; then pass 'test-lock timing assertions completed'; else fail 'test-lock timing assertions failed'; fi
+if run_test_lock_fixture; then pass 'test-lock timing assertions completed'; else report_test_lock_failures; fi
+run_test_lock_canary || true
 
 phase 'captured malformed GUI output: match the actual verdict line, not other text'
 if bun - "$CLOCK" "$HERE/fixtures/walk/gui-malformed-output.txt" <<'TS'
