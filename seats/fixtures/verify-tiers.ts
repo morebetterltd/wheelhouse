@@ -78,7 +78,8 @@ for (const test of [{ label: "digest", file: "seats/digest.ts", tier: "core", re
       const log = r.receipt.match(/^- log: (.+)$/m)![1], text = fs.readFileSync(log, "utf8");
       assert(text.includes(`tier=${test.tier} reason=${test.reason}\n`));
       const argv = JSON.parse(fs.readFileSync(path.join(home, ".pi-seats-alpha/reviewer/argv.json"), "utf8"));
-      assert(argv.at(-1).includes(`- tier: ${test.tier}; reason: ${test.reason}`)); assert(r.receipt.includes(`- tip: ${tip}`));
+      const prompt = fs.readFileSync(path.join(home, ".pi-seats-alpha/reviewer/prompt.txt"), "utf8");
+      assert(!argv.includes(prompt)); assert(prompt.includes(`- tier: ${test.tier}; reason: ${test.reason}`)); assert(r.receipt.includes(`- tip: ${tip}`));
     }
   }
   console.log(`PASS CLI ${test.label}: real selected sweep, log/prompt/verdict reason; legacy classifier removal detected`);

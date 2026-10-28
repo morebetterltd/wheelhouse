@@ -20,7 +20,7 @@ function wire(harness: Harness, text: string): string {
 }
 const refusedText = (attempt: number) => `retained answer ${attempt}: checked the pinned tree, but omitted sweep evidence\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED\n`;
 // Large diagnostic fixture: preserve all bytes without unnecessarily putting
-// the entire tool/stderr stream in the retry's command-line prompt.
+// the entire tool/stderr stream in the retry's stdin prompt.
 const errText = (attempt: number) => `retained stderr ${attempt}\n${attempt === 1 ? "x".repeat(300_000) + "\n" : ""}`;
 
 export async function fake(): Promise<void> {
@@ -29,9 +29,10 @@ export async function fake(): Promise<void> {
   const harness = process.env.WHEELHOUSE_TEST_REFUSAL_HARNESS as Harness;
   const calls = path.join(dir, "calls.jsonl");
   const attempt = rows(calls).length + 1;
-  const argv = process.argv.slice(2), prompt = argv.at(-1)!;
+  const argv = process.argv.slice(2), prompt = fs.readFileSync(0, "utf8");
+  assert(prompt && !argv.includes(prompt), "refusal prompt must arrive on stdin");
   const account = process.env.PI_CODING_AGENT_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? process.env.CODEX_HOME;
-  fs.appendFileSync(calls, JSON.stringify({ attempt, pid: process.pid, cwd: process.cwd(), account, actor: process.env.BEADS_ACTOR, argv: argv.slice(0, -1), prompt }) + "\n");
+  fs.appendFileSync(calls, JSON.stringify({ attempt, pid: process.pid, cwd: process.cwd(), account, actor: process.env.BEADS_ACTOR, argv, prompt }) + "\n");
   assert(attempt <= 2, "dispatcher offered more than one retry");
   if (attempt === 2) {
     fs.writeFileSync(path.join(dir, "retry-ready"), "yes");

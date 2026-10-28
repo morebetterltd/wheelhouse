@@ -412,13 +412,14 @@ printf '{"maxWidth":${IMAGE_MAX_WIDTH},"maxContextImages":${IMAGE_MAX_CONTEXT},"
   return helper;
 }
 
-function spawnWalker(oneShot: ReturnType<typeof oneShotCommandForHarness>, scratchCwd: string, env: NodeJS.ProcessEnv) {
+export function spawnWalker(oneShot: ReturnType<typeof oneShotCommandForHarness>, scratchCwd: string, env: NodeJS.ProcessEnv) {
   return spawnSync(oneShot.bin, oneShot.args, {
     cwd: scratchCwd,
     env,
     encoding: "utf8",
+    input: oneShot.stdin,
     policyTimeoutMs: TIMEOUT_MS,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
 }
 
@@ -725,7 +726,7 @@ async function workMain(args: string[]): Promise<void> {
   fs.mkdirSync(path.dirname(markerFile), { recursive: true });
   fs.writeFileSync(markerFile, JSON.stringify({ pid: process.pid, bead, startedAt: new Date().toISOString() }) + "\n");
   await waitForInitialTestLock(alreadyHeld);
-  const res = await spawnWorkWalker(oneShot.bin, oneShot.args, cwd, env, TIMEOUT_MS, testLock);
+  const res = await spawnWorkWalker(oneShot.bin, oneShot.args, cwd, env, TIMEOUT_MS, testLock, oneShot.stdin);
   try { fs.unlinkSync(markerFile); } catch {}
   const stdout = res.stdout ?? "", stderr = res.stderr ?? "";
   scrubToFile([`$ ${oneShot.display}`, `$ cwd ${cwd}`, `--- stdout ---`, stdout, `--- stderr ---`, stderr].join("\n"), transcriptFile);

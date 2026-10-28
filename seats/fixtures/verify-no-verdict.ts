@@ -33,7 +33,7 @@ export function afterRetry(stdout: string, done: boolean, reaping: boolean): voi
 
 async function fakeReviewer(): Promise<void> {
   const dir = process.env.WHEELHOUSE_NO_VERDICT_CASE!;
-  fs.writeFileSync(path.join(dir, "prompt.txt"), process.argv.at(-1)!);
+  fs.writeFileSync(path.join(dir, "prompt.txt"), fs.readFileSync(0, "utf8"));
   fs.writeFileSync(path.join(dir, "reviewer.pid"), String(process.pid));
   const interim = process.env.WHEELHOUSE_NO_VERDICT_INTERIM!;
   fs.writeFileSync(interim, "Static half complete; bench pending; collecting dispatch owed.\n");
