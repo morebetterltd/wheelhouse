@@ -10,10 +10,16 @@ tracked_index="$(git -C "$repo" ls-files -- ':(top,literal)evidence/')" || {
   echo 'STOP: cannot inspect the Git index for tracked evidence/' >&2
   exit 2
 }
-tracked_head="$(git -C "$repo" ls-tree -r --full-tree --name-only HEAD -- evidence/)" || {
-  echo 'STOP: cannot inspect HEAD for tracked evidence/' >&2
-  exit 2
-}
+if git -C "$repo" rev-parse --verify -q HEAD >/dev/null; then
+  tracked_head="$(git -C "$repo" ls-tree -r --full-tree --name-only HEAD -- evidence/)" || {
+    echo 'STOP: cannot inspect HEAD for tracked evidence/' >&2
+    exit 2
+  }
+else
+  tracked_head=""
+  echo 'no commits yet: HEAD check skipped; index checked' >&2
+  if [ -n "$tracked_index" ]; then printf '%s\n' "$tracked_index" >&2; fi
+fi
 if [ -n "$tracked_index" ] || [ -n "$tracked_head" ]; then
   echo 'STOP: tracked evidence/ is forbidden; post task reports and decisive output on the bead, not in the repository.' >&2
   exit 1
