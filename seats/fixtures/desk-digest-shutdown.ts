@@ -13,9 +13,16 @@ assert(['exit','signal','SIGINT','SIGHUP'].includes(mode));
 fs.mkdirSync(base);
 const marker=path.join(base,'tree.json'),grandchildFile=path.join(base,'grandchild.ts'),fault=path.join(base,'digest.ts'),driver=path.join(base,'parent.ts');
 fs.writeFileSync(grandchildFile,'setInterval(()=>{},1000);\n');
-fs.writeFileSync(fault,`import fs from 'node:fs';const c=Bun.spawn([process.execPath,${JSON.stringify(grandchildFile)}],{stdin:'ignore',stdout:'ignore',stderr:'ignore'});fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({child:process.pid,grandchild:c.pid}));setInterval(()=>{},1000);\n`);
+// The optional hold is control-only. Ordinary publication is one same-directory
+// temp write + rename; tree.json never names an incomplete record.
+fs.writeFileSync(fault,`import fs from 'node:fs';const marker=${JSON.stringify(marker)},hold=process.env.WHEELHOUSE_DIGEST_SHUTDOWN_MARKER_HOLD;const c=Bun.spawn([process.execPath,${JSON.stringify(grandchildFile)}],{stdin:'ignore',stdout:'ignore',stderr:'ignore'});const bytes=JSON.stringify({child:process.pid,grandchild:c.pid});async function writeMarker(target){if(hold){const cut=bytes.indexOf(',');fs.writeFileSync(target,bytes.slice(0,cut));while(fs.existsSync(hold))await Bun.sleep(1);fs.appendFileSync(target,bytes.slice(cut));}else fs.writeFileSync(target,bytes);}await writeMarker(marker+'.new');fs.renameSync(marker+'.new',marker);if(hold)fs.writeFileSync(marker+'.published','complete');setInterval(()=>{},1000);\n`);
 const ending=mode==='exit'?'process.exit(0);':'setInterval(()=>{},1000);';
-fs.writeFileSync(driver,`import fs from 'node:fs';process.env.WHEELHOUSE_DESK_DIGEST_TIMEOUT_MS='60000';const spawn=Bun.spawn.bind(Bun);Bun.spawn=((o)=>spawn({...o,cmd:[o.cmd[0],${JSON.stringify(fault)},...o.cmd.slice(2)]}));const d=await import(${JSON.stringify(file)});d.scheduleDigestRefresh();while(!fs.existsSync(${JSON.stringify(marker)}))await Bun.sleep(1);${ending}\n`);
+// Under the hold only, keep the parent alive and retain its stderr with a
+// bounded owned helper until publication completes. The UNCHANGED finally
+// reader then joins publication before parsing the tree for cleanup, even when
+// the expected plain-publish setup control has already reported a parse error.
+const keeper=`import fs from 'node:fs';const until=performance.now()+120000;while(!fs.existsSync(${JSON.stringify(marker+'.published')})&&performance.now()<until)await Bun.sleep(1);`;
+fs.writeFileSync(driver,`import fs from 'node:fs';const hold=process.env.WHEELHOUSE_DIGEST_SHUTDOWN_MARKER_HOLD;if(hold)Bun.spawn([process.execPath,'-e',${JSON.stringify(keeper)}],{stdin:'ignore',stdout:'ignore',stderr:'inherit'});process.env.WHEELHOUSE_DESK_DIGEST_TIMEOUT_MS='60000';const spawn=Bun.spawn.bind(Bun);Bun.spawn=((o)=>spawn({...o,cmd:[o.cmd[0],${JSON.stringify(fault)},...o.cmd.slice(2)]}));const d=await import(${JSON.stringify(file)});d.scheduleDigestRefresh();while(!fs.existsSync(${JSON.stringify(marker)}))await Bun.sleep(1);if(hold)while(fs.existsSync(hold))await Bun.sleep(1);${ending}\n`);
 parent=Bun.spawn([process.execPath,driver],{env:{...process.env,WHEELHOUSE_DESK_ROOT:root,WHEELHOUSE_NEEDS_ROOT:root},stdin:'ignore',stdout:'ignore',stderr:'pipe',detached:true});
   started=performance.now();const until=started+MARKER_CONTAINMENT_MS;while(!fs.existsSync(marker)&&performance.now()<until)await Bun.sleep(1);
   if(!fs.existsSync(marker))throw Error('marker wait expired');

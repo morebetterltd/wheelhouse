@@ -318,7 +318,7 @@ async function renewalLifecycle(dir: string, kind: "exit" | "refused" | "killed"
     } else code = replace(code, "}, 60_000);", "}, 100);");
     code = replace(code, '        const result = transition("refresh");', `${kind === "exit" && !beforeCheck ? endChild : ""}\n        const result = transition("refresh"); fs.appendFileSync(${JSON.stringify(receipt)}, JSON.stringify({status:result.status, signal:result.signal, error:result.error?.message ?? null})+"\\n");`);
     fs.writeFileSync(file, code);
-    fs.writeFileSync(payload, `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({pid:process.pid})); while(!fs.existsSync(${JSON.stringify(finish)})) await Bun.sleep(5); process.exit(${expected === 7 ? 7 : 0});\n`);
+    fs.writeFileSync(payload, `import fs from "node:fs"; const ready=${JSON.stringify(ready)}; fs.writeFileSync(ready+".new", JSON.stringify({pid:process.pid})); fs.renameSync(ready+".new",ready); while(!fs.existsSync(${JSON.stringify(finish)})) await Bun.sleep(5); process.exit(${expected === 7 ? 7 : 0});\n`);
     const args = [file, "supervise", lock, "bash", "-c", 'exec bun "$1"', "fixture", payload];
     const child = spawn("bun", args, { stdio: ["ignore", "pipe", "pipe"], detached: true });
     let stdout = "", stderr = "", closed = false, expired = false;
@@ -340,7 +340,7 @@ async function renewalLifecycle(dir: string, kind: "exit" | "refused" | "killed"
           await waitFor(() => stderr.includes("STOP: suite lock renewal failed"));
           fs.writeFileSync(finish, "exit\n");
         } else {
-          await waitFor(() => fs.existsSync(receipt));
+          await waitFor(() => fs.existsSync(receipt) && fs.readFileSync(receipt, "utf8").includes("\n"));
           const first = JSON.parse(fs.readFileSync(receipt, "utf8").trim().split("\n")[0]);
           assert.equal(first.status, 0, stderr); // A native tick before the kill.
           process.kill(actual.pid, "SIGKILL");
