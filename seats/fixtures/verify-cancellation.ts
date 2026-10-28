@@ -81,7 +81,7 @@ for (const { phase, signal } of selected) {
   const verify = path.join(project, "seats/verify.ts"), text = fs.readFileSync(verify, "utf8");
   // Main may select reused batch evidence before the normal dispatcher call.
   // Observe its complete declaration without changing either execution path.
-  const anchors = text.match(/^  const sweep = [^\n]*\b(?:runFullSweepIfRequired\(claim, |runDispatcherFullSweep\()repoRoot, tip, realBd, basePath(?:, selectedTier)?\);$/gm) ?? [];
+  const anchors = text.match(/^  const sweep = [^\n]*\b(?:runFullSweepIfRequired\(claim, |runDispatcherFullSweep\()repoRoot, tip, realBd, basePath(?:, selectedTier)?(?:, \{ preflightCandidates: batchCandidates \})?\);$/gm) ?? [];
   assert.equal(anchors.length, 1, "one dispatcher sweep declaration");
   const anchor = anchors[0];
   const observed = text.replace(anchor, '  for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => fs.writeFileSync(process.env.CANCEL_CASE! + "/handler-returned", sig));\n  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "before-sweep\\n");\n' + anchor + '\n  fs.appendFileSync(process.env.CANCEL_CASE! + "/steps", "after-sweep\\n");');

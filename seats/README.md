@@ -977,6 +977,8 @@ Manual scope is computed separately at each candidate's immutable merged tip, us
 
 Order: batch review → `walk.ts --work` for each candidate with person-on-surface/person-reading outcomes at its recorded merged tip (pass that tip to `--branch` if its fleet branch moved) → `merge-gate.ts` per candidate at that tip → fast-forward and push. Machine-only candidates pass the gate on APPROVE alone; bounced or unwalked work still refuses. The next subsection is the alternative shape: separate candidate reviews sharing only one sweep.
 
+When the dispatcher's sweep stops at a preflight audit in a `--candidates` review, it automatically runs each failed audit once at main and once at each candidate's own pinned tip, in separate scratch copies, before starting the reviewer. The `preflight attribution:` lines are in both the original sweep log (before its `rc=` footer) and the reviewer's prompt. `main <sha12>=FAIL` means the audit already fails on main; `<bead> <sha12>=ERROR(reason)` means that run could not complete, not that the audit passed. The reviewer must say on each CANDIDATE line whether that candidate's own tip fails the audit. Attribution is diagnostic: it never changes the original sweep rc or makes a failed sweep approvable. Passing sweeps, failures without a preflight stop, and reviews without candidates do not run attribution.
+
 ### Reuse one passing sweep for a review batch
 
 An integrator can start a separate batch branch at current `main`, merge the candidate tips into it, and obtain **one normal dispatcher log of the required tier at that combined tip**. Then each candidate still gets its own independent review, but can reuse that sweep:
