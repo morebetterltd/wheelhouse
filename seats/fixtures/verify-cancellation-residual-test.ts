@@ -43,6 +43,10 @@ let allJudged = true;
 const cases = ['ordinary', 'writer', 'lsof-error', 'ps-error', 'lsof-timeout', 'ps-timeout'];
 if (ordinaryControl) cases.splice(1);
 else if (outputControl === '--writer-output-control') cases.splice(0, cases.length, 'writer');
+// Focused source-removal evidence; ordinary suite/output controls retain all of
+// their existing cases and assertions when no selector is supplied.
+const selected = process.env.WHEELHOUSE_TEST_RETENTION_RESIDUAL_CASE;
+if (selected && !outputControl) { assert(cases.includes(selected), 'known residual case'); cases.splice(0, cases.length, selected); }
 for (const name of cases) {
   const dir = path.join(root, name), target = path.join(dir, 'canary'), work = path.join(target, 'deleted-scratch'), control = path.join(dir, 'control'), bin = path.join(dir, 'bin');
   fs.mkdirSync(control, { recursive: true }); fs.mkdirSync(bin);
