@@ -172,14 +172,14 @@ EOF
 # Seat "reviewer": a verdict landed.
 cat > "$LOGS/reviewer.jsonl" <<EOF
 {"type":"agent_start"}
-{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"VERDICT: APPROVE - evidence attached"}]}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"SCOPE: OK — scripted frame fixture\nINTEGRITY: OK — scripted frame fixture\nSAFETY: OK — private fixture\nHEALTH: OK — frame protocol checked\nVERDICT: APPROVE - evidence attached\nPUSH: NOT CONSIDERED"}]}}
 {"type":"agent_end","messages":[1]}
 EOF
 
 # Seat "bounced": review blocked on a BOUNCE.
 cat > "$LOGS/bounced.jsonl" <<EOF
 {"type":"agent_start"}
-{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"VERDICT: BOUNCE - two defects listed"}]}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"SCOPE: OK — scripted frame fixture\nINTEGRITY: DEFECT — scripted blocked-review fixture\nSAFETY: OK — private fixture\nHEALTH: OK — frame protocol checked\nVERDICT: BOUNCE - two defects listed\nPUSH: NOT CONSIDERED"}]}}
 {"type":"agent_end","messages":[1]}
 EOF
 
@@ -479,7 +479,9 @@ EOF
   env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun - "$HERE/completed-command.ts" "$QSCRIPT" "$QCAP" <<'JS' || QRC=$?
 import fs from 'node:fs';
 const [module,script,capture]=process.argv.slice(2),{completedCommand}=await import(module);
-const native=completedCommand('expect',[script]);
+// expect 5.45 has a 200-byte rc-file buffer: HOME >=190 bytes traps
+// before the script runs. -n skips the unwanted personal ~/.expect.rc.
+const native=completedCommand('expect',['-n', script]);
 fs.writeFileSync(capture,native.stdout);fs.writeFileSync(capture+'.stderr',native.stderr);
 console.log('CAPTURE floor PTY native '+JSON.stringify(native));
 process.exit(native.error||native.signal||native.status===null?1:native.status);
@@ -487,6 +489,38 @@ JS
   printf 'CAPTURE floor PTY harness exit=%s\n' "$QRC"
   if [ $QRC -eq 0 ]; then pass "q changes the live floor to OVERVIEW before Ctrl-C exits"
   else fail "q did not reach OVERVIEW in the live floor: $(cat "$QCAP")"; fi
+
+  # Exercise the same live transitions at a long HOME on every host, not only
+  # when the sweep happens to be nested deeply. Both runs use this exact HOME.
+  LONG_QRC=0
+  env PATH="$RUN_PATH" COLUMNS=180 LINES=24 NO_COLOR=1 FLOOR_NOW_MS="$NOW_MS" bun - "$HERE/completed-command.ts" "$QSCRIPT" "$FIX" <<'JS' || LONG_QRC=$?
+import fs from 'node:fs';
+const [module,script,fix]=process.argv.slice(2),{completedCommand}=await import(module);
+const home=fix+'/long-home-'+ 'x'.repeat(200);
+fs.mkdirSync(home);
+if (!fs.statSync(home).isDirectory() || Buffer.byteLength(home)<200) process.exit(2);
+console.log('CAPTURE floor PTY path bytes '+JSON.stringify({fixture:Buffer.byteLength(fix),home:Buffer.byteLength(home),inheritedHome:Buffer.byteLength(process.env.HOME??'')}));
+const env={...process.env,HOME:home};
+const native=completedCommand('expect',['-n', script],{env});
+console.log('CAPTURE floor PTY long HOME native '+JSON.stringify(native));
+const passed=!native.error && !native.signal && native.status===0 && /SPOTLIGHT[\s\S]*OVERVIEW[\s\S]*SPOTLIGHT/.test(native.stdout);
+if (passed) console.log('  ok    long HOME: SPOTLIGHT -> OVERVIEW -> SPOTLIGHT before Ctrl-C exits');
+else console.error('  FAIL  long HOME: live floor transitions or native completion failed');
+const control=completedCommand('expect',[script],{env});
+console.log('CAPTURE floor PTY long HOME control without -n '+JSON.stringify(control));
+let controlled=false;
+if (!control.error && control.signal==='SIGTRAP' && control.status===null) {
+  controlled=true;
+  console.log('  ok    long HOME control: removing -n reproduces pre-script SIGTRAP');
+} else if (!control.error && !control.signal && control.status===0) {
+  const version=completedCommand('expect',['-v']);
+  console.log('CAPTURE floor PTY expect version '+JSON.stringify(version));
+  controlled=!version.error && !version.signal && version.status===0;
+  if (controlled) console.log('  SKIP  long HOME control: expect did not trap without -n; '+version.stdout.trim());
+} else console.error('  FAIL  long HOME control: unexpected native failure (wanted SIGTRAP/status null)');
+process.exit(passed && controlled?0:1);
+JS
+  [ "$LONG_QRC" -eq 0 ] || fail "long HOME PTY regression/control failed (exit=$LONG_QRC)"
 fi
 
 # --- phase 7: canaries (guarded with cmp) ------------------------------------

@@ -5,7 +5,7 @@
  * One invocation = one review (and per-candidate records with --candidates). It spawns a one-shot `pi -p --no-session`
  * on the REVIEWER seat's own agent directory, with the REVIEWER crew brief
  * appended to the system prompt, hands it the bead claim and the branch's
- * tip SHA, and parses the single `VERDICT:` and `PUSH:` lines out of what comes back.
+ * tip SHA, and parses four question lines plus `VERDICT:` and `PUSH:`.
  * A refused answer is kept as diagnostic JSON, never as a verdict. One
  * corrective attempt may replay that answer and the refusal within this
  * invocation, on the same identity/scratch and without rerunning the sweep.
@@ -594,13 +594,13 @@ interface OneShotRunResult {
   outcome?: "no-verdict";
 }
 
-function runOneShot(
+export function runOneShot(
   bin: string,
   args: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number; harness: HarnessName; marker?: { seat: string; bead: string } }
+  opts: { cwd: string; env: NodeJS.ProcessEnv; stdin: string; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number; harness: HarnessName; marker?: { seat: string; bead: string } }
 ): Promise<OneShotRunResult> {
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["ignore", "pipe", "pipe"], detached: true });
+    const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "pipe"], detached: true });
     const markerFile = opts.marker ? path.join(ROOT, "seats", "run", `verify.${opts.marker.seat}.json`) : null;
     if (markerFile) {
       fs.mkdirSync(path.dirname(markerFile), { recursive: true });
@@ -686,8 +686,13 @@ function runOneShot(
     };
     child.stdout?.on("data", (chunk: Buffer) => collect(stdoutChunks, () => stdoutBytes, (n) => { stdoutBytes = n; }, chunk));
     child.stderr?.on("data", (chunk: Buffer) => collect(stderrChunks, () => stderrBytes, (n) => { stderrBytes = n; }, chunk));
+    let stdinError: (Error & { code?: string }) | undefined;
     child.on("error", (error: Error & { code?: string }) => finish({ error }));
-    child.on("close", (status, signal) => finish(sawFinalVerdictMessage && (signal || status === 143) ? { status: 0, signal: null } : { status, signal }));
+    child.on("close", (status, signal) => finish(sawFinalVerdictMessage && (signal || status === 143) ? { status: 0, signal: null, error: stdinError } : { status, signal, error: stdinError }));
+    // end() streams with backpressure and closes stdin so print-mode CLIs see EOF.
+    // An early exit can close the pipe: retain its error without an unhandled event.
+    child.stdin?.on("error", (error) => { stdinError = error; });
+    child.stdin?.end(opts.stdin);
   });
 }
 
@@ -1349,7 +1354,7 @@ function manualScopePrompt(context: ManualReviewContext): string[] {
   if (!context.files.length) return [];
   return ["", ...manualScopeLists(context),
     `Manual comparison base: ${context.base} (${JSON.stringify(context.baseRef)}).`,
-    `A changed file no outcome calls for is a scope defect; see REVIEWER.md "The manual is not the author's to bend". These lists are context, not permission: judge the file/feature relationship against the contract and inspect the base-to-tip changed lines.`,
+    `A changed file no outcome calls for is a scope defect; see REVIEWER.md "The manual is not the author's to bend". Put it on the SCOPE line as DEFECT, naming the path and quoting the changed line, with VERDICT: BOUNCE. These lists are context, not permission: judge the file/feature relationship against the contract and inspect the base-to-tip changed lines.`,
   ];
 }
 function tierInventory(root: string, tip: string): string[] {
@@ -1641,13 +1646,14 @@ function claimRequiresSweepCitation(claim: string): boolean {
   return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
 }
 
-// Nightly-only launch options; ordinary reviews keep their existing defaults.
+// Optional sweep launch context; ordinary reviews keep their existing defaults.
 export interface SweepLaunchOptions {
   logDir?: string;
   logPrefix?: string;
   fixtureSuites?: string[];
   noWait?: boolean;
   coordinatedSignals?: boolean;
+  preflightCandidates?: import("./preflight-attribution").PreflightCandidates;
 }
 // The exported name remains for existing callers which explicitly request full.
 export async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string, choice: SweepChoice = { tier: "full", reason: "caller" }, options: SweepLaunchOptions = {}): Promise<SweepResult> {
@@ -1768,12 +1774,20 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
     catch (e: any) { error = e.message; rc = 1; }
   }
   const elapsedMs = Date.now() - started;
+  const preflightAttribution = options.preflightCandidates && rc === 1 ? await (await import("./preflight-attribution")).attributePreflight({
+    rc, logPath, scratchCwd, candidates: options.preflightCandidates,
+    runAudit: (auditTip, suite) => runDispatcherFullSweep(repoRoot, auditTip, realBd, basePath,
+      { tier: "full", reason: "preflight attribution" }, { ...options, preflightCandidates: undefined,
+        fixtureSuites: [suite], logPrefix: "preflight.", noWait: false }),
+  }) : [];
+  if (preflightAttribution.length) fs.appendFileSync(logPath, preflightAttribution.join("\n") + "\n");
   fs.appendFileSync(logPath, `\nrc=${rc}\nelapsedMs=${elapsedMs}\n${error ? `error=${error}\n` : ""}`);
-  return { required: true, rc, logPath, elapsedMs, tip, choice, timings, error };
+  return { required: true, rc, logPath, elapsedMs, tip, choice, timings, error,
+    ...(preflightAttribution.length ? { preflightAttribution } : {}) };
   } finally { removeScratchWorktree(repoRoot, scratchCwd); }
 }
 
-function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[] {
+export function sweepPromptLines(sweep: SweepResult & { preflightAttribution?: string[] }, requireCitation: boolean): string[] {
   if (!sweep.logPath) return [];
   return [
     ``,
@@ -1788,6 +1802,8 @@ function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
     ...sweepTimingLines(sweep),
+    ...(sweep.preflightAttribution ?? []),
+    ...(sweep.preflightAttribution?.length ? ["On each CANDIDATE line, say whether that candidate's own tip fails each attributed audit; main=FAIL means it already fails on main, ERROR means the run could not complete, and attribution cannot approve a failed sweep."] : []),
     ...(sweep.error ? [`- error: ${sweep.error}`] : []),
     sweep.batch ? `This is batch coverage, not a new sweep at the candidate alone. Reviewed tip ${sweep.tip} is an ancestor of batch tip ${sweep.batch.tip}, whose first-parent chain reaches current main. This reuses only the sweep, not another reviewer's judgment.` : `This dispatcher gate runs for every review, regardless of the bead's wording, outside your model command timeout in the detached scratch worktree at the reviewed tip. Its result is recorded with your verdict. If rc is not 0, you cannot approve.`,
     ...(requireCitation ? [`You must cite rc=${sweep.rc} and the exact log path in your final evidence.`] : []),
@@ -2045,7 +2061,7 @@ async function main(): Promise<void> {
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
   const ownTier = chooseSweepTier(repoRoot, tip, claim, ROOT);
   const selectedTier = [ownTier, ...(batchCandidates?.candidates.map(c => c.choice) ?? [])].find(c => c.tier === "full") ?? ownTier;
-  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);
+  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier, { preflightCandidates: batchCandidates });
   const requireSweepCitation = !!batchCandidates || !!sweep.batch || claimRequiresSweepCitation(claim);
   const sweepPrompt = sweepPromptLines(sweep, requireSweepCitation);
 
@@ -2075,7 +2091,7 @@ async function main(): Promise<void> {
     ...sweepPrompt,
     ...pushAuthorityPromptLines(ROOT),
     ``,
-    `Verify whether the bead's stated done holds at that SHA, per your brief.`,
+    `Read the whole diff ${manualScope.base}..${tip} against the contract above (its Intent and Outcomes) and answer the four questions in your brief: SCOPE, INTEGRITY, SAFETY, HEALTH. Do not walk a consumer surface or prove an outcome; the verifier does that after your APPROVE.`,
     `Your process cwd is a detached scratch worktree for the branch repository. Prefer relative searches from this cwd.`,
     `Do not recursively grep the live Branch repository path's seats/logs or seats/verdicts runtime dirs; if you must search that path, exclude seats/logs and seats/verdicts/*.partial*.`,
     `Confirm the branch still resolves to the SHA above before relying on your reading.`,
@@ -2084,7 +2100,12 @@ async function main(): Promise<void> {
     `VERDICT: APPROVE — at pinned tip ${tip}; branch has since moved to <new-tip> (<N> commits appended, history unrewritten)`,
     `PUSH: NOT CONSIDERED — branch moved; re-verify at <new-tip> before publish`,
     `DISCOVER is reserved for a discovery that displaces the judgment, not for an appended branch tip; the integrator/publisher refuses any tip other than the verdict's pinned SHA until the new tip is re-verified.`,
-    `End with exactly one plain-text VERDICT line and exactly one plain-text PUSH line, never inside a Markdown code fence:`,
+    `End with exactly one plain-text line for each question, then exactly one VERDICT and one PUSH line, never inside a Markdown code fence:`,
+    `SCOPE: OK — <what you read or ran> | DEFECT — <what and where> | NOT JUDGED — <why>`,
+    `INTEGRITY: OK — <what you re-ran> | DEFECT — <what and where> | NOT JUDGED — <why>`,
+    `SAFETY: OK — <what you checked> | DEFECT — <what and where> | NOT JUDGED — <why>`,
+    `HEALTH: OK — <what you checked> | DEFECT — <what and where> | NOT JUDGED — <why>`,
+    `Every question line, including OK, needs inline evidence/detail. APPROVE requires four OK; BOUNCE requires at least one DEFECT. DISCOVER, and BOUNCE beside at least one DEFECT, may carry NOT JUDGED on any question. Missing, duplicate, malformed or inconsistent lines are refused, not judgments.`,
     `VERDICT: APPROVE | BOUNCE | DISCOVER`,
     `PUSH: APPROVE <remote> — verified: <what you checked> | HOLD — <why> | NOT CONSIDERED [<why>]`,
     `Evidence goes above those two closing lines. Fenced VERDICT: or PUSH: lines are ignored and make the gate STOP.`,
@@ -2109,6 +2130,7 @@ async function main(): Promise<void> {
     const res = await runOneShot(oneShot.bin, oneShot.args, {
       cwd: scratchCwd,
       env,
+      stdin: oneShot.stdin,
       timeoutMs,
       firstOutputTimeoutMs,
       noEventTimeoutMs,
@@ -2229,6 +2251,21 @@ async function main(): Promise<void> {
       const annotatedVerdictShown = verdictLines[0].normalized.replace(/^VERDICT:\s*/, "");
       const verdictShown = movedVerdictShown || (ordinaryMatch?.[2] ? annotatedVerdictShown : verdict);
       const benchGapNotes = benchGapNotices(notBenched);
+      const questionLines: { tag: string; normalized: string; status: string; detail: string }[] = [];
+      // four-question-parse:start — mutation canary removes only this gate.
+      for (const tag of ["SCOPE", "INTEGRITY", "SAFETY", "HEALTH"]) {
+        // Count actual lines, including identical duplicates. Stream-event
+        // retransmission is already resolved by finalAssistantText.
+        const lines = liveLineCandidates(stdout, reviewerHarness, tag, false);
+        if (lines.length !== 1) refuse(`${tag}: ${lines.length} live lines — expected exactly one plain-text ${tag} line outside fences`); // question-count
+        const line = lines[0].normalized;
+        const match = line.match(/^(SCOPE|INTEGRITY|SAFETY|HEALTH):\s*(OK|DEFECT|NOT JUDGED)\s*[—-]{1,2}\s*(\S.*)$/);
+        if (!match) refuse(`malformed ${tag} line: "${line}" — expected OK | DEFECT | NOT JUDGED with inline evidence/detail`); // question-shape
+        questionLines.push({ tag, normalized: line, status: match![2], detail: match![3] });
+      }
+      if (verdict === "APPROVE" && questionLines.some(q => q.status !== "OK")) refuse("APPROVE requires four OK question lines; DEFECT or NOT JUDGED is malformed"); // question-approve
+      if (verdict === "BOUNCE" && !questionLines.some(q => q.status === "DEFECT")) refuse("BOUNCE names no DEFECT"); // question-bounce
+      // four-question-parse:end
       let candidateVerdicts = new Map<string, CandidateVerdict>();
       if (batchCandidates) {
         try { candidateVerdicts = parseCandidateVerdicts(stdout, reviewerHarness, batchCandidates, verdict, Math.min(verdictLines[0].lineNumber, pushLines[0].lineNumber)); }
@@ -2313,6 +2350,7 @@ async function main(): Promise<void> {
           `- fallback-distinct-account-basis: ${promotion.distinctAccountBasis}`,
         ] : []),
         `- at: ${new Date().toISOString()}`,
+        ...questionLines.map(q => `- ${q.tag.toLowerCase()}: ${q.normalized.slice(q.tag.length + 1).trimStart()}`),
         `- verdict: ${subject.shown}`,
         `- push: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}`,
         // Human-readable manual notes terminate the strict lowercase-key reader.
@@ -2373,11 +2411,15 @@ async function main(): Promise<void> {
       fs.writeFileSync(verdictFile, record); // verdict-write
       }
       const verdictFile = path.join(VERDICTS_DIR, `${beadId}.md`);
+      const inboxDetail = [
+        `VERDICT: ${verdictShown}`,
+        pushLines[0].normalized,
+        ...questionLines.map(q => q.normalized),
+        `branch: ${branch}`, `tip: ${tip}`, `verdict file: ${path.relative(ROOT, verdictFile)}`,
+      ].join("\n");
       appendVerifierGateInbox(
-        beadId,
-        "settle",
-        `verifier gate verdict — ${beadId}`,
-        `VERDICT: ${verdictShown}\nPUSH: ${pushLines[0].normalized.replace(/^PUSH:\s*/, "")}\nbranch: ${branch}\ntip: ${tip}\nverdict file: ${path.relative(ROOT, verdictFile)}`
+        beadId, "settle", `verifier gate verdict — ${beadId}`, inboxDetail,
+        "verifier-gate", "seats/verify.ts", Math.max(1200, inboxDetail.length)
       );
       gateInboxWrote = true;
 

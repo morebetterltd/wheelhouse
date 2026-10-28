@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+export WHEELHOUSE_REVIEWER_REPLY_MODULE="$(cd "$(dirname "$0")" && pwd -P)/fixtures/reviewer-reply.cjs"
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 #
@@ -119,7 +120,7 @@ fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(args));
 if (args.includes("-p")) {           // one-shot: verify.ts's spawn shape
   fs.writeFileSync(path.join(agentDir, "invoked"), "");
   const reply = process.env.STUB_REPLY_FILE;
-  if (reply) process.stdout.write(fs.readFileSync(reply, "utf8"));
+  if (reply) process.stdout.write(require(process.env.WHEELHOUSE_REVIEWER_REPLY_MODULE).fourQuestions(fs.readFileSync(reply, "utf8")));
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
 const sessDir = path.join(agentDir, "sessions");

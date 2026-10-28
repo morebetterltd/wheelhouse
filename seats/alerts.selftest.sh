@@ -156,6 +156,11 @@ if bun "$HERE/fixtures/docker-cache-pressure.ts" "$ROOT/seats/alerts.ts" "$FIX/d
   pass 'Docker cache-pressure and unavailable-Docker consumer cases pass'
 else fail 'Docker cache-pressure fixture failed'; fi
 
+phase 'shared test lane — read-only holder alert'
+if bun "$HERE/fixtures/alerts-test-lane.ts" "$HERE" "$FIX/test-lane" "$ROOT/seats/alerts.ts"; then
+  pass 'test-lane-held real-lock consumer cases and source sensitivity controls pass'
+else fail 'test-lane-held consumer fixture failed'; fi
+
 phase 'numeric alert settings'
 if bun "$HERE/fixtures/alert-values.ts" "$HERE" "$FIX/alert-values" "$ROOT/seats/alerts.ts"; then
   pass 'missing/blank numeric defaults, explicit values and finite validation; actual reader removals rejected'

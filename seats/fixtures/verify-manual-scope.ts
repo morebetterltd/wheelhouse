@@ -69,7 +69,7 @@ function setup(layout: string) {
   const config = path.join(root, "case.json");
   fs.writeFileSync(path.join(bin, "bd"), ["#!/usr/bin/env bun", "const fs=require('fs');", `const c=JSON.parse(fs.readFileSync(${JSON.stringify(config)},'utf8'));`, "const a=process.argv.slice(2).filter(x=>x!=='--readonly');", "if(a[0]==='show')console.log(c.display);", "else if(a[0]==='init')fs.mkdirSync('.beads',{recursive:true});", "else if(a[0]==='where')console.log(JSON.stringify({path:fs.realpathSync('.beads')}));", "else if(a[0]==='create')console.log('{\"id\":\"fixture-bead\"}');", "else if(a[0]!=='metrics')process.exit(1);", ""].join("\n"), { mode: 0o755 });
   fs.writeFileSync(path.join(root, "seed.json"), JSON.stringify(seed));
-  fs.writeFileSync(path.join(bin, "pi"), ["#!/usr/bin/env bun", "const fs=require('fs');", `const root=${JSON.stringify(root)};`, "const c=JSON.parse(fs.readFileSync(root+'/case.json','utf8'));", "fs.writeFileSync(root+'/prompt.json',JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),account:process.env.PI_CODING_AGENT_DIR}));", "const event=JSON.parse(fs.readFileSync(root+'/seed.json','utf8'));event.message.content=[{type:'text',text:c.reply}];", "console.log(JSON.stringify(event));console.log(JSON.stringify({type:'agent_end',messages:[event.message]}));", ""].join("\n"), { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "pi"), ["#!/usr/bin/env bun", "const fs=require('fs');", `const root=${JSON.stringify(root)};`, "const c=JSON.parse(fs.readFileSync(root+'/case.json','utf8'));", "fs.writeFileSync(root+'/prompt.json',JSON.stringify({args:process.argv.slice(2),stdin:fs.readFileSync(0,'utf8'),cwd:process.cwd(),account:process.env.PI_CODING_AGENT_DIR}));", "const event=JSON.parse(fs.readFileSync(root+'/seed.json','utf8'));event.message.content=[{type:'text',text:c.reply}];", "console.log(JSON.stringify(event));console.log(JSON.stringify({type:'agent_end',messages:[event.message]}));", ""].join("\n"), { mode: 0o755 });
   return { layout, root, repo, bin, home, config, comparisonBase, changed, untouched, literalDiff, nativeDiff };
 }
 const basic = `Trace: manual scope fixture\nIntegration: fleet/manual-base\nSignal: isa-gap: V9\nSkills: intent@1.0.0 outcomes@1.0.0\n\nIntent:\nMake the counter result accurate without changing its verification contract.\n\nOutcomes:\n- O1 The counter works.\n  consumer: machine — fixture consumer\n  surface: /counter\n  check: run — inspect /counter; a features/counter.md mention here is not a map surface\n`;
@@ -77,7 +77,9 @@ const map = `- O2 The counter map matches its reach.\n  consumer: person-reading
 async function review(p: any, name: string) {
   const scoped = name === "scoped" || name === "untouched", text = basic + (scoped ? map : ""), contract = path.join(p.root, "contract.md"); fs.writeFileSync(contract, text);
   const branch = name === "untouched" ? "fleet/no-manual" : "fleet/manual", tip = name === "untouched" ? p.untouched : p.changed;
-  const reply = name === "bounce" ? `VERDICT: BOUNCE — scope: ${counter} changed without a contract outcome calling for it\nPUSH: NOT CONSIDERED\n` : "VERDICT: APPROVE\nPUSH: NOT CONSIDERED\n";
+  const { FOUR_OK } = require("./reviewer-reply.cjs");
+  const questions = name === "bounce" ? FOUR_OK.replace(/^SCOPE:[^\n]*/, `SCOPE: DEFECT — ${counter} changed without a contract outcome calling for it`) : FOUR_OK;
+  const reply = questions + `VERDICT: ${name === "bounce" ? "BOUNCE" : "APPROVE"}\nPUSH: NOT CONSIDERED\n`;
   // Deliberately contradictory display text catches parsing bd's rendered view
   // instead of the exact contract text already accepted by the K1 gate.
   fs.writeFileSync(p.config, JSON.stringify({ display: basic + map, reply }));
@@ -89,7 +91,7 @@ async function review(p: any, name: string) {
   Object.assign(native, { stdoutEOF, stderrEOF, stdout: Buffer.concat(out).toString(), stderr: Buffer.concat(err).toString() });
   const record: any = { ...p, name, branch, tip, text, reply, native }; records.push(record); save();
   assert.equal(native.code, name === "bounce" ? 2 : 0, `${tag} ${p.layout}/${name}: native verdict path: ${native.stderr}`); assert.equal(native.signal, null); assert(stdoutEOF && stderrEOF);
-  const prompt = JSON.parse(fs.readFileSync(path.join(p.root, "prompt.json"), "utf8")); record.prompt = prompt.args.at(-1);
+  const prompt = JSON.parse(fs.readFileSync(path.join(p.root, "prompt.json"), "utf8")); record.prompt = prompt.stdin; assert(!prompt.args.includes(prompt.stdin));
   record.verdict = fs.readFileSync(path.join(p.root, "seats/verdicts", `manual-${name}.md`), "utf8"); save();
   assert(record.prompt.includes(`Tip SHA at dispatch: ${tip}`));
   const lines = (s: string, prefix: string) => s.split("\n").filter(line => line.startsWith(prefix));
@@ -105,7 +107,10 @@ async function review(p: any, name: string) {
       assert.deepEqual(lines(s, lead + outcomes), [`${lead}${outcomes} ${expected}.`], `${tag} ${p.layout}/${name}: same K1 contract outcomes`);
     }
     assert(record.prompt.includes("The manual is not the author's to bend"), `${tag} ${p.layout}/${name}: scope rule named`);
-    if (name === "bounce") assert(record.verdict.includes(`- verdict: BOUNCE — scope: ${counter}`), `${tag} ${p.layout}/${name}: scope annotation retained`);
+    if (name === "bounce") {
+      assert(record.verdict.includes(`- scope: DEFECT — ${counter} changed without a contract outcome calling for it`), `${tag} ${p.layout}/${name}: scope line retained`);
+      assert(record.verdict.includes("- verdict: BOUNCE\n"), `${tag} ${p.layout}/${name}: plain BOUNCE retained`);
+    }
   }
   save();
 }

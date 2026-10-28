@@ -33,7 +33,7 @@ export function afterRetry(stdout: string, done: boolean, reaping: boolean): voi
 
 async function fakeReviewer(): Promise<void> {
   const dir = process.env.WHEELHOUSE_NO_VERDICT_CASE!;
-  fs.writeFileSync(path.join(dir, "prompt.txt"), process.argv.at(-1)!);
+  fs.writeFileSync(path.join(dir, "prompt.txt"), fs.readFileSync(0, "utf8"));
   fs.writeFileSync(path.join(dir, "reviewer.pid"), String(process.pid));
   const interim = process.env.WHEELHOUSE_NO_VERDICT_INTERIM!;
   fs.writeFileSync(interim, "Static half complete; bench pending; collecting dispatch owed.\n");
@@ -129,7 +129,7 @@ Outcomes:
     const interim = path.join(vdir, bead + ".interim.md"); env.WHEELHOUSE_NO_VERDICT_INTERIM = interim;
     const events = fs.readFileSync(path.join(here, "fixtures/verify-real", capture), "utf8").trim().split("\n").map(x => JSON.parse(x));
     const terminal = structuredClone(events.find(x => x.type === terminalType)); assert(terminal);
-    const text = retry ? "Retry recovered.\nVERDICT: BOUNCE retry recovered\nPUSH: NOT CONSIDERED fixture" : "I started the background sweep. I'll write the verdict when it finishes.";
+    const text = require("./reviewer-reply.cjs").fourQuestions(retry ? "Retry recovered.\nVERDICT: BOUNCE retry recovered\nPUSH: NOT CONSIDERED fixture" : "I started the background sweep. I'll write the verdict when it finishes.");
     let assistant: any;
     if (harness === "pi") {
       assistant = structuredClone(events.find(x => x.type === "message_end" && x.message?.role === "assistant"));

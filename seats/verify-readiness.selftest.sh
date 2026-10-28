@@ -4,6 +4,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+export WHEELHOUSE_REVIEWER_REPLY_MODULE="$HERE/fixtures/reviewer-reply.cjs"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-verify-readiness.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "$FIX" >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
@@ -23,7 +24,7 @@ assert.equal(testSource.split(start).length,2);
 const stub = testSource.split(start)[1].split(end)[0];
 assert(stub.includes('"ready"') && stub.includes('"release"'));
 const pi = path.join(root,"fixture-pi.cjs");fs.writeFileSync(pi,stub);
-const reply = path.join(root,"reply.txt");fs.writeFileSync(reply,"Ready fixture\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED\n");
+const reply = path.join(root,"reply.txt");fs.writeFileSync(reply,(await import(pathToFileURL(path.join(here,"fixtures/reviewer-reply.cjs")).href)).default.fourQuestions("Ready fixture\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED\n"));
 let failures=0,checks=0;
 async function check(name:string,mutant=false){
  checks++;
@@ -31,12 +32,13 @@ async function check(name:string,mutant=false){
  const file=path.join(root,"seats",name+".ts");
  let code=source;
  if(mutant){const old='if (!sawOutput) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT"';assert.equal(code.split(old).length,2);code=code.replace(old,'if (false) killFor("WHEELHOUSE_FIRST_OUTPUT_TIMEOUT"');}
- fs.writeFileSync(file,instrument(code)+'\nexport {runOneShot};\n');
+ assert.equal((code.match(/^export function runOneShot\(/gm)??[]).length,1,"one production runOneShot export");
+ fs.writeFileSync(file,instrument(code));
  const {runOneShot}=await import(pathToFileURL(file).href);
  process.env.WHEELHOUSE_TEST_WATCHDOG_DIR=dir;
  const silent=name!=="ready-output";
  const env={...process.env,PI_CODING_AGENT_DIR:path.join(dir,"agent"),STUB_REPLY_FILE:reply,STUB_SILENT:silent?"1":"0"};
- const result=runOneShot("node",[pi,"--mode","json"],{cwd:dir,env,timeoutMs:900000,firstOutputTimeoutMs:1,noEventTimeoutMs:1,maxBuffer:1024*1024,harness:"pi"});
+ const result=runOneShot("node",[pi,"--mode","json"],{cwd:dir,env,stdin:"Readiness fixture prompt delivered on stdin.\n",timeoutMs:900000,firstOutputTimeoutMs:1,noEventTimeoutMs:1,maxBuffer:1024*1024,harness:"pi"});
  let ended=false;result.then(()=>{ended=true;});
  try{
   await ready(dir,()=>ended);

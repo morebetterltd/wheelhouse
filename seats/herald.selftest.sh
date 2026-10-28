@@ -325,7 +325,7 @@ cat > "$PROJ/seats/state.json" <<'JSON'
 JSON
 printf 'worker report only\n' > "$FIX/bd-show/bead-review.txt"
 cat > "$PROJ/seats/logs/reviewer-1.jsonl" <<'JSONL'
-{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"Review complete.\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED"}]}]}
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"Review complete.\nSCOPE: OK — scripted relay fixture\nINTEGRITY: OK — scripted relay fixture\nSAFETY: OK — private fixture\nHEALTH: OK — relay protocol checked\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED"}]}]}
 JSONL
 seed_log_cursor reviewer-1.jsonl 0
 RC=0; OUT="$(BD_SHOW_DIR="$FIX/bd-show" BD_COMMENT_DIR="$FIX/bd-comments" PATH="$FIX/bin:$PATH" run_herald --once 2>&1)" || RC=$?

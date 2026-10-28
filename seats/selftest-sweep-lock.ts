@@ -28,6 +28,8 @@ const HOST_RECORD = `${MARKER}-host`;
 const C = fs.constants;
 const darwin = process.platform === "darwin";
 class Refused extends Error {}
+class PayloadExited extends Refused {}
+const PAYLOAD_EXITED = 76; // Non-renewal, not a foreign-owner failure.
 /** Capture native bytes through regular descriptors, not Bun's synchronous
  * stdout pipe result: a successful fast command can return an empty string
  * there before its output has been observed. Keep the existing timeout and
@@ -145,7 +147,8 @@ function diagnose(error: any, parent?: number, name?: string) {
   console.error("SELFTEST_LOCK_REFUSAL " + JSON.stringify({ operation: process.argv[2], lock: process.argv[3], reason: error.message,
     host: { hostname: HOST, hostId, identitySource, identityFailures, knownHostnames: [...hostNames], platform: process.platform },
     ...(error.ancestryObservations ? { ancestryObservations: error.ancestryObservations } : {}),
-    ...(error.ownership ? { ownership: error.ownership } : {}), observed, snapshots }));
+    ...(error.ownership ? { ownership: error.ownership } : {}),
+    ...(error.ticketCleanupFailure ? { ticketCleanupFailure: error.ticketCleanupFailure } : {}), observed, snapshots }));
 }
 // Async supervisor failures may occur outside a transition's pinned parent.
 // Reopen only for a diagnostic snapshot; never repair state from this path.
@@ -517,6 +520,48 @@ export function legacyHostnameMatches(hostname: string): boolean {
   }
 }
 
+/** Read-only alert observation. No admission, renewal, reaping or signalling.
+ * A nonblocking shared parent flock avoids waiting behind a wedged transition.
+ * Unknown/incomplete/foreign records are not evidence that a lane is free. */
+export function observeTestLane(input = "/tmp/wheelhouse-selftest-sweep.lock"):
+  { status: "held"; pid: number; started: string; token: string; waiting: number } |
+  { status: "free" } | { status: "unavailable"; reason: string } {
+  let parent = -1, queue = -1;
+  try {
+    const identity = stableHostIdentity(); // bounded native lookup, before flock
+    primitives();
+    const lock = canonicalLock(input), name = path.basename(lock);
+    parent = parentFd(lock);
+    if (native.symbols.flock(parent, 1 | 4)) throw new Refused("test lane observation busy");
+    // Authenticate old network names without hostCache(), which renews/writes.
+    hostNames = new Set([HOST]);
+    if (identity.source !== "hostname") {
+      let cache = -1;
+      try {
+        cache = openAt(parent, `${name}.host`, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+        for (const hostname of cachedHostNames(cache, identity.hostId)) hostNames.add(hostname);
+      } catch (e: any) { if (cache >= 0 || e.errno !== 2) throw e; }
+      finally { if (cache >= 0) fs.closeSync(cache); }
+    }
+    let leaf: number;
+    try { leaf = openAt(parent, name); }
+    catch (e: any) { if (e.errno === 2) return { status: "free" }; throw e; }
+    fs.closeSync(leaf);
+    const holder = inspect(parent, name), marker = holder.marker;
+    if (!alive(marker.pid)) return { status: "free" };
+    if (!marker.started || !marker.token) throw new Refused("test lane has no token-owned admission time");
+    const opened = queueFd(parent, `${name}.queue`, false);
+    if (opened === null) throw new Refused("test lane FIFO unavailable");
+    queue = opened;
+    const current = tickets(queue);
+    if (current[0]?.pid !== marker.pid || current[0]?.token !== marker.token) throw new Refused("test lane holder is not FIFO head");
+    const waiting = current.filter(t => !(t.pid === marker.pid && t.token === marker.token) && alive(t.pid)).length;
+    if (JSON.stringify(inspect(parent, name)) !== JSON.stringify(holder)) throw new Refused("test lane changed during observation");
+    return { status: "held", pid: marker.pid, started: marker.started, token: marker.token, waiting };
+  } catch (e: any) { return { status: "unavailable", reason: e.message }; }
+  finally { if (queue >= 0) fs.closeSync(queue); if (parent >= 0) fs.closeSync(parent); }
+}
+
 type Ticket = { name: string; identity: string; raw: string; pid: number; token: string; sequence: bigint };
 function queueFd(parent: number, name: string, create: boolean): number | null {
   let fd: number;
@@ -625,38 +670,60 @@ function main(): number {
   const parent = parentFd(lock);
   try {
     if (native.symbols.flock(parent, 2)) throw new Refused(`parent flock failed (errno ${errno()})`);
+    // Completion can race the supervisor's last child-state observation. Do
+    // not inspect/rebind/renew a lease for a payload that has already exited.
+    if (op === "refresh" && !alive(pid)) throw new PayloadExited("payload exited");
     hostNames = hostCache(parent, name);
     const queueName = `${name}.queue`;
     if (op === "release") {
-      if (owned) {
-        let fd = -1;
-        try { fd = openAt(parent, name); } catch {} // Never delete an unreadable replacement.
-        if (fd >= 0) {
-          let ours: boolean;
-          try { ours = id(fd) === owned; } finally { fs.closeSync(fd); }
-          if (ours) {
-            const snapshot = inspect(parent, name);
-            if (snapshot.marker.token !== token || snapshot.marker.pid !== pid) throw new Refused("owned lock marker changed");
-            removeValidated(parent, name, snapshot);
+      let releaseFailure: any;
+      try {
+        if (owned) {
+          let fd = -1;
+          try { fd = openAt(parent, name); } catch {} // Never delete an unreadable replacement.
+          if (fd >= 0) {
+            let ours: boolean;
+            try { ours = id(fd) === owned; } finally { fs.closeSync(fd); }
+            if (ours) {
+              const snapshot = inspect(parent, name);
+              const mismatches: string[] = [];
+              if (snapshot.marker.pid !== pid) mismatches.push("pid");
+              if (snapshot.marker.token !== token) mismatches.push("token");
+              if (mismatches.length) throw Object.assign(new Refused(`owned lock marker changed (${mismatches.join(", ")})`), {
+                ownership: { mismatches, caller: { pid, token, identity: owned, payloadAlive: alive(pid) },
+                  lock: { pid: snapshot.marker.pid, token: snapshot.marker.token, identity: snapshot.identity } },
+              });
+              removeValidated(parent, name, snapshot);
+            }
           }
         }
+      } catch (error) { releaseFailure = error; }
+      try {
+        // Losing the lock token must not strand this run's own FIFO ticket.
+        // All queue records are still validated; foreign lock bytes stay put.
+        const queue = queueFd(parent, queueName, false);
+        if (queue !== null) try {
+          for (const ticket of tickets(queue)) if (ticket.pid === pid && ticket.token === token) removeTicket(queue, ticket);
+          removeEmptyQueue(parent, queueName, queue);
+        } finally { fs.closeSync(queue); }
+      } catch (error: any) {
+        // Preserve the original ownership refusal if the queue independently
+        // cannot be authenticated; retain that second failure as evidence too.
+        if (releaseFailure) releaseFailure.ticketCleanupFailure = error.message;
+        else releaseFailure = error;
       }
-      const queue = queueFd(parent, queueName, false);
-      if (queue !== null) try {
-        for (const ticket of tickets(queue)) if (ticket.pid === pid && ticket.token === token) removeTicket(queue, ticket);
-        removeEmptyQueue(parent, queueName, queue);
-      } finally { fs.closeSync(queue); }
+      if (releaseFailure) throw releaseFailure;
       return 0;
     }
     if (op === "refresh") {
       const snapshot = inspect(parent, name);
       const payloadAlive = alive(pid);
+      if (!payloadAlive) throw new PayloadExited("payload exited");
       const mismatches: string[] = [];
       if (!owned) mismatches.push("missing caller identity");
       else if (snapshot.identity !== owned) mismatches.push("identity");
       if (snapshot.marker.pid !== pid) mismatches.push("pid");
       if (snapshot.marker.token !== token) mismatches.push("token");
-      if (!payloadAlive) mismatches.push("payload liveness");
       if (mismatches.length) throw Object.assign(new Refused(`cannot refresh a different lock owner (${mismatches.join(", ")})`), {
         ownership: { mismatches, caller: { pid, token, identity: owned || null, payloadAlive },
           lock: { pid: snapshot.marker.pid, token: snapshot.marker.token, identity: snapshot.identity } },
@@ -702,7 +769,11 @@ function main(): number {
       admissionOutput(parent, name, inspect(parent, name));
       return 0;
     } finally { fs.closeSync(queue); }
-  } catch (e) { diagnose(e, parent, name); throw e; }
+  } catch (e) {
+    // It may also exit while the helper is validating the cache/marker.
+    if (op === "refresh" && !alive(pid)) e = new PayloadExited("payload exited");
+    diagnose(e, parent, name); throw e;
+  }
   finally { fs.closeSync(parent); }
 }
 function canonicalLock(input: string): string {
@@ -818,6 +889,17 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
   const transition = (op: string) => spawnSync("bun", [import.meta.path, op, lock, String(child!.pid), token, owned], {
     encoding: "utf8", detached: true, env: { ...process.env, [HELD_IDENTITY]: held, WHEELHOUSE_SELFTEST_SWEEP_CAPTURE_IDENTITY: op === "acquire" ? "1" : "0" },
   });
+  const transitionCheck = (result: ReturnType<typeof transition>, operation: string) => {
+    let check = result.error?.code ?? (result.signal ? `signal ${result.signal}` : `${operation} exit ${result.status}`);
+    for (const line of result.stderr.split("\n")) {
+      if (!line.startsWith("SELFTEST_LOCK_REFUSAL ")) continue;
+      try {
+        const refusal = JSON.parse(line.slice("SELFTEST_LOCK_REFUSAL ".length));
+        if (refusal.operation === operation) check = refusal.ownership?.mismatches?.join(", ") || refusal.reason || check;
+      } catch {} // Native failure text is retained alongside the named STOP.
+    }
+    return check;
+  };
   try {
     if (!child.pid || !gate) throw new Refused("cannot start gated suite process");
     let previous = "";
@@ -848,11 +930,19 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
       // One minute is well inside tmp_cleaner's three-day horizon, even for
       // one long payload with no nested admissions. No environment override.
       renewal = setInterval(() => {
+        if (closed || child!.exitCode !== null || child!.signalCode !== null) {
+          clearInterval(renewal); return;
+        }
         const result = transition("refresh");
+        if (!result.error && !result.signal && result.status === PAYLOAD_EXITED) {
+          // The child exited after the check, or native reaping preceded its
+          // close event. Join `done` and keep its real code/signal below.
+          clearInterval(renewal); return;
+        }
         if (result.stderr) process.stderr.write(result.stderr);
         if (result.error || result.status !== 0 || result.signal) {
           renewalFailed = true; clearInterval(renewal);
-          console.error("STOP: suite lock renewal failed");
+          console.error(`STOP: suite lock renewal failed (${transitionCheck(result, "refresh")})`);
         }
       }, 60_000);
       const admission = held ? JSON.parse(held) as HeldIdentity : undefined;
@@ -879,8 +969,9 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
       const result = transition("release");
       if (result.stderr) process.stderr.write(result.stderr);
       if (result.error || result.status !== 0) {
-        diagnoseLock(new Refused(`suite lock release failed: ${result.error ?? `exit ${result.status} signal ${result.signal}`}`), lock);
-        console.error("STOP: suite lock release failed"); code = 2; interrupted = null;
+        const check = transitionCheck(result, "release");
+        diagnoseLock(new Refused(`suite lock release failed (${check}): ${result.error ?? `exit ${result.status} signal ${result.signal}`}`), lock);
+        console.error(`STOP: suite lock release failed (${check})`); code = 2; interrupted = null;
       }
     }
     for (const [signal, handler] of handlers) process.off(signal, handler);
@@ -897,6 +988,9 @@ if (import.meta.main) {
   }
   catch (e: any) {
     if (!diagnosed) diagnoseLock(e, process.argv[3]);
-    console.error(`STOP: ${process.argv[3]} is not a selftest-sweep lock (${e.message})`); process.exitCode = 2;
+    if (e instanceof PayloadExited) process.exitCode = PAYLOAD_EXITED;
+    else {
+      console.error(`STOP: ${process.argv[3]} is not a selftest-sweep lock (${e.message})`); process.exitCode = 2;
+    }
   }
 }

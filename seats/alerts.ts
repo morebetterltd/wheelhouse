@@ -10,6 +10,7 @@ import { observeSettledSeats, type SettledSeat } from "./seat-settled";
 import { acquirePidLock, releasePidLock } from "./lock";
 import { observeSeatStreams, seatStallNeedMs, type StreamHealth } from "./seat-stream-health";
 import { nightlyConditions } from "./nightly-state";
+import { observeTestLane } from "./selftest-sweep-lock";
 
 const ROOT = path.resolve(process.env.WHEELHOUSE_ALERTS_ROOT || path.join(import.meta.dir, ".."));
 const SEATS = path.join(ROOT, "seats");
@@ -21,7 +22,7 @@ const ALERT_LOG = path.join(LOGS, "alerts.log");
 const DEFAULT_INTERVAL_MS = 60_000;
 export const TEMPLATE_DRIFT_ALERT_HOLD_MS = Number(process.env.WHEELHOUSE_TEMPLATE_DRIFT_ALERT_HOLD_MS ?? 10 * 60_000);
 
-type AlertName = "idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"docker-cache-pressure"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed"|"nightly-sweep-red"|"nightly-sweep-missed"|`seat-stalled:${string}`|`seat-unverified:${string}`;
+type AlertName = "test-lane-held"|"idle-fleet-ready-work"|"cold-seats-ready-work"|"inbox-lag"|"untriaged-github-issues"|"capacity-events"|"low-disk"|"docker-cache-pressure"|"commander-pane-invalid"|"template-drift"|"template-drift-check-failed"|"nightly-sweep-red"|"nightly-sweep-missed"|`seat-stalled:${string}`|`seat-unverified:${string}`;
 type AlertState = { active:boolean; since:string|null; lastFiredAt:string|null; needId?:string|null; signature?:string; detail?:string };
 type SnapshotFile = { at:string; intervalMs:number; snapshot:Snapshot; herald:any; inbox:any; needs:any; capacity:any; disk:any; docker:any; github:any; drift:any; quarantined:{count:number;names:string[]}; seatStreams:Record<string,StreamHealth>; nightly:ReturnType<typeof nightlyConditions>; alerts:Record<string,AlertState>; settledSeats:Record<string,SettledSeat> };
 
@@ -161,6 +162,87 @@ function driftInfo(){
   if(r.status===1&&!hasDrift) return failed("template-drift.sh exited 1 without reporting drift",result);
   return {...data,...result,status:hasDrift?"drift":"clean",reason:null};
 }
+// Only the default host lane is watched in production. Generic selftests must
+// not observe the real host queue; opt-in fixtures relocate the endpoint under
+// their own alerts root, never by changing the host admission lock domain.
+function testLaneInfo(){
+  const configured=minutesValue("alert-test-lane-held-minutes",60);
+  const thresholdMs=(configured>=0?configured:60)*60_000;
+  let lock="/tmp/wheelhouse-selftest-sweep.lock";
+  if(process.env.WHEELHOUSE_SELFTEST_FIXTURE_NONCE!==undefined){
+    const fixture=process.env.WHEELHOUSE_ALERTS_FIXTURE_TEST_LOCK;
+    if(!fixture) return {status:"disabled",on:false,sig:"",detail:"",thresholdMs};
+    try {
+      const root=fs.realpathSync(ROOT), parent=fs.realpathSync(path.dirname(fixture));
+      if(!path.isAbsolute(fixture)||path.join(parent,path.basename(fixture))!==fixture||!parent.startsWith(root+path.sep)) throw Error("fixture lane must be physically inside alerts root");
+      lock=fixture;
+    } catch(e:any){ return {status:"unavailable",on:false,sig:"",detail:e.message,thresholdMs}; }
+  }
+  const observed=observeTestLane(lock);
+  if(observed.status!=="held") return {...observed,on:false,sig:"",detail:"",thresholdMs};
+  const heldMs=Date.now()-Date.parse(observed.started);
+  const on=heldMs>thresholdMs&&observed.waiting>0;
+  const sig=JSON.stringify([observed.pid,observed.token,observed.started]);
+  if(!on) return {...observed,on,sig,detail:"",thresholdMs,heldMs};
+  // One bounded native table supplies the command and ancestry. An unreadable
+  // table is unknown, never evidence of release or a made-up holder command.
+  // An opt-in fixture still reads the real native table. Invalid overrides
+  // fail closed, with the same physical containment checks as fixtureDocker.
+  const fixturePs=process.env.WHEELHOUSE_SELFTEST_FIXTURE_NONCE!==undefined?process.env.WHEELHOUSE_ALERTS_FIXTURE_PS:undefined;
+  const psBin=fixturePs===undefined?"ps":fixtureDocker(fixturePs);
+  const ps=psBin?spawnSync(psBin,["-axo","pid=,ppid=,lstart=,command="],{encoding:"utf8",policyTimeoutMs:2000}):{status:null,error:{message:"fixture ps executable unavailable"},stdout:"",stderr:""};
+  const rows=new Map<number,{parent:number;started:number;command:string}>();
+  const tableSkipped={count:0,sample:""};
+  let holderAmbiguous=false;
+  const skip=(line:string)=>{ tableSkipped.count++; if(tableSkipped.count===1) tableSkipped.sample=line.slice(0,160); };
+  for(const line of String(ps.stdout??"").slice(0,4*1024*1024).trimEnd().split("\n").filter(Boolean)){
+    const m=/^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+[\d:]+\s+\d{4})\s+(.*)$/.exec(line);
+    if(!m||!Number.isFinite(Date.parse(m[3]))){ skip(line); continue; }
+    const pid=Number(m[1]), row={parent:Number(m[2]),started:Date.parse(m[3]),command:m[4]}, prior=rows.get(pid);
+    if(prior){
+      // Never replace the holder's good row with a duplicate. Conflicting
+      // parsed holder identities are unknown, not an arbitrary first/last win.
+      if(pid===observed.pid&&(prior.parent!==row.parent||prior.started!==row.started||prior.command!==row.command)) holderAmbiguous=true;
+      skip(line); continue;
+    }
+    rows.set(pid,row);
+  }
+  const table={tableRows:rows.size,tableSkipped};
+  const unavailable=(reason:string,pid=observed.pid)=>({status:"unavailable",on:false,sig,thresholdMs,...table,
+    detail:`${reason}: pid=${pid}; rows=${table.tableRows}; skipped=${tableSkipped.count}; first skipped=${tableSkipped.sample}`});
+  if(ps.error||ps.signal||ps.status!==0||ps.stderr||String(ps.stdout??"").length>4*1024*1024) return unavailable("holder process table unavailable");
+  if(holderAmbiguous) return unavailable("holder process row ambiguous");
+  const holder=rows.get(observed.pid);
+  if(!holder) return unavailable("holder process row absent");
+  if(!rows.has(process.pid)) return unavailable("alert process row absent",process.pid);
+  const state=readJson(path.join(SEATS,"state.json"))?.seats??{};
+  let seat="unknown", cursor=observed.pid;
+  const seen=new Set<number>();
+  while(cursor>1&&!seen.has(cursor)){
+    seen.add(cursor);
+    for(const [name,record] of Object.entries<any>(state)){
+      if(record.pid===cursor&&Math.abs((rows.get(cursor)?.started??NaN)-Date.parse(record.startedAt))<=2000){seat=name;break;}
+    }
+    if(seat!=="unknown") break;
+    cursor=rows.get(cursor)?.parent??0;
+  }
+  if(seat==="unknown"){
+    const lsof=spawnSync(Bun.which("lsof")||"/usr/sbin/lsof",["-a","-p",String(observed.pid),"-d","cwd","-Fn"],{encoding:"utf8",policyTimeoutMs:2000});
+    if(!lsof.error&&!lsof.signal&&lsof.status===0){
+      const cwd=lsof.stdout.split("\n").find((s:string)=>s.startsWith("n"))?.slice(1);
+      const names=new Set([...Object.keys(state),...Object.keys(readJson(path.join(SEATS,"seats.json"))?.seats??{})]);
+      for(const name of names){
+        const candidates=[state[name]?.cwd,path.join(ROOT,".wheelhouse-worktrees",name)].filter(Boolean);
+        for(const candidate of candidates) try {
+          const worktree=fs.realpathSync(candidate);
+          if(cwd&&(cwd===worktree||cwd.startsWith(worktree+path.sep))) seat=name;
+        } catch {}
+      }
+    }
+  }
+  return {...observed,on,sig,thresholdMs,heldMs,seat,command:holder.command,...table,
+    detail:`pid=${observed.pid}; command=${holder.command}; admitted=${observed.started}; heldMs=${heldMs}; waiting=${observed.waiting}; seat=${seat}`};
+}
 function alertRow(active:boolean, prior:AlertState|undefined, signature=""):AlertState{ const n=now(); if(active){ if(prior?.active&&prior.signature===signature) return {...prior, active:true}; return {active:true,since:n,lastFiredAt:n,needId:prior?.needId??null,signature}; } return {active:false,since:null,lastFiredAt:prior?.lastFiredAt??null,needId:prior?.needId??null,signature}; }
 // The set is the sorted, de-duplicated union of modified, localOnly and
 // missing paths. Reordering, duplicates, category moves and aheadBy changes
@@ -195,6 +277,7 @@ function needClose(id:string){ spawnSync("bun",["seats/needs.ts","close",id,"--r
 function title(name:string){ return `alert — ${name.replace(/-/g," ")}`; }
 function bodyFor(name:AlertName, detail:string){ return `Alert ${name}: ${detail}. ${remedyFor(name)}`; }
 function remedyFor(name:AlertName){
+  if(name==="test-lane-held") return "Cost: queued tests cannot start. Next: inspect the holder and decide deliberately whether intervention is needed. This alert never signals, stops, releases or renews the holder.";
   // Report nightly coverage; never auto-stop or change the installed fleet.
   if(name==="nightly-sweep-red") return "Cost: reviews require the full tier until a later nightly is green. Next: inspect the named sweep log and failed suites, repair them, and rerun the nightly; no core-only receipt may merge while the brake is on.";
   if(name==="nightly-sweep-missed") return "Cost: nightly full coverage is unknown; an earlier red brake remains in force. Next: inspect the reason, pause marker and host sweep holder, and schedule a retry when available; do not bypass or signal another sweep.";
@@ -235,11 +318,13 @@ export async function buildSnapshot(root=ROOT):Promise<SnapshotFile>{
   };
   const settledSeats=observeSettledSeats(root,snap.workers.live,prior?.settledSeats,Date.now(),unknown); const inbox=inboxStats(root); const needs=needCounts(root); const herald=heraldInfo(); const capacity={seats:capacitySeats()}; const disk=diskInfo(); const docker=await dockerCacheInfo(); const github=githubInfo(); const drift=driftInfo();
   const nightly=nightlyConditions(root);
+  const testLane=testLaneInfo();
   const seatStreams=observeSeatStreams(root,prior?.seatStreams??{},Date.now(),unknown);
   for(const seat of Object.keys(unverified)){delete seatStreams[seat];delete settledSeats[seat];}
   snap.workers.busy=snap.workers.live.filter(w=>w.busy).length;snap.workers.idle=snap.workers.live.length-snap.workers.busy;
   snap.reviewers.busy=snap.reviewers.live.filter(w=>w.busy).length;snap.reviewers.idle=snap.reviewers.live.length-snap.reviewers.busy;
   const active:Record<AlertName,{on:boolean; sig:string; detail:string}>={
+    "test-lane-held":testLane,
     "idle-fleet-ready-work":{on:readyWorkNobodyOnIt(snap),sig:"",detail:`ready=${snap.readyCount}; busy workers=${snap.workers.busy}; ready beads=${snap.ready.map(r=>r.id).join(", ")}`},
     "cold-seats-ready-work":{on:!hasUnverifiedWorkers(snap)&&snap.readyCount>0&&snap.workers.live.length===0,sig:"",detail:`ready=${snap.readyCount}; live workers=${snap.workers.live.length}; ready beads=${snap.ready.map(r=>r.id).join(", ")}`},
     "inbox-lag":{on:inbox.undrainedRows>0&&inbox.lagMs>=minutesValue("alert-inbox-lag-minutes",10)*60_000,sig:"",detail:`undrained rows=${inbox.undrainedRows}; oldest=${inbox.oldestUndrainedAt}; lagMs=${inbox.lagMs}`},
@@ -266,12 +351,13 @@ export async function buildSnapshot(root=ROOT):Promise<SnapshotFile>{
     // Unknown observations cannot clear a last-known condition or reset its
     // pending hold. A confirmed clean drift result still follows the clear path.
     if((name==="untriaged-github-issues"&&github.untriaged===null&&!github.disabled)||(name==="low-disk"&&disk.freeBytes===null)||(name==="template-drift"&&drift.status==="check-failed")||(name==="docker-cache-pressure"&&docker.status==="unavailable")){ alerts[name]=priorAlerts[name]??alertRow(false,undefined,""); continue; }
+    if(name==="test-lane-held"&&testLane.status==="unavailable"){alerts[name]=priorAlerts[name]??alertRow(false,undefined,"");continue;}
     const stored=priorAlerts[name], stream=name.startsWith("seat-stalled:")?seatStreams[name.slice("seat-stalled:".length)]:undefined;
     let was=name==="template-drift"&&stored ? {...stored,signature:priorDriftSignature(stored.signature)} : stored;
     if(stream?.stalled && was?.active && was.signature!==active[name].sig){ if(was.needId) needClose(was.needId); was=undefined; }
     const next=name==="template-drift" ? heldAlertRow(active[name].on,was,active[name].sig,TEMPLATE_DRIFT_ALERT_HOLD_MS) : alertRow(active[name].on,was,active[name].sig);
     next.detail=was?.detail;
-    if(name.startsWith("nightly-sweep-") && active[name].on) next.detail=bodyFor(name,active[name].detail);
+    if((name.startsWith("nightly-sweep-")||name==="test-lane-held") && active[name].on) next.detail=bodyFor(name,active[name].detail);
     const shouldFire = next.active&&(!was?.active||was.signature!==next.signature);
     if(shouldFire){ next.detail=bodyFor(name,active[name].detail); appendLog(`alert fired ${name}: ${next.detail}`); appendInboxAlert(name,next.detail,stream); }
     if(!next.active&&was?.active){ appendLog(`alert cleared ${name}`); if(was.needId) needClose(was.needId); next.needId=null; }

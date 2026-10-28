@@ -6,7 +6,7 @@ import {resolveRoleBrief} from '../briefs.ts';
 const CHECK=(ok:any,code:string,message:string):asserts ok=>{if(!ok)throw Object.assign(new Error(message),{code});};
 function native(cmd:string,args:string[],cwd:string,env:NodeJS.ProcessEnv=process.env){const r=completedCommand(cmd,args,{cwd,env});assert(!r.error&&!r.signal,`${cmd} native failure: ${r.error?.message||r.signal}`);return r;}
 async function reviewer(){
- const dir=process.env.VERIFY_BATCH_CASE!,prompt=process.argv.at(-1)!,reply=fs.readFileSync(process.env.STUB_REPLY_FILE!,'utf8');fs.appendFileSync(path.join(dir,'spawns.jsonl'),JSON.stringify({pid:process.pid,cwd:process.cwd(),prompt,argv:process.argv.slice(2)})+'\n');
+ const dir=process.env.VERIFY_BATCH_CASE!,prompt=fs.readFileSync(0,'utf8'),reply=fs.readFileSync(process.env.STUB_REPLY_FILE!,'utf8');fs.appendFileSync(path.join(dir,'spawns.jsonl'),JSON.stringify({pid:process.pid,cwd:process.cwd(),prompt,argv:process.argv.slice(2)})+'\n');
  const rc=prompt.split('\n').find(s=>s.startsWith('- rc: ')),log=prompt.split('\n').find(s=>s.startsWith('- log: '));
  const cite=process.env.STUB_BATCH_NO_CITATION==='1'?'':`Dispatcher evidence ${rc?.replace('- rc: ','rc=')} ${log?.slice(7)}\n`;
  const text=cite+reply,capture=JSON.parse(fs.readFileSync(process.env.VERIFY_BATCH_FRAMES!,'utf8')),assistant=structuredClone(capture.assistant),end=structuredClone(capture.end);assistant.message.content=[{type:'text',text}];end.messages=[{role:'assistant',content:[{type:'text',text}]}];process.stdout.write([assistant,end].map(x=>JSON.stringify(x)).join('\n')+'\n',()=>process.exit(0));
@@ -35,7 +35,7 @@ async function test(){
   git(repo,'checkout','-qb','fleet/batch','main');git(repo,'merge','--no-ff','fleet/'+ids.a,'-m','Merge fleet/'+ids.a+' into fixture batch');const ma=git(repo,'rev-parse','HEAD');git(repo,'merge','--no-ff','fleet/'+ids.b,'-m','Merge fleet/'+ids.b+' into fixture batch');const mb=git(repo,'rev-parse','HEAD'),tip=mb;
   seeds.push({layout,seed,main,a,b,ma,mb,tip});save(layout+'-git-producer.json',{main,a,b,ma,mb,tip,merges:git(repo,'log','--first-parent','--merges','--format=%H%x00%P%x00%s',tip,'^'+main)});
  }
- const cases:any[]=[];const passingLogs=new Map<string,string>();const positive=(overall='APPROVE',b='APPROVE')=>`CANDIDATE: ${ids.a} APPROVE — machine evidence\nCANDIDATE: ${ids.b} ${b} — mixed evidence\nVERDICT: ${overall}\nPUSH: ${overall==='APPROVE'?'APPROVE fixture — verified: private fixture batch':'HOLD — batch needs changes'}\n`;
+ const cases:any[]=[];const passingLogs=new Map<string,string>();const positive=(overall='APPROVE',b='APPROVE')=>`CANDIDATE: ${ids.a} APPROVE — machine evidence\nCANDIDATE: ${ids.b} ${b} — mixed evidence\nSCOPE: ${overall==='BOUNCE'?'DEFECT':'OK'} — scripted fixture batch scope evidence\nINTEGRITY: OK — scripted fixture integrity evidence\nSAFETY: OK — scripted fixture safety evidence\nHEALTH: OK — scripted fixture health evidence\nVERDICT: ${overall}\nPUSH: ${overall==='APPROVE'?'APPROVE fixture — verified: private fixture batch':'HOLD — batch needs changes'}\n`;
  const specs:any[]=[
   {name:'approve',reply:positive(),want:0},
   {name:'bounce',reply:positive('BOUNCE','BOUNCE'),want:2},

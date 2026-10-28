@@ -114,8 +114,10 @@ for (const name of cases.filter(x => !selected || x === selected)) {
       const ledger = path.join(dir, 'ledger'), agent = path.join(dir, 'agent'), reply = path.join(dir, 'reply');
       fs.writeFileSync(ledger, ''); fs.writeFileSync(reply, 'ready\nVERDICT: APPROVE\n');
       const originalTZ = process.env.TZ; process.env.TZ = 'UTC';
-      const child = spawn('bun', [file, '--mode', 'json'], { env: { ...process.env, TZ: 'Pacific/Honolulu', PI_CODING_AGENT_DIR: agent, STUB_REPLY_FILE: reply, WHEELHOUSE_TEST_WATCHDOG_DIR: dir, WHEELHOUSE_TEST_CHILD_LEDGER: ledger, WHEELHOUSE_TEST_CHILD_IDENTITY: helperFile }, stdio: ['ignore', 'pipe', 'pipe'] });
-      let stderr = ''; child.stderr.on('data', b => stderr += b); child.stdout.resume();
+      const child = spawn('bun', [file, '--mode', 'json'], { env: { ...process.env, TZ: 'Pacific/Honolulu', PI_CODING_AGENT_DIR: agent, STUB_REPLY_FILE: reply, WHEELHOUSE_TEST_WATCHDOG_DIR: dir, WHEELHOUSE_TEST_CHILD_LEDGER: ledger, WHEELHOUSE_TEST_CHILD_IDENTITY: helperFile }, stdio: ['pipe', 'pipe', 'pipe'] });
+      let stderr = '', stdinError: Error | undefined; child.stderr.on('data', b => stderr += b); child.stdout.resume();
+      child.stdin.on('error', error => { stdinError = error; });
+      child.stdin.end('Child identity fixture prompt delivered on stdin.\n');
       const closed = expectSuccessfulClose(child, () => stderr);
       try {
         await until(() => fs.existsSync(path.join(dir, 'ready')), 'Bun model payload readiness', () => child.exitCode !== null || child.signalCode !== null);
@@ -125,7 +127,7 @@ for (const name of cases.filter(x => !selected || x === selected)) {
         console.log(JSON.stringify({ name, row, beforePayloadRelease: true }));
       } finally {
         fs.writeFileSync(path.join(dir, 'release'), 'release\n');
-        try { await closed; }
+        try { await closed; assert.ifError(stdinError); }
         finally { if (originalTZ === undefined) delete process.env.TZ; else process.env.TZ = originalTZ; }
       }
     } else if (name === 'preload') {
