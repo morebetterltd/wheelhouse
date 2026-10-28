@@ -626,7 +626,13 @@ function main(): number {
             try { ours = id(fd) === owned; } finally { fs.closeSync(fd); }
             if (ours) {
               const snapshot = inspect(parent, name);
-              if (snapshot.marker.token !== token || snapshot.marker.pid !== pid) throw new Refused("owned lock marker changed");
+              const mismatches: string[] = [];
+              if (snapshot.marker.pid !== pid) mismatches.push("pid");
+              if (snapshot.marker.token !== token) mismatches.push("token");
+              if (mismatches.length) throw Object.assign(new Refused(`owned lock marker changed (${mismatches.join(", ")})`), {
+                ownership: { mismatches, caller: { pid, token, identity: owned, payloadAlive: alive(pid) },
+                  lock: { pid: snapshot.marker.pid, token: snapshot.marker.token, identity: snapshot.identity } },
+              });
               removeValidated(parent, name, snapshot);
             }
           }
@@ -823,6 +829,17 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
   const transition = (op: string) => spawnSync("bun", [import.meta.path, op, lock, String(child!.pid), token, owned], {
     encoding: "utf8", detached: true, env: { ...process.env, [HELD_IDENTITY]: held, WHEELHOUSE_SELFTEST_SWEEP_CAPTURE_IDENTITY: op === "acquire" ? "1" : "0" },
   });
+  const transitionCheck = (result: ReturnType<typeof transition>, operation: string) => {
+    let check = result.error?.code ?? (result.signal ? `signal ${result.signal}` : `${operation} exit ${result.status}`);
+    for (const line of result.stderr.split("\n")) {
+      if (!line.startsWith("SELFTEST_LOCK_REFUSAL ")) continue;
+      try {
+        const refusal = JSON.parse(line.slice("SELFTEST_LOCK_REFUSAL ".length));
+        if (refusal.operation === operation) check = refusal.ownership?.mismatches?.join(", ") || refusal.reason || check;
+      } catch {} // Native failure text is retained alongside the named STOP.
+    }
+    return check;
+  };
   try {
     if (!child.pid || !gate) throw new Refused("cannot start gated suite process");
     let previous = "";
@@ -864,16 +881,8 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
         }
         if (result.stderr) process.stderr.write(result.stderr);
         if (result.error || result.status !== 0 || result.signal) {
-          let check = result.error?.code ?? (result.signal ? `signal ${result.signal}` : `refresh exit ${result.status}`);
-          for (const line of result.stderr.split("\n")) {
-            if (!line.startsWith("SELFTEST_LOCK_REFUSAL ")) continue;
-            try {
-              const refusal = JSON.parse(line.slice("SELFTEST_LOCK_REFUSAL ".length));
-              if (refusal.operation === "refresh") check = refusal.ownership?.mismatches?.join(", ") || refusal.reason || check;
-            } catch {} // Native failure text remains visible above.
-          }
           renewalFailed = true; clearInterval(renewal);
-          console.error(`STOP: suite lock renewal failed (${check})`);
+          console.error(`STOP: suite lock renewal failed (${transitionCheck(result, "refresh")})`);
         }
       }, 60_000);
       gate.end(`admitted\n${held}\n`);
@@ -898,8 +907,9 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
       const result = transition("release");
       if (result.stderr) process.stderr.write(result.stderr);
       if (result.error || result.status !== 0) {
-        diagnoseLock(new Refused(`suite lock release failed: ${result.error ?? `exit ${result.status} signal ${result.signal}`}`), lock);
-        console.error("STOP: suite lock release failed"); code = 2; interrupted = null;
+        const check = transitionCheck(result, "release");
+        diagnoseLock(new Refused(`suite lock release failed (${check}): ${result.error ?? `exit ${result.status} signal ${result.signal}`}`), lock);
+        console.error(`STOP: suite lock release failed (${check})`); code = 2; interrupted = null;
       }
     }
     for (const [signal, handler] of handlers) process.off(signal, handler);
