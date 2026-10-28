@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
+import { identity, residual } from "./verify-cancellation-residual.ts";
 
 const root = path.resolve(process.argv[2]), fixture = path.resolve(process.argv[3]), runtime = path.resolve(process.argv[4]);
 assert(!fs.existsSync(root), "retention canary target must be fresh");
@@ -21,6 +22,7 @@ const child = Bun.spawn(["bun", fixture, work], {
   stdin: "ignore", stdout: "pipe", stderr: "pipe",
 });
 const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+let beforeRemoval: ReturnType<typeof identity>;
 const record: any = { command: ["bun", fixture, work], code, stdout, stderr, subject: null, retainedDiagnostics: null, scratchGone: false, failure: null };
 try {
   assert.equal(code, 1, "inner fixture must actually reject the planted early exit");
@@ -37,8 +39,13 @@ try {
   record.retainedDiagnostics = result.retainedDiagnostics ?? null;
 } catch (error) { record.failure = String(error); }
 finally {
+  beforeRemoval = identity(work);
   fs.rmSync(work, { recursive: true, force: true });
   record.scratchGone = !fs.existsSync(work);
+}
+if (!record.scratchGone) {
+  try { record.residual = await residual(work, beforeRemoval!, proof); }
+  catch (error) { record.residual = { before: beforeRemoval!, after: identity(work), captureError: String(error) }; }
 }
 if (!record.failure) {
   try {
@@ -56,6 +63,8 @@ if (!record.failure) {
     record.retainedStatus = status;
   } catch (error) { record.failure = String(error); }
 }
+// The review copy (and its verdicts directory) may be removed after the sweep.
+if (!record.scratchGone) console.log("RETENTION_RESIDUAL " + JSON.stringify(record));
 fs.writeFileSync(path.join(proof, "result.json"), JSON.stringify(record, null, 2) + "\n", { mode: 0o600 });
 if (record.failure) console.error("FAIL verify-cancellation retention: " + record.failure);
 else console.log("verify-cancellation retention: PASS planted native37/stdout/stderr survive scratch deletion; FAIL line names " + JSON.stringify(record.retainedDiagnostics));

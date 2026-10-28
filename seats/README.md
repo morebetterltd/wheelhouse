@@ -733,8 +733,41 @@ overrides the destination, otherwise the explicit evidence root or
 `seats/verdicts/verify-cancellation-failures` beside the test is used. Keep that
 root outside temporary trees; storage refusal is reported, never called saved.
 A planted native37 leg deletes its scratch and verifies both streams/exit status
-and the printed FAIL path survive. This preserves the next diagnosis; it does
-not claim a cause or cure for historical early exits whose streams were lost.
+and the printed FAIL path survive. Its canary record is
+`seats/verdicts/verify-cancellation-failures/retention-proof-*/result.json`
+(or beneath the explicit failure root). If its immediate, once-only
+`scratchGone` check is false, a failure-only `residual` section records the
+before/after device and inode (`sameInode` compares both; null means unavailable),
+every leftover path's type, size and mtime (without following symlinks), and
+native `lsof`/`ps` captures.
+The census correlates lsof open-file/cwd holders with ps PID, PPID, PGID and
+command; it is a snapshot, not proof of who caused the recreation. Both streams,
+exit/signal/spawn errors and each command's five-second timeout are retained;
+`censusComplete: false` or enumeration errors mean incomplete evidence, not no
+writers. Native lsof can return nonzero with useful matches, which are retained.
+Every failing `scratchGone: false` canary also emits its whole record as one
+`RETENTION_RESIDUAL {json}` line in suite output. For a review sweep, read that
+line in `seats/verdicts/sweeps/*.selftest-sweep.log`: the review copy and its
+local verdicts directory are removed, so the file path alone is not durable.
+Parse the JSON after the prefix rather than searching a terminal rendering.
+The residual driver's ordinary case forwards the canary's native failure and
+record once, without turning it into a second assertion, and still fails the
+suite. Planted proof legs emit records too; use the unexpected canary's command
+path to identify the real failure, not a planted proof, when posting a finding.
+Passing canaries have no residual section and launch no census. A test-only
+preload delegates real deletion then lets a fixture-owned writer recreate and
+hold the path before returning; it proves this capture, not the historical cause.
+If a real run fails with `scratchGone: false`, keep the record and post its
+scrubbed contents as an intake finding with `bun seats/intake.ts post --kind
+finding --source verify-cancellation --title 'Retention scratch remained'
+--ref path/to/result.json --from-stdin` (pipe it through
+`seats/evidence-scrub.sh` first). When the review copy is gone, use the retained
+sweep log as `--ref` instead of the deleted result path. Intake text has a 64 KiB limit: for a larger
+record, post a summary with its reference and carry the complete scrubbed record
+into the produced task's comments. Do not retry away the failure or guess a cure;
+the captured finding becomes separate causal investigation work. This preserves
+the next diagnosis; it does not claim a cause or cure for historical early exits
+whose streams were lost.
 The runtime-source copy regression is test-only, not an install-path timeout.
 It preserves full inventory/byte/sentinel assertions and accepts native completion
 through regular stdout/stderr descriptors. A delayed FIFO input crosses the
