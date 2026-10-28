@@ -258,6 +258,7 @@ if(control==='fixed'&&kind==='desk'){
   }
 }
 if(control==='fixed'&&kind==='desk'){
+  assert(!process.env.WHEELHOUSE_DIGEST_SHUTDOWN_MARKER_HOLD,'ordinary shutdown cases have no publication hold');
   const cleanup='installDigestExitCleanup();',src=fs.readFileSync(file,'utf8'),broken=path.join(root,'seats/desk-no-exit-cleanup.ts');
   assert.equal(src.split(cleanup).length,2);fs.writeFileSync(broken,src.replace(cleanup,'/* fix removed: detached job trees outlive the parent */'));
   for(const mode of ['exit','signal','SIGINT','SIGHUP'])for(const [candidate,expected] of [[file,0],[broken,1]] as const){
@@ -266,6 +267,51 @@ if(control==='fixed'&&kind==='desk'){
     assert(fs.statSync(record).isFile());assert.equal(measured.mode,mode);assert.equal(measured.success,expected===0);
     console.log('DIGEST_SHUTDOWN '+JSON.stringify({candidate:path.basename(candidate),nativeCode:r.status,...measured}));
   }
+  // Exercise the real readers under a physically held partial write. The only
+  // counterfactual is the publication target/rename, never a reader or bound.
+  const shipped=path.join(seats,'fixtures/desk-digest-shutdown.ts'),original=fs.readFileSync(shipped,'utf8'),plain=path.join(root,'shutdown-plain-publish.ts');
+  fs.copyFileSync(shipped,plain);
+  const cmp=(expected:number)=>{const r=completedCommand('cmp',['-s',shipped,plain]);assert.ifError(r.error);assert.equal(r.signal,null);assert.equal(r.status,expected,r.stderr);return r.status;};
+  const before=cmp(0),publish="await writeMarker(marker+'.new');fs.renameSync(marker+'.new',marker);";
+  assert.equal(original.split(publish).length,2,'unique atomic marker publication removal');
+  fs.writeFileSync(plain,original.replace(publish,'await writeMarker(marker);'));const after=cmp(1);
+  console.log('DIGEST_SHUTDOWN_MARKER_COPY '+JSON.stringify({cmpBefore:before,cmpAfter:after,replacements:1}));
+  for(const [probe,fixed] of [[shipped,true],[plain,false]] as const){
+    const record=path.join(root,'shutdown-held-'+(fixed?'atomic':'plain')+'.json'),hold=record+'.hold',marker=path.join(record+'.fixture','tree.json'),target=marker+(fixed?'.new':'');
+    fs.writeFileSync(hold,'hold partial publication\n');
+    const child=Bun.spawn([process.execPath,probe,file,'exit',record],{env:{...process.env,WHEELHOUSE_DIGEST_SHUTDOWN_MARKER_HOLD:hold},stdin:'ignore',stdout:'pipe',stderr:'pipe'});
+    let stderr='',closed=false,expired=false;
+    const output=new Response(child.stdout).text(),errors=(async()=>{const reader=child.stderr.getReader();for(;;){const {done,value}=await reader.read();if(done)break;stderr+=Buffer.from(value).toString('utf8');}})();
+    const done=child.exited.then(code=>{closed=true;return code;});
+    const release=()=>{if(fs.existsSync(hold))fs.unlinkSync(hold);};
+    // Control containment only: the probe's two existing 60000ms bounds stay.
+    const timer=setTimeout(()=>{expired=true;release();},120000);
+    const waitFor=async(test:()=>boolean)=>{while(!test()){assert(!expired,'held-publication control exceeded outer120s containment');assert(!closed,'held-publication setup exited before observation: '+stderr);await Bun.sleep(1);}};
+    try{
+      await waitFor(()=>fs.existsSync(target)&&fs.readFileSync(target).length>0);
+      const partial=fs.readFileSync(target,'utf8');assert(fs.existsSync(hold));assert.match(partial,/^\{"child":[1-9][0-9]*$/);assert.throws(()=>JSON.parse(partial),SyntaxError);
+      console.log('DIGEST_SHUTDOWN_MARKER_HOLD '+JSON.stringify({publication:fixed?'temporary':'plain',partial,holdObserved:true,finalExists:fs.existsSync(marker)}));
+      if(fixed){assert(!fs.existsSync(marker),'partial temp file must be invisible to marker reader');}
+      else{
+        // Wait for the unchanged catch's completed setup record, not buffered
+        // console output. The optional stderr keeper gates the unchanged finally
+        // reader until publication is complete; readiness never retries a parse.
+        await waitFor(()=>fs.existsSync(record)&&fs.readFileSync(record,'utf8').endsWith('\n'));
+        const failed=JSON.parse(fs.readFileSync(record,'utf8'));assert.equal(failed.setup,'marker');assert.equal(failed.success,false);
+        assert.equal(fs.readFileSync(marker,'utf8'),partial);assert(fs.existsSync(hold));
+      }
+      release();const code=await done;await Promise.all([output,errors]);assert(!expired);assert.equal(child.signalCode,null);assert.equal(code,fixed?0:2,stderr);
+      fs.writeFileSync(record+'.stderr',stderr);const measured=JSON.parse(fs.readFileSync(record,'utf8'));
+      assert.equal(measured.mode,'exit');assert.equal(measured.success,fixed);
+      if(fixed){assert(!stderr.includes('fixture setup incomplete'),stderr);console.log('PASS DIGEST_SHUTDOWN marker publish: held partial write invisible to the reader');}
+      else{
+        assert.equal(measured.setup,'marker');assert(stderr.includes('fixture setup incomplete: marker wait;')&&stderr.includes('JSON Parse error'),stderr);
+        console.error('DIGEST_SHUTDOWN_SETUP '+JSON.stringify({...measured,stderr}));
+        console.log('PASS DIGEST_SHUTDOWN marker control: plain write rejected under held partial marker, native_rc=2');
+      }
+    }finally{release();await done;await Promise.all([output,errors]);clearTimeout(timer);}
+  }
+  assert.equal(fs.readFileSync(shipped,'utf8'),original,'shipped shutdown fixture never mutated');
 }
 if(control==='fixed'){
   const controls=kind==='herald'?['no-log-prune','no-pane-trim','no-seen-reuse','no-seen-cap','retained-payload']:['per-refresh-workers','no-refresh-cap','no-exit-guard-release','retained-payload'];
