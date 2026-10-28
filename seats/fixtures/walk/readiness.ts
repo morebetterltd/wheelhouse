@@ -18,6 +18,25 @@ export function instrument(source: string): string {
   return source.slice(0,end)+`import {fixtureSpawn} from ${JSON.stringify(import.meta.path)};\n`+source.slice(end);
 }
 
+// Work walks use the asynchronous lock-aware spawn rather than fixtureSpawn.
+// Instrument only the copied observer; the same expire/armed/expired protocol
+// advances its production timeout callback after the controller sees the queue.
+export function instrumentWorkLock(source: string): string {
+  const anchor = 'timer = setTimeout(() => {';
+  assert.equal(source.split(anchor).length, 2, 'one work-walk policy timer');
+  return `import {fixtureWorkTimeout} from ${JSON.stringify(import.meta.path)};\n` + source.replace(anchor, 'timer = fixtureWorkTimeout(() => {');
+}
+export function fixtureWorkTimeout(expire: () => void, budget: number): ReturnType<typeof setTimeout> {
+  const dir = process.env.STUB_WALK_CLOCK_DIR;
+  assert(dir && fs.statSync(dir).isDirectory(), 'owned work-walk clock directory');
+  put(dir, 'armed', JSON.stringify({ kind: 'work', budget }));
+  const timer = setInterval(() => {
+    if (!has(dir, 'expire')) return;
+    clearInterval(timer); put(dir, 'expired'); expire();
+  }, 10);
+  return timer;
+}
+
 export function namedFailure(output: string, want: string): boolean {
   const lines=output.split(/\r?\n/).filter(line=>line.startsWith("VERDICT:"));
   return lines.length===1 && lines[0].startsWith("VERDICT: COULD-NOT-WALK — ") && lines[0].includes(want);
