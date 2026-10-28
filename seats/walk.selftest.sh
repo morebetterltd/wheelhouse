@@ -180,7 +180,7 @@ EOF
 
 run_test_lock_fixture(){
   local variant="${1:-normal}" proj="$FIX/proj-test-lock-${1:-normal}" ns="walk-test-lock-${1:-normal}" lock_bin="$FIX/test-lock-bin-${1:-normal}"
-  local fixture="$HERE/fixtures/walk/test-lock.ts" selected="" rc=0
+  local fixture="$HERE/fixtures/walk/test-lock.ts" selected="" rc=0 lock_evidence="${WHEELHOUSE_WALK_LOCK_EVIDENCE:-}"
   build_proj "$proj" "$ns"
   mkdir -p "$lock_bin"
   LOCK_FIXTURE_OUT="$proj/test-lock.out"
@@ -203,9 +203,10 @@ TS
       fail 'test-lock timing canary did not change its source'; return 2
     fi
     selected=initial
+    [ -z "$lock_evidence" ] || lock_evidence="$lock_evidence/canary"
   fi
   HOME="$HOME_FIX" PATH="$lock_bin:$RUN_PATH" WALK_LOCK_PEER_BIN="$lock_bin/pi" \
-    WALK_LOCK_VERIFIER_DELAY_MS=3000 WHEELHOUSE_WALK_LOCK_CASE="$selected" WHEELHOUSE_WALK_LOCK_FAILURE_MODE_FILE="$LOCK_FAILURE_FILE" \
+    WALK_LOCK_VERIFIER_DELAY_MS=3000 WHEELHOUSE_WALK_LOCK_CASE="$selected" WHEELHOUSE_WALK_LOCK_FAILURE_MODE_FILE="$LOCK_FAILURE_FILE" WHEELHOUSE_WALK_LOCK_EVIDENCE="$lock_evidence" \
     bun "$fixture" "$proj" "$HOME_FIX/.pi-seats-$ns/verifier" "$HERE/fixtures/contracts/valid.md" "$HERE/fixtures/walk/test-lock-peer.cjs" > "$LOCK_FIXTURE_OUT" 2>&1 || rc=$?
   cat "$LOCK_FIXTURE_OUT"
   return "$rc"
