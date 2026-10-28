@@ -14,7 +14,7 @@ function world(code=source,shell=runner){
  git(r,"checkout","-qb","candidate");fs.appendFileSync(path.join(r,"seats/fixture.selftest.sh"),"exit 7\n");const tip=commit(r);
  return{r,tip};
 }
-function cli(w:any){const bead="quarantine-"+serial,reply=path.join(dir,bead+".reply");fs.writeFileSync(reply,"VERDICT: APPROVE\nPUSH: NOT CONSIDERED\n");
+function cli(w:any){const bead="quarantine-"+serial,reply=path.join(dir,bead+".reply");fs.writeFileSync(reply,"SCOPE: OK — scripted fixture scope evidence\nINTEGRITY: OK — scripted fixture integrity evidence\nSAFETY: OK — scripted fixture safety evidence\nHEALTH: OK — scripted fixture health evidence\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED\n");
  const r=spawnSync("bun",[path.join(w.r,"seats/verify.ts"),bead,"candidate","worker-1","reviewer"],{cwd:w.r,env:{...env,STUB_REPLY_FILE:reply,STUB_SWEEP_PROMPT_CHECK:"1",STUB_SWEEP_FORCE_APPROVE:"1",WHEELHOUSE_SELFTEST_SWEEP_LOCK:path.join(dir,bead+".lock")},encoding:"utf8"});assert.ifError(r.error);assert.equal(r.signal,null);fs.writeFileSync(path.join(dir,bead+".stdout"),r.stdout);fs.writeFileSync(path.join(dir,bead+".stderr"),r.stderr);
  const file=path.join(w.r,"seats/verdicts",bead+".md");return{...r,record:fs.existsSync(file)?fs.readFileSync(file,"utf8"):""};}
 const w=world(),r=cli(w);assert.equal(r.status,0,r.stderr+r.stdout);const expected="fixture.selftest.sh owner=owner-123 until=2099-12-31";assert(r.record.includes(expected));assert(!r.record.includes("other-owner"));

@@ -129,7 +129,7 @@ Outcomes:
     const interim = path.join(vdir, bead + ".interim.md"); env.WHEELHOUSE_NO_VERDICT_INTERIM = interim;
     const events = fs.readFileSync(path.join(here, "fixtures/verify-real", capture), "utf8").trim().split("\n").map(x => JSON.parse(x));
     const terminal = structuredClone(events.find(x => x.type === terminalType)); assert(terminal);
-    const text = retry ? "Retry recovered.\nVERDICT: BOUNCE retry recovered\nPUSH: NOT CONSIDERED fixture" : "I started the background sweep. I'll write the verdict when it finishes.";
+    const text = require("./reviewer-reply.cjs").fourQuestions(retry ? "Retry recovered.\nVERDICT: BOUNCE retry recovered\nPUSH: NOT CONSIDERED fixture" : "I started the background sweep. I'll write the verdict when it finishes.");
     let assistant: any;
     if (harness === "pi") {
       assistant = structuredClone(events.find(x => x.type === "message_end" && x.message?.role === "assistant"));

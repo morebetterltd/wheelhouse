@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export WHEELHOUSE_REVIEWER_REPLY_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/reviewer-reply.cjs"
 export WHEELHOUSE_FIXTURE_COMMAND_MODULE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/fixtures/fixture-command.cjs"
 
 SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
@@ -179,7 +180,7 @@ if (process.env.STUB_RUN_BENCH === "1") {
   const res = cp.spawnSync(bench, ["artifact-fixture", outDir], { encoding: "utf8" });
   const rc = res.error && res.error.code === "ENOENT" ? 127 : (res.status ?? 1);
   fs.writeFileSync(path.join(agentDir, "bench-run.json"), JSON.stringify({ bench, rc, stdout: res.stdout ?? "", stderr: res.stderr ?? "", error: res.error?.message ?? null }, null, 2));
-  const text = `bench rc=${rc}\nVERDICT: ${rc === 127 ? "BOUNCE" : "APPROVE"}\nPUSH: NOT CONSIDERED\n`;
+  const text = require(process.env.WHEELHOUSE_REVIEWER_REPLY_MODULE).fourQuestions(`bench rc=${rc}\nVERDICT: ${rc === 127 ? "BOUNCE" : "APPROVE"}\nPUSH: NOT CONSIDERED\n`);
   const wantsJson = process.argv.includes("--mode") && process.argv[process.argv.indexOf("--mode") + 1] === "json";
   process.stdout.write(wantsJson ? JSON.stringify({type:"message_end",message:{role:"assistant",content:text}})+"\n" : text);
   process.exit(0);
@@ -197,7 +198,7 @@ if (process.env.STUB_SOURCE_CHECK === "1") {
   undeclaredAbsent = !prompt.includes("unlisted-sibling") && !fs.existsSync(path.join(path.dirname(mounted), "unlisted-sibling"));
   fs.writeFileSync(path.join(agentDir, "source-check.txt"), JSON.stringify({ mounted, readable, writeFailed, undeclaredAbsent, promptHasSourceSection: prompt.includes("Read-only source snapshots") }, null, 2));
   if (!readable || !writeFailed || !undeclaredAbsent) {
-    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`source check failed\nVERDICT: BOUNCE\nPUSH: NOT CONSIDERED\n`}})+"\n");
+    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:require(process.env.WHEELHOUSE_REVIEWER_REPLY_MODULE).fourQuestions(`source check failed\nVERDICT: BOUNCE\nPUSH: NOT CONSIDERED\n`)}})+"\n");
     process.exit(0);
   }
 }
@@ -253,13 +254,13 @@ if (process.env.STUB_SWEEP_PROMPT_CHECK === "1") {
   const readonly = cp.spawnSync("bd", ["create", "reviewer must not write"], { encoding: "utf8" });
   if (!log) {
     const attempted = require("node:child_process").spawnSync("bash", ["seats/selftest-sweep.sh"], { timeout: 150, encoding: "utf8" });
-    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`full sweep unproven: reviewer command limit ${attempted.error?.code || attempted.status}\nVERDICT: ${process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : "BOUNCE"}\nPUSH: NOT CONSIDERED\n`}})+"\n");
+    process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:require(process.env.WHEELHOUSE_REVIEWER_REPLY_MODULE).fourQuestions(`full sweep unproven: reviewer command limit ${attempted.error?.code || attempted.status}\nVERDICT: ${process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : "BOUNCE"}\nPUSH: NOT CONSIDERED\n`)}})+"\n");
     process.exit(0);
   }
   const verdict = ok && readonly.status !== 0 ? "APPROVE" : "BOUNCE";
   if (process.env.STUB_SWEEP_DELETE_LOG === "1" && log) fs.unlinkSync(log);
   const citation = process.env.STUB_SWEEP_OMIT_CITATION === "1" ? "sweep omitted" : `sweep evidence rc=${rc} log=${log}`;
-  process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:`${citation}\nVERDICT: ${process.env.STUB_SWEEP_VERDICT || (process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : verdict)}\nPUSH: NOT CONSIDERED\n`}})+"\n");
+  process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:require(process.env.WHEELHOUSE_REVIEWER_REPLY_MODULE).fourQuestions(`${citation}\nVERDICT: ${process.env.STUB_SWEEP_VERDICT || (process.env.STUB_SWEEP_FORCE_APPROVE === "1" ? "APPROVE" : verdict)}\nPUSH: NOT CONSIDERED\n`)}})+"\n");
   process.exit(0);
 }
 if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
@@ -287,7 +288,7 @@ if (process.env.STUB_BD_READONLY_SCOPE_CHECK === "1") {
   fs.writeFileSync(path.join(agentDir, "bd-readonly-scope-check.json"), JSON.stringify(cases, null, 2));
 }
 const reply = process.env.STUB_REPLY_FILE;
-let text = reply ? fs.readFileSync(reply, "utf8") : "";
+let text = require(process.env.WHEELHOUSE_REVIEWER_REPLY_MODULE).fourQuestions(reply ? fs.readFileSync(reply, "utf8") : "");
 if (process.env.STUB_MUTATE_BATCH_LOG) {
   const file = process.env.STUB_MUTATE_BATCH_LOG;
   const before = fs.readFileSync(file, "utf8");
@@ -312,7 +313,7 @@ if (process.env.STUB_MOVE_BRANCH_REPO && process.env.STUB_MOVE_BRANCH) {
 }
 const streamRequested = process.argv.includes("--mode") && process.argv[process.argv.indexOf("--mode") + 1] === "json";
 if (process.env.STUB_STREAM_FILE) {
-  process.stdout.write(fs.readFileSync(process.env.STUB_STREAM_FILE, "utf8"));
+  process.stdout.write(require(process.env.WHEELHOUSE_REVIEWER_REPLY_MODULE).fourQuestionStream(fs.readFileSync(process.env.STUB_STREAM_FILE, "utf8")));
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
 if (process.env.STUB_SILENT === "1") {
@@ -409,9 +410,9 @@ fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
-const text = reply ? fs.readFileSync(reply, "utf8") : "";
+const text = require(process.env.WHEELHOUSE_REVIEWER_REPLY_MODULE).fourQuestions(reply ? fs.readFileSync(reply, "utf8") : "");
 if (process.env.STUB_STREAM_FILE) {
-  process.stdout.write(fs.readFileSync(process.env.STUB_STREAM_FILE, "utf8"));
+  process.stdout.write(require(process.env.WHEELHOUSE_REVIEWER_REPLY_MODULE).fourQuestionStream(fs.readFileSync(process.env.STUB_STREAM_FILE, "utf8")));
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
 const streamRequested = process.argv.includes("--output-format") && process.argv[process.argv.indexOf("--output-format") + 1] === "stream-json";
@@ -441,9 +442,9 @@ fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, CODEX_HOME: process.env.CODEX_HOME ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
 const reply = process.env.STUB_REPLY_FILE;
-const text = reply ? fs.readFileSync(reply, "utf8") : "";
+const text = require(process.env.WHEELHOUSE_REVIEWER_REPLY_MODULE).fourQuestions(reply ? fs.readFileSync(reply, "utf8") : "");
 if (process.env.STUB_STREAM_FILE) {
-  process.stdout.write(fs.readFileSync(process.env.STUB_STREAM_FILE, "utf8"));
+  process.stdout.write(require(process.env.WHEELHOUSE_REVIEWER_REPLY_MODULE).fourQuestionStream(fs.readFileSync(process.env.STUB_STREAM_FILE, "utf8")));
   process.exit(Number(process.env.STUB_EXIT || 0));
 }
 const streamRequested = process.argv.includes("--json");
@@ -716,6 +717,10 @@ EOF
     pass "tool progress beyond total timeout reaches a verdict instead of being killed: $(<"$WATCHDOG_DIR/progress-proof")"
   else fail "tool progress beyond total timeout was killed before verdict (exit $RC): $OUT"; fi
 }
+four_question_cases() {
+  bun "$HERE/fixtures/verify-four-questions.ts" "$VERIFY" "$FIX/questions" || fail 'four-question native CLI fixtures'
+  bun "$HERE/fixtures/verify-four-questions.ts" "$VERIFY" "$FIX/questions-canary" controls || fail 'four-question parse-cut canaries'
+}
 manual_scope_cases() {
   bun "$HERE/fixtures/verify-manual-scope.ts" "$VERIFY" "$FIX/manual-scope" "${WHEELHOUSE_VERIFY_MANUAL_SCOPE_CASE:-all}" || fail 'manual scope prompt/metadata fixtures'
 }
@@ -723,11 +728,15 @@ if [ -n "${WHEELHOUSE_VERIFY_SELFTEST_CASE:-}" ]; then
   case "$WHEELHOUSE_VERIFY_SELFTEST_CASE" in
     bead-progress-past-total) progress_past_total ;;
     manual-scope) manual_scope_cases ;;
+    four-questions) four_question_cases ;;
     *) echo "unknown verify selftest case: $WHEELHOUSE_VERIFY_SELFTEST_CASE" >&2; exit 2 ;;
   esac
   [ "$FAILED" = 0 ]
   exit $?
 fi
+
+phase "four questions: exact input, native refusals, records and parse-cut canaries"
+four_question_cases
 
 phase "manual scope: pinned product diff beside the gate's contract outcomes"
 manual_scope_cases
@@ -1435,7 +1444,8 @@ const fs = require('fs');
 const argv = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const prompt = fs.readFileSync(require('path').join(require('path').dirname(process.argv[2]), 'prompt.txt'), 'utf8');
 if (argv.includes(prompt)) process.exit(1);
-if (!prompt.includes('exactly one plain-text VERDICT line and exactly one plain-text PUSH line')) process.exit(1);
+if (!prompt.includes('exactly one plain-text line for each question, then exactly one VERDICT and one PUSH line')) process.exit(1);
+for (const tag of ['SCOPE', 'INTEGRITY', 'SAFETY', 'HEALTH']) if (!prompt.includes(tag + ': OK —')) process.exit(1);
 if (!prompt.includes('never inside a Markdown code fence')) process.exit(1);
 if (!prompt.includes('Fenced VERDICT: or PUSH: lines are ignored and make the gate STOP.')) process.exit(1);
 if (!/^VERDICT: APPROVE \| BOUNCE \| DISCOVER$/m.test(prompt)) process.exit(1);
@@ -1936,7 +1946,7 @@ const final = "VERDICT: APPROVE\nwait, actually:\nVERDICT: BOUNCE\nPUSH: NOT CON
 process.stdout.write(JSON.stringify({type:"message_end",message:{role:"assistant",content:final}})+"\n");
 NODE
 run_stream "$FIX/final-conflict.jsonl" bead-5-final-conflict fleet/bead-1 worker-1
-if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPROVE" && says "line 3: VERDICT: BOUNCE"; then
+if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 5: VERDICT: APPROVE" && says "line 7: VERDICT: BOUNCE"; then
   pass "two genuinely different verdicts in the final assistant message still STOP"
 else fail "final-message conflicting verdicts did not STOP (exit $RC): $OUT"; fi
 set_reviewer_harness() {
@@ -2018,7 +2028,7 @@ wait, actually:
 VERDICT: BOUNCE
 EOF
 run_without_default_push bead-5 fleet/bead-1 worker-1
-if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 1: VERDICT: APPROVE" && says "line 3: VERDICT: BOUNCE"; then
+if [ $RC -eq 1 ] && says "2 live VERDICT: lines" && says "line 5: VERDICT: APPROVE" && says "line 7: VERDICT: BOUNCE"; then
   pass "two conflicting live VERDICT: lines exit 1 and print both final-message candidates"
 else fail "ambiguous double verdict not refused with candidates (exit $RC): $OUT"; fi
 if bun -e 'import fs from "node:fs"; import a from "node:assert/strict";
@@ -2543,7 +2553,7 @@ else
   HOME_FIX="$HOME_SAVE"
   cat > "$RPROJ/contracts/REVIEWER.md" <<'EOF'
 SMOKE TEST. This is a local-model CLI protocol fixture, not a live review.
-The controlled model emits the verdict text or its verdict-stripped control.
+The controlled model emits FOUR_OK (SCOPE, INTEGRITY, SAFETY, HEALTH with inline scripted evidence), then VERDICT and PUSH, or its verdict-stripped control.
 EOF
   # Native Pi, never the hermetic pi stub; a separate safe bd fixture keeps
   # the real dispatcher sweep/receipt gate active without a production graph.

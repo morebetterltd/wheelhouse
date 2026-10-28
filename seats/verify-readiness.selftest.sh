@@ -4,6 +4,7 @@ SELFTEST_LIB="$(cd "$(dirname "$0")" && pwd -P)/selftest-lib.sh"
 . "$SELFTEST_LIB"
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+export WHEELHOUSE_REVIEWER_REPLY_MODULE="$HERE/fixtures/reviewer-reply.cjs"
 FIX="$(selftest_make_fixture_dir "${TMPDIR:-/tmp}/wheelhouse-verify-readiness.XXXXXX")" || exit 2
 selftest_isolate_git "$FIX" || exit 2
 cleanup(){ selftest_cleanup_fixture_processes "$FIX" >/dev/null 2>&1 || true; selftest_remove_fixture_dir "$FIX"; }
@@ -23,7 +24,7 @@ assert.equal(testSource.split(start).length,2);
 const stub = testSource.split(start)[1].split(end)[0];
 assert(stub.includes('"ready"') && stub.includes('"release"'));
 const pi = path.join(root,"fixture-pi.cjs");fs.writeFileSync(pi,stub);
-const reply = path.join(root,"reply.txt");fs.writeFileSync(reply,"Ready fixture\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED\n");
+const reply = path.join(root,"reply.txt");fs.writeFileSync(reply,(await import(pathToFileURL(path.join(here,"fixtures/reviewer-reply.cjs")).href)).default.fourQuestions("Ready fixture\nVERDICT: APPROVE\nPUSH: NOT CONSIDERED\n"));
 let failures=0,checks=0;
 async function check(name:string,mutant=false){
  checks++;

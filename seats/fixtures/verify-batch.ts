@@ -35,7 +35,7 @@ async function test(){
   git(repo,'checkout','-qb','fleet/batch','main');git(repo,'merge','--no-ff','fleet/'+ids.a,'-m','Merge fleet/'+ids.a+' into fixture batch');const ma=git(repo,'rev-parse','HEAD');git(repo,'merge','--no-ff','fleet/'+ids.b,'-m','Merge fleet/'+ids.b+' into fixture batch');const mb=git(repo,'rev-parse','HEAD'),tip=mb;
   seeds.push({layout,seed,main,a,b,ma,mb,tip});save(layout+'-git-producer.json',{main,a,b,ma,mb,tip,merges:git(repo,'log','--first-parent','--merges','--format=%H%x00%P%x00%s',tip,'^'+main)});
  }
- const cases:any[]=[];const passingLogs=new Map<string,string>();const positive=(overall='APPROVE',b='APPROVE')=>`CANDIDATE: ${ids.a} APPROVE — machine evidence\nCANDIDATE: ${ids.b} ${b} — mixed evidence\nVERDICT: ${overall}\nPUSH: ${overall==='APPROVE'?'APPROVE fixture — verified: private fixture batch':'HOLD — batch needs changes'}\n`;
+ const cases:any[]=[];const passingLogs=new Map<string,string>();const positive=(overall='APPROVE',b='APPROVE')=>`CANDIDATE: ${ids.a} APPROVE — machine evidence\nCANDIDATE: ${ids.b} ${b} — mixed evidence\nSCOPE: ${overall==='BOUNCE'?'DEFECT':'OK'} — scripted fixture batch scope evidence\nINTEGRITY: OK — scripted fixture integrity evidence\nSAFETY: OK — scripted fixture safety evidence\nHEALTH: OK — scripted fixture health evidence\nVERDICT: ${overall}\nPUSH: ${overall==='APPROVE'?'APPROVE fixture — verified: private fixture batch':'HOLD — batch needs changes'}\n`;
  const specs:any[]=[
   {name:'approve',reply:positive(),want:0},
   {name:'bounce',reply:positive('BOUNCE','BOUNCE'),want:2},

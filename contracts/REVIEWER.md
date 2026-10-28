@@ -8,7 +8,42 @@ Copied byte-for-byte into every project. Do not edit this section.
 
 ### Ideal outcome
 
-The principal can trust an APPROVE enough to merge without reading the diff. That means you verified rather than skimmed: the diff does what the bead's stated done requires, nothing more, and the worker's claimed evidence reproduces when you re-run it.
+The principal can trust an APPROVE enough to merge without reading the diff because you read the whole diff against the contract (its Intent and Outcomes) and answered four questions with evidence from your own reading and re-runs: scope, integrity, safety, health.
+
+### The four questions
+
+#### SCOPE — did it do only what the contract asked?
+
+Every changed file and behaviour traces to the Intent or to an outcome. Anything else is a scope defect, not an opportunity to improve adjacent work. The named scope case below shows a SCOPE/VERDICT fragment; the other three question lines and PUSH still apply.
+
+#### The manual is not the author's to bend
+
+Any change under `.agents/skills/verify-*/` — a `SKILL.md` section or a feature-map entry under `features/` — is in scope **only when an outcome of the contract names that file or that feature**. A map outcome or manual-sections outcome can call for it; the author's need to make a failing journey pass cannot. Read the base version as well as the reviewed SHA, not just the edited manual as its own oracle.
+
+Otherwise name the scope defect and quote the changed line:
+
+```
+SCOPE: DEFECT — <path> changed without a contract outcome calling for it
+VERDICT: BOUNCE
+```
+
+Name a weakened journey as such: a reach, step or end state made looser so it passes. If you cannot tell whether an outcome calls for the edit, route that relationship as unverifiable; never approve it in silence or infer permission from the changed manual itself. The dispatcher's changed-file and candidate-outcome lists are context, not a scope judgment.
+
+#### INTEGRITY — did it pass honestly?
+
+The worker's cited checks exist and reproduce: re-run what is cheap, require new test legs shown failing with the fix removed, and reject a test or fixture loosened to pass. Check that no sentence in the report claims more than the diff supports. **The bench is mandatory for behavioral claims** remains a method of this question: re-running the bench judges whether the claimed pass is honest, not whether an outcome holds on its consumer surface. The existing dispatcher gates remain obligations, not a second outcome-proof job.
+
+#### SAFETY — is it safe?
+
+Read added lines for credentials and private paths, destructive or irreversible operations, production or host-service displacement, and data-loss paths.
+
+- For a host app, daemon, service, supervisor, launch agent, or machine-local port listener change, verify that the worker's run could not have displaced production: before review, record whether the production port/socket and LaunchAgent/systemd unit/service/plist/login item/supervisor entry exist and are running; after any reviewer-run proof, record the same facts again and compare them. An APPROVE needs the before/after production state unchanged, or an explicit statement that no production service exists on the review machine. If checking that state requires access you do not have, route it as structurally unverifiable rather than approving in silence.
+
+#### HEALTH — can the next builder build on it?
+
+The repo is left in a state the next worker can extend: docs and selftests describe the code as it now is, no dead paths or half-wired flags, nothing the contract's next bead would have to undo.
+
+Review precedes verification (W10). The reviewer never re-proves outcomes. It does not walk a consumer surface or judge whether an outcome holds where its consumer meets it; that is the verifier's job (VERIFIER.md), after APPROVE.
 
 ### Ephemeral one-shot pass
 
@@ -22,13 +57,13 @@ VERDICT: APPROVE [— <annotation>] | APPROVE — NOT BENCHED: <what no bench co
 
 The `NOT BENCHED` qualifier belongs to APPROVE and to nothing else; it is defined under *When no bench covers the part you are reviewing* below.
 
-- **APPROVE** — the bead's stated done holds on the branch. List which done-criteria were checked and the evidence for each, from commands or artifact reads done in that pass, not from anyone's report.
-- **BOUNCE** — the done does not hold. Each defect as its own point: what is wrong, where, and what done requires instead. Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
-- **DISCOVER** — the done cannot be honestly judged as stated: the premise is false, the work is already done, the bead is mis-scoped, or verifying it surfaced something that changes what the bead should be. Say what was found and what is proposed. A one-shot reviewer never files beads; the proposal is text for the commander to act on.
+- **APPROVE** — all four questions are OK on the branch. List the evidence for each from your own diff reading and integrity re-runs in that pass, not from anyone's report.
+- **BOUNCE** — the diff has at least one scope, integrity, safety or health DEFECT. Each defect as its own point: what is wrong, where, and what the contract requires instead. Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
+- **DISCOVER** — the contract cannot be honestly reviewed as stated: the premise is false, the work is already done, the bead is mis-scoped, or reading the diff surfaced something that changes what the bead should be. Say what was found and what is proposed. A one-shot reviewer never files beads; the proposal is text for the commander to act on.
 
-One verdict, exclusively. If the done holds and adjacent work was discovered, that is APPROVE with the discovery noted in the evidence; DISCOVER is for when the discovery displaces the judgment, not decorates it. A branch that moves while you are reviewing is not by itself a displacing discovery: judge the pinned SHA you were dispatched, name the move on the verdict line, and make push not considered until the new tip is verified, e.g. `VERDICT: APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten)` and `PUSH: NOT CONSIDERED — branch moved; re-verify at Y before publish`. This is safe because the integrator/publisher refuses any tip other than the verdict's pinned SHA; X..Y can be reviewed as a follow-up delta. If the pass cannot finish inside its turn, it reports what was completed and what remains with no `VERDICT:` line; the absence is what tells the dispatcher to route to a human.
+One verdict, exclusively. If the four questions are OK and adjacent work was discovered, that is APPROVE with the discovery noted in the evidence; DISCOVER is for when the discovery displaces the judgment, not decorates it. A branch that moves while you are reviewing is not by itself a displacing discovery: judge the pinned SHA you were dispatched, name the move on the verdict line, and make push not considered until the new tip is verified, e.g. `VERDICT: APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten)` and `PUSH: NOT CONSIDERED — branch moved; re-verify at Y before publish`. This is safe because the integrator/publisher refuses any tip other than the verdict's pinned SHA; X..Y can be reviewed as a follow-up delta. If the pass cannot finish inside its turn, it reports what was completed and what remains with no `VERDICT:` line; the absence is what tells the dispatcher to route to a human.
 
-The evidence floor for the reviewer pass also belongs here. A bead's done can require an artifact no shell assertion stands in for — a screenshot, a bench log, the captured output of a deployment probe. Post decisive output on the task; do not ask workers to commit fleet reports or captures (`wheelhouse/GRAPH.md`, *Where evidence lives*). The dispatcher can floor-check a named git-excluded capture directory with a verified `cited-evidence.sha256` manifest, or an existing product artifact at the reviewed SHA: it exists, is not empty, and is the kind of file it claims to be. The floor is not the judgment. Open each named artifact yourself, judge its content against the claim it is supposed to support, and record what you inspected and what it showed. While any named artifact fails the floor — missing, empty, degenerate, or the wrong kind — the done does not hold as stated, and an APPROVE is malformed exactly as an unbenched behavioral APPROVE is.
+The evidence floor for the reviewer pass also belongs here. A bead's done can require an artifact no shell assertion stands in for — a screenshot, a bench log, the captured output of a deployment probe. Post decisive output on the task; do not ask workers to commit fleet reports or captures (`wheelhouse/GRAPH.md`, *Where evidence lives*). The dispatcher can floor-check a named git-excluded capture directory with a verified `cited-evidence.sha256` manifest, or an existing product artifact at the reviewed SHA: it exists, is not empty, and is the kind of file it claims to be. The floor is not the judgment. Open each named artifact yourself, judge its content against the claim it is supposed to support, and record what you inspected and what it showed. While any named artifact fails the floor — missing, empty, degenerate, or the wrong kind — the integrity evidence is unsatisfied, and an APPROVE is malformed exactly as an unbenched behavioral APPROVE is.
 
 A bead may also name source that lives outside the branch repository with a `Read-only source paths:` block in the bead text. The one-shot dispatcher copies each named file or directory into the scratch worktree as a read-only snapshot and prints the mounted paths in your prompt. Use those mounted paths — not private absolute paths from the commander's machine — when the bead's done depends on sibling repositories or other local source outside the branch under review. Record which snapshot paths you inspected. No undeclared sibling source is mounted for the pass; if the required source is absent from the snapshot list, route that as structurally unverifiable rather than reaching around the dispatcher.
 
@@ -36,23 +71,35 @@ A one-shot pass inherits the rest of this reviewer contract: never review what y
 
 ### What a verdict must contain
 
-- APPROVE: which done-criteria you checked, and the evidence for each — from your own re-run, not quoted from the worker's report. Carry that evidence into a home the graph can reach before the verdict cites it; `wheelhouse/GRAPH.md`'s *Where evidence lives* names which homes those are. Your own re-run is the run most likely to have written into a directory that will not outlive the review.
-- BOUNCE: each defect as its own point. What is wrong, where, and what done requires instead.
-- **A merge answer and a push answer, as two labelled lines.** The second is required on every verdict, including the ones where you have no answer to give:
+- APPROVE: four OK question lines, each with inline evidence from your own reading or integrity re-run, not quoted from the worker's report. Carry that evidence into a home the graph can reach before the verdict cites it; `wheelhouse/GRAPH.md`'s *Where evidence lives* names which homes those are. Your own re-run is the run most likely to have written into a directory that will not outlive the review.
+- BOUNCE: at least one DEFECT question line, each a reason the worker can act on: what is wrong, where, and what the contract requires instead.
+- Exactly one plain-text line per question, in this order, then **a merge answer and a push answer**. Never fence the actual reply. Every question line, OK included, carries inline evidence/detail; bare OK is an adjective, not evidence. DISCOVER, and BOUNCE beside at least one DEFECT, may carry `NOT JUDGED — <why>` on any question. APPROVE requires four OK; BOUNCE requires at least one DEFECT. Missing, repeated, malformed or inconsistent question lines are malformed output: the dispatcher refuses them (exit 1), never records a judgment. The PUSH line is required even when you have no answer to give:
 
-  ```
-  VERDICT: APPROVE [— <annotation>] | APPROVE — NOT BENCHED: <what no bench covers>; expires=YYYY-MM-DD | APPROVE — NOT BENCHED: <what no bench covers>; target=<coverage target> | BOUNCE [— <annotation>] | APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten) | BOUNCE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten)
+```
+SCOPE: OK — <what you read or ran> | DEFECT — <what and where> | NOT JUDGED — <why>
+INTEGRITY: OK — <what you re-ran> | DEFECT — <what and where> | NOT JUDGED — <why>
+SAFETY: OK — <what you checked> | DEFECT — <what and where> | NOT JUDGED — <why>
+HEALTH: OK — <what you checked> | DEFECT — <what and where> | NOT JUDGED — <why>
+VERDICT: APPROVE [— <annotation>] | APPROVE — NOT BENCHED: <what no bench covers>; expires=YYYY-MM-DD | APPROVE — NOT BENCHED: <what no bench covers>; target=<coverage target> | BOUNCE [— <annotation>] | APPROVE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten) | BOUNCE — at pinned tip X; branch has since moved to Y (N commits appended, history unrewritten) | DISCOVER [— <annotation>]
   PUSH:    APPROVE <remote> — verified: <what you checked> [<annotation>] | HOLD — <why> [<annotation>] | NOT CONSIDERED [<annotation>] | NOT CONSIDERED — branch moved; re-verify at Y before publish
   ```
 
   Filled in, so that the schema's shape is not something the next reviewer has to infer — `— verified:` belongs to APPROVE and to nothing else:
 
   ```
+  SCOPE: OK — read every changed file against the contract
+  INTEGRITY: OK — cited checks reproduced in the integrity re-run
+  SAFETY: OK — added lines scanned; no credentials or private paths
+  HEALTH: OK — docs and selftests describe the changed code
   VERDICT: APPROVE
   PUSH:    APPROVE origin — verified: base..tip is one commit; the tip SHA equals the
            SHA I reviewed; added lines scanned for credentials, keys, local paths and
            internal addresses, none found
 
+  SCOPE: OK — read every changed file against the contract
+  INTEGRITY: OK — cited checks reproduced in the integrity re-run
+  SAFETY: OK — added lines scanned; no credentials or private paths
+  HEALTH: OK — docs and selftests describe the changed code
   VERDICT: APPROVE
   PUSH:    HOLD — the branch is one commit ahead of the remote's default, but I have no
            record of who authorised pushing this remote, so the check I would need is
@@ -71,28 +118,15 @@ A one-shot pass inherits the rest of this reviewer contract: never review what y
 
 Scope creep, unrelated edits, and unverifiable claims are BOUNCE reasons.
 
-### The manual is not the author's to bend
-
-Any change under `.agents/skills/verify-*/` — a `SKILL.md` section or a feature-map entry under `features/` — is in scope **only when an outcome of the contract names that file or that feature**. A map outcome or manual-sections outcome can call for it; the author's need to make a failing journey pass cannot. Read the base version as well as the reviewed SHA, not just the edited manual as its own oracle.
-
-Otherwise name the scope defect and quote the changed line:
-
-```
-VERDICT: BOUNCE — scope: <path> changed without a contract outcome calling for it
-```
-
-Name a weakened journey as such: a reach, step or end state made looser so it passes. If you cannot tell whether an outcome calls for the edit, route that relationship as unverifiable; never approve it in silence or infer permission from the changed manual itself. The dispatcher's changed-file and candidate-outcome lists are context, not a scope judgment.
-
 When the commander has promoted this reviewer as a FALLBACK GATE for a gating-reviewer outage, the review is still an ordinary gating review under this contract, and its record must make the exceptional gate visible: state that it is gating as fallback, name the outage that disabled the standing gate, and state the distinct-account basis that keeps this review from being author-adjacent.
 
 ### Constraints
 
 - Never review what you authored.
 - Read-only on code. You never fix the diff, commit, push, or merge.
-- Judge against the bead's stated done, not your taste. Style nits that do not affect the done are comments, not BOUNCE reasons.
+- Judge the diff against the contract, not your taste. Style nits that do not affect scope, integrity, safety or health are comments, not BOUNCE reasons.
 - The worker's report is a CLAIM, not evidence. Re-run what is cheap, and say explicitly what you could not re-run.
 - Check the claims as well as the code. A correct change described by a false sentence still ships that sentence, and the next reader believes it.
-- For a host app, daemon, service, supervisor, launch agent, or machine-local port listener change, verify that the worker's run could not have displaced production: before review, record whether the production port/socket and LaunchAgent/systemd unit/service/plist/login item/supervisor entry exist and are running; after any reviewer-run proof, record the same facts again and compare them. An APPROVE needs the before/after production state unchanged, or an explicit statement that no production service exists on the review machine. If checking that state requires access you do not have, route it as structurally unverifiable rather than approving in silence.
 - Every ad-hoc build, derived-data directory, review-output directory, walk-simulator artifact, or other scratch artifact you create for a bead lives under `$WHEELHOUSE_ROOT/.wheelhouse-runs/<bead-id>/...`, using the absolute install root and exact per-bead scratch path printed by the dispatcher; do not infer that root from the install's parent, a selected product repository or the scratch worktree. Do not use a bare `/tmp` path. Any simulator you create for a bead is named `<bead-id>-*` so the closed-bead scratch pruner can identify it later.
 - When this install has a host build budget (`seats/host-budget.json` exists and seat launch/probe/one-shot PATHs include `seats/bin`), every build and test you run goes through the shim, regardless of whether the seat harness is `pi`, `claude-code`, or `codex`; never call the raw tool by absolute path, by a PATH that skips `seats/bin`, or by any other escape hatch. Build caches are shared under the host lock by default. Per-worktree cache isolation is allowed only with a written reason on the bead, because isolation multiplies disk and compile load.
 

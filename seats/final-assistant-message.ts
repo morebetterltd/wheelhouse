@@ -107,18 +107,22 @@ export function dedupeCandidates(candidates: FinalLineCandidate[]): FinalLineCan
 
 export function liveLineCandidates(stdout: string, harness: HarnessName, tag: string, deduplicate = true): FinalLineCandidate[] {
   const out: FinalLineCandidate[] = [];
-  let inFence = false;
+  let fence: { marker: string; width: number } | null = null;
   const lines = finalAssistantMessageLines(stdout, harness);
   const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const re = new RegExp(`^${escaped}:`);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
-    if (trimmed.startsWith("```")) {
-      inFence = !inFence;
+    const mark = trimmed.match(/^(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (mark && mark[1][0] === fence.marker && mark[1].length >= fence.width && !mark[2].trim()) fence = null;
       continue;
     }
-    if (inFence) continue;
+    if (mark) {
+      fence = { marker: mark[1][0], width: mark[1].length };
+      continue;
+    }
     const normalized = trimmed.replace(/^(>\s*)+/, "").trim();
     if (re.test(normalized)) out.push({ line, normalized, lineNumber: i + 1 });
   }

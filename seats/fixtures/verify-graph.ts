@@ -83,7 +83,8 @@ GRAPH_FIXTURE_TEXT
 esac
 exec ${JSON.stringify(bd)} "$@"
 `, { mode: 0o755 });
-  fs.writeFileSync(path.join(bin, "pi"), '#!/usr/bin/env bash\nprintf \'%s\\n\' \'{"type":"message_end","message":{"role":"assistant","content":"VERDICT: APPROVE\\nPUSH: NOT CONSIDERED\\n"}}\'\n', { mode: 0o755 });
+  const reply = require("./reviewer-reply.cjs").FOUR_OK + "VERDICT: APPROVE\nPUSH: NOT CONSIDERED\n";
+  fs.writeFileSync(path.join(bin, "pi"), '#!/usr/bin/env bun\nconsole.log(' + JSON.stringify(JSON.stringify({ type: "message_end", message: { role: "assistant", content: reply } })) + ');\n', { mode: 0o755 });
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, TMPDIR: tmp, HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), GRAPH_CASE: dir, WHEELHOUSE_SELFTEST_SWEEP_LOCK: path.join(dir, "fixture.lock"), WHEELHOUSE_SKIP_REAL_PI: "1" };
   for (const key of Object.keys(env)) if (/^(BEADS_|BD_|DOLT_|GIT_(?:DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)$)/.test(key)) delete env[key];
   delete env.WHEELHOUSE_SELFTEST_BD_ROOT; delete env.WHEELHOUSE_SELFTEST_SWEEP_PATTERN;
