@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { parseLsof, parsePs } from './verify-cancellation-residual.ts';
+import { parseLsof, parsePs, RESIDUAL_CAPTURE_CONTAINMENT_MS } from './verify-cancellation-residual.ts';
 
 const [root, canary, fixture, runtime] = process.argv.slice(2);
 const outputControl = process.argv[6];
@@ -28,7 +28,9 @@ async function run(args: string[], env: NodeJS.ProcessEnv) {
   const child = spawn('bun', args, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let stdout = '', stderr = '', expired = false;
   child.stdout!.on('data', b => stdout += b); child.stderr!.on('data', b => stderr += b);
-  const timer = setTimeout(() => { expired = true; if (child.pid) process.kill(-child.pid, 'SIGKILL'); }, 45000);
+  // Preserve the existing setup/teardown allowance in addition to both native
+  // observer containments; the outer guard must not preempt their records.
+  const timer = setTimeout(() => { expired = true; if (child.pid) process.kill(-child.pid, 'SIGKILL'); }, 45_000 + 2 * RESIDUAL_CAPTURE_CONTAINMENT_MS);
   try {
     const result = await new Promise<any>((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolve({ code, signal })); });
     assert(!expired, 'retention test containment expired'); assert.equal(result.signal, null);
@@ -48,7 +50,14 @@ for (const name of cases) {
   const proof = fs.mkdtempSync(path.join(persistent, `retention-proof-${name}-`));
   const env = { ...process.env, WHEELHOUSE_VERIFY_CANCEL_RETENTION_EVIDENCE: proof, PATH: bin + path.delimiter + process.env.PATH, WHEELHOUSE_TEST_RETENTION_WRITER_CONTROL: control };
   const command = name.startsWith('lsof-') ? 'lsof' : 'ps';
-  if (name.endsWith('-error') || name.endsWith('-timeout')) fs.writeFileSync(path.join(bin, command), `#!/usr/bin/env bash\nprintf 'planted ${command} capture diagnostic\\n' >&2\n${name.endsWith('-error') ? 'exit ' + (command === 'lsof' ? 23 : 29) : 'exec sleep 60'}\n`, { mode: 0o755 });
+  if (name.endsWith('-error') || name.endsWith('-timeout')) {
+    const diagnostic = `printf 'planted ${command} capture diagnostic\\n' >&2`;
+    // Deliberately cross the retired five-second bound BEFORE emitting the
+    // error. This is controlled fixture delay, not synthetic host pressure.
+    // Timeout controls never finish on their own: only capture's kill ends them.
+    const body = name.endsWith('-error') ? `sleep 6\n${diagnostic}\nexit ${command === 'lsof' ? 23 : 29}` : `${diagnostic}\nexec perl -e 'while (1) { sleep 86400 }'`;
+    fs.writeFileSync(path.join(bin, command), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
+  }
   let writer: ReturnType<typeof spawn> | undefined, writerClosed: Promise<unknown> | undefined;
   try {
     if (name !== 'ordinary') {
@@ -115,7 +124,7 @@ for (const name of cases) {
     for (const entry of residual.entries) { assert(Number.isFinite(entry.size) && entry.size >= 0); assert(Number.isFinite(entry.mtimeMs) && entry.mtimeMs > 0); }
     assert.equal(residual.entries.find((e: any) => e.path === 'nested/leftover.txt').size, Buffer.byteLength('fixture residual\n'));
     for (const cmd of Object.values(residual.captures) as any[]) {
-      assert.equal(typeof cmd.code === 'number' || cmd.code === null, true); assert.equal(typeof cmd.stderr, 'string'); assert.equal(typeof cmd.stdout, 'string'); assert.equal(cmd.timeoutMs, 5000);
+      assert.equal(typeof cmd.code === 'number' || cmd.code === null, true); assert.equal(typeof cmd.stderr, 'string'); assert.equal(typeof cmd.stdout, 'string'); assert.equal(cmd.timeoutMs, RESIDUAL_CAPTURE_CONTAINMENT_MS);
     }
     if (name === 'writer') {
       const row = residual.processes.find((p: any) => p.pid === writer!.pid); assert(row, 'lsof/ps census must include the actual planted writer pid');

@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
+// Containment for a stalled observer on a loaded host, not a startup SLA.
+export const RESIDUAL_CAPTURE_CONTAINMENT_MS = 30_000;
+
 const errorRecord = (error: any) => ({ code: error?.code ?? null, message: String(error) });
 export function identity(file: string) {
   try {
@@ -54,9 +57,9 @@ export function parsePs(stdout: string) {
   return { rows, errors };
 }
 // Regular descriptors retain both streams without a pipe-size ceiling. A fresh
-// group belongs only to this capture; its five-second bound never kills a holder.
+// group belongs only to this capture; containment never kills a holder.
 async function capture(command: string, args: string[], proof: string, name: string) {
-  const record: any = { command: [command, ...args], timeoutMs: 5000, timedOut: false, code: null, signal: null, error: null, stdout: '', stderr: '' };
+  const record: any = { command: [command, ...args], timeoutMs: RESIDUAL_CAPTURE_CONTAINMENT_MS, timedOut: false, code: null, signal: null, error: null, stdout: '', stderr: '' };
   const stdout = path.join(proof, `residual-${name}.stdout`), stderr = path.join(proof, `residual-${name}.stderr`);
   const fds: number[] = [], created = new Set<string>();
   try {
