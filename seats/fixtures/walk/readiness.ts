@@ -49,7 +49,10 @@ function killGroup(pid:number,signal:NodeJS.Signals="SIGTERM"){
 }
 async function child(dir:string){
   const {kind,bin,args,options}=JSON.parse(fs.readFileSync(path.join(dir,"request.json"),"utf8"));
-  const {policyTimeoutMs:timeout,...opts}=options; // Only an explicit controller expiry advances this clock.
+  const {policyTimeoutMs:timeout,input,...opts}=options; // Only an explicit controller expiry advances this clock.
+  // Mirror completed-command's private stdin file, including immediate EOF.
+  let inputFd:number|undefined;
+  if(input!==undefined){const file=path.join(dir,"stdin");fs.writeFileSync(file,input,{flag:"wx"});inputFd=fs.openSync(file,"r");opts.stdio=[inputFd,"pipe","pipe"];}
   put(dir,"armed",JSON.stringify({kind,budget:timeout}));
   const proc=spawn(bin,args,{...opts,env:process.env,detached:true});
   let stdout="",stderr="",expired=false;
@@ -63,7 +66,7 @@ async function child(dir:string){
     const result:any=await new Promise((resolve,reject)=>{proc.once("error",reject);proc.once("close",(status,signal)=>resolve({status,signal,stdout,stderr}));});
     if(expired)result.error={code:"ETIMEDOUT",message:"fixture clock explicitly expired"};
     process.stdout.write(JSON.stringify(result));
-  }finally{clearInterval(expire);process.removeListener("SIGTERM",terminate);process.removeListener("SIGINT",terminate);}
+  }finally{clearInterval(expire);process.removeListener("SIGTERM",terminate);process.removeListener("SIGINT",terminate);if(inputFd!==undefined)fs.closeSync(inputFd);}
 }
 
 async function drive(source:string,dir:string,mode:string,args:string[]){
@@ -82,7 +85,7 @@ async function drive(source:string,dir:string,mode:string,args:string[]){
     if(mode!=="gui"){
       await until(()=>has(dir,"verifier.json")&&has(dir,"armed"),()=>ended,"verifier readiness and armed clock");
       const info=JSON.parse(fs.readFileSync(path.join(dir,"verifier.json"),"utf8"));
-      assert.equal(info.stdin,"ignored","fixture verifier stdin must be ignored, not the open caller pipe");
+      assert.equal(info.stdin,"prompt-file","fixture verifier stdin must be the completed-command private input file (whose EOF is checked), not ignored or the caller pipe");
       put(dir,"readiness-observed");put(dir,"release");
       if(mode==="timeout"||mode==="interrupt")await until(()=>has(dir,"holding"),()=>ended,"verifier holding after output");
       if(mode==="timeout")put(dir,"expire");

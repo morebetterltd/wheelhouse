@@ -594,13 +594,13 @@ interface OneShotRunResult {
   outcome?: "no-verdict";
 }
 
-function runOneShot(
+export function runOneShot(
   bin: string,
   args: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number; harness: HarnessName; marker?: { seat: string; bead: string } }
+  opts: { cwd: string; env: NodeJS.ProcessEnv; stdin: string; timeoutMs: number; firstOutputTimeoutMs: number; noEventTimeoutMs: number; maxBuffer: number; harness: HarnessName; marker?: { seat: string; bead: string } }
 ): Promise<OneShotRunResult> {
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["ignore", "pipe", "pipe"], detached: true });
+    const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "pipe"], detached: true });
     const markerFile = opts.marker ? path.join(ROOT, "seats", "run", `verify.${opts.marker.seat}.json`) : null;
     if (markerFile) {
       fs.mkdirSync(path.dirname(markerFile), { recursive: true });
@@ -686,8 +686,13 @@ function runOneShot(
     };
     child.stdout?.on("data", (chunk: Buffer) => collect(stdoutChunks, () => stdoutBytes, (n) => { stdoutBytes = n; }, chunk));
     child.stderr?.on("data", (chunk: Buffer) => collect(stderrChunks, () => stderrBytes, (n) => { stderrBytes = n; }, chunk));
+    let stdinError: (Error & { code?: string }) | undefined;
     child.on("error", (error: Error & { code?: string }) => finish({ error }));
-    child.on("close", (status, signal) => finish(sawFinalVerdictMessage && (signal || status === 143) ? { status: 0, signal: null } : { status, signal }));
+    child.on("close", (status, signal) => finish(sawFinalVerdictMessage && (signal || status === 143) ? { status: 0, signal: null, error: stdinError } : { status, signal, error: stdinError }));
+    // end() streams with backpressure and closes stdin so print-mode CLIs see EOF.
+    // An early exit can close the pipe: retain its error without an unhandled event.
+    child.stdin?.on("error", (error) => { stdinError = error; });
+    child.stdin?.end(opts.stdin);
   });
 }
 
@@ -1641,13 +1646,14 @@ function claimRequiresSweepCitation(claim: string): boolean {
   return /full\s+(?:seats\/\*\.selftest\.sh\s+)?sweep\s+passes/i.test(claim) || /selftest-sweep\.sh/i.test(claim);
 }
 
-// Nightly-only launch options; ordinary reviews keep their existing defaults.
+// Optional sweep launch context; ordinary reviews keep their existing defaults.
 export interface SweepLaunchOptions {
   logDir?: string;
   logPrefix?: string;
   fixtureSuites?: string[];
   noWait?: boolean;
   coordinatedSignals?: boolean;
+  preflightCandidates?: import("./preflight-attribution").PreflightCandidates;
 }
 // The exported name remains for existing callers which explicitly request full.
 export async function runDispatcherFullSweep(repoRoot: string, tip: string, realBd: string, basePath: string, choice: SweepChoice = { tier: "full", reason: "caller" }, options: SweepLaunchOptions = {}): Promise<SweepResult> {
@@ -1768,12 +1774,20 @@ export async function runDispatcherFullSweep(repoRoot: string, tip: string, real
     catch (e: any) { error = e.message; rc = 1; }
   }
   const elapsedMs = Date.now() - started;
+  const preflightAttribution = options.preflightCandidates && rc === 1 ? await (await import("./preflight-attribution")).attributePreflight({
+    rc, logPath, scratchCwd, candidates: options.preflightCandidates,
+    runAudit: (auditTip, suite) => runDispatcherFullSweep(repoRoot, auditTip, realBd, basePath,
+      { tier: "full", reason: "preflight attribution" }, { ...options, preflightCandidates: undefined,
+        fixtureSuites: [suite], logPrefix: "preflight.", noWait: false }),
+  }) : [];
+  if (preflightAttribution.length) fs.appendFileSync(logPath, preflightAttribution.join("\n") + "\n");
   fs.appendFileSync(logPath, `\nrc=${rc}\nelapsedMs=${elapsedMs}\n${error ? `error=${error}\n` : ""}`);
-  return { required: true, rc, logPath, elapsedMs, tip, choice, timings, error };
+  return { required: true, rc, logPath, elapsedMs, tip, choice, timings, error,
+    ...(preflightAttribution.length ? { preflightAttribution } : {}) };
   } finally { removeScratchWorktree(repoRoot, scratchCwd); }
 }
 
-function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[] {
+export function sweepPromptLines(sweep: SweepResult & { preflightAttribution?: string[] }, requireCitation: boolean): string[] {
   if (!sweep.logPath) return [];
   return [
     ``,
@@ -1788,6 +1802,8 @@ function sweepPromptLines(sweep: SweepResult, requireCitation: boolean): string[
     `- log: ${sweep.logPath}`,
     `- elapsedMs: ${sweep.elapsedMs}`,
     ...sweepTimingLines(sweep),
+    ...(sweep.preflightAttribution ?? []),
+    ...(sweep.preflightAttribution?.length ? ["On each CANDIDATE line, say whether that candidate's own tip fails each attributed audit; main=FAIL means it already fails on main, ERROR means the run could not complete, and attribution cannot approve a failed sweep."] : []),
     ...(sweep.error ? [`- error: ${sweep.error}`] : []),
     sweep.batch ? `This is batch coverage, not a new sweep at the candidate alone. Reviewed tip ${sweep.tip} is an ancestor of batch tip ${sweep.batch.tip}, whose first-parent chain reaches current main. This reuses only the sweep, not another reviewer's judgment.` : `This dispatcher gate runs for every review, regardless of the bead's wording, outside your model command timeout in the detached scratch worktree at the reviewed tip. Its result is recorded with your verdict. If rc is not 0, you cannot approve.`,
     ...(requireCitation ? [`You must cite rc=${sweep.rc} and the exact log path in your final evidence.`] : []),
@@ -2045,7 +2061,7 @@ async function main(): Promise<void> {
   const sourcePrompt = sourceAccessPromptLines(sourceSnapshots);
   const ownTier = chooseSweepTier(repoRoot, tip, claim, ROOT);
   const selectedTier = [ownTier, ...(batchCandidates?.candidates.map(c => c.choice) ?? [])].find(c => c.tier === "full") ?? ownTier;
-  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);
+  const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier, { preflightCandidates: batchCandidates });
   const requireSweepCitation = !!batchCandidates || !!sweep.batch || claimRequiresSweepCitation(claim);
   const sweepPrompt = sweepPromptLines(sweep, requireSweepCitation);
 
@@ -2114,6 +2130,7 @@ async function main(): Promise<void> {
     const res = await runOneShot(oneShot.bin, oneShot.args, {
       cwd: scratchCwd,
       env,
+      stdin: oneShot.stdin,
       timeoutMs,
       firstOutputTimeoutMs,
       noEventTimeoutMs,

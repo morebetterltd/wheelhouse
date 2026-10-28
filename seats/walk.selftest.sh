@@ -54,7 +54,9 @@ const agentDir = process.env.PI_CODING_AGENT_DIR;
 if (!agentDir) { process.stderr.write('stub pi: no PI_CODING_AGENT_DIR\n'); process.exit(1); }
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.slice(2)));
-fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
+const prompt = fs.readFileSync(0, 'utf8');
+if (!prompt || process.argv.includes(prompt)) throw Error('walker prompt must arrive on stdin, not argv');
+fs.writeFileSync(path.join(agentDir, 'prompt.txt'), prompt);
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
 fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null }));
 if (process.env.STUB_WALK_MANUAL_SNAPSHOT) {
@@ -66,7 +68,7 @@ if (process.env.STUB_WALK_MANUAL_SNAPSHOT) {
 if (process.env.STUB_WORK_WALK_SNAPSHOT) require(process.env.STUB_WORK_WALK_SNAPSHOT).record(process.cwd(), agentDir);
 const clockDir = process.env.STUB_WALK_CLOCK_DIR;
 if (clockDir) {
-  fs.writeFileSync(path.join(clockDir, 'verifier.tmp'), JSON.stringify({pid:process.pid,cwd:process.cwd(),stdin:fs.fstatSync(0).isCharacterDevice()?'ignored':'open-pipe'}));
+  fs.writeFileSync(path.join(clockDir, 'verifier.tmp'), JSON.stringify({pid:process.pid,cwd:process.cwd(),stdin:fs.fstatSync(0).isFile()?'prompt-file':fs.fstatSync(0).isFIFO()?'pipe':fs.fstatSync(0).isCharacterDevice()?'ignored':'other'}));
   fs.renameSync(path.join(clockDir, 'verifier.tmp'), path.join(clockDir, 'verifier.json'));
   while (!fs.existsSync(path.join(clockDir, 'release'))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);
 }
@@ -105,7 +107,9 @@ const agentDir = process.env.CLAUDE_CONFIG_DIR;
 if (!agentDir) { process.stderr.write('stub claude: no CLAUDE_CONFIG_DIR\n'); process.exit(1); }
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.slice(2)));
-fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
+const prompt = fs.readFileSync(0, 'utf8');
+if (!prompt || process.argv.includes(prompt)) throw Error('walker prompt must arrive on stdin, not argv');
+fs.writeFileSync(path.join(agentDir, 'prompt.txt'), prompt);
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
 fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || null }));
 if (process.env.STUB_WORK_WALK_SNAPSHOT) require(process.env.STUB_WORK_WALK_SNAPSHOT).record(process.cwd(), agentDir);
@@ -123,7 +127,9 @@ const agentDir = process.env.CODEX_HOME;
 if (!agentDir) { process.stderr.write('stub codex: no CODEX_HOME\n'); process.exit(1); }
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, 'argv.json'), JSON.stringify(process.argv.slice(2)));
-fs.writeFileSync(path.join(agentDir, 'prompt.txt'), process.argv[process.argv.length - 1] || '');
+const prompt = fs.readFileSync(0, 'utf8');
+if (!prompt || process.argv.includes(prompt)) throw Error('walker prompt must arrive on stdin, not argv');
+fs.writeFileSync(path.join(agentDir, 'prompt.txt'), prompt);
 fs.writeFileSync(path.join(agentDir, 'cwd.txt'), process.cwd());
 fs.writeFileSync(path.join(agentDir, 'env.json'), JSON.stringify({ PATH: process.env.PATH || null, CODEX_HOME: process.env.CODEX_HOME || null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR || null }));
 if (process.env.STUB_WORK_WALK_SNAPSHOT) require(process.env.STUB_WORK_WALK_SNAPSHOT).record(process.cwd(), agentDir);
@@ -336,14 +342,15 @@ bun -e "import fs from 'node:fs'; const p='$proj/seats/seats.json'; const j=JSON
 rm -f "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"
 rc=0; out=$(cd "$proj" && HOME="$HOME_FIX" PATH="$RUN_PATH" STUB_REPLY=$'VERDICT: WALKED-DONE\n' bun seats/walk.ts 'claim' --surface product:fixture --out "$FIX/out-mixed-claude-tools" 2>&1) || rc=$?
 if [ "$rc" -eq 0 ] && bun -e '
-  import fs from "node:fs";
+  import fs from "node:fs"; import path from "node:path";
   const args = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const flagAfter = (flag) => { const i = args.indexOf(flag); return i >= 0 && /^--/.test(args[i+2] ?? ""); };
-  if (args.at(-1).startsWith("--")) process.exit(1);
+  const prompt = fs.readFileSync(path.join(path.dirname(process.argv[1]), "prompt.txt"), "utf8");
+  if (!prompt || args.includes(prompt)) process.exit(1);
   if (!args.includes("--permission-mode") || args[args.indexOf("--permission-mode")+1] !== "acceptEdits") process.exit(2);
   if (!flagAfter("--allowed-tools") || !flagAfter("--disallowed-tools")) process.exit(3);
   if (args.indexOf("--allowed-tools") > args.indexOf("--model") || args.indexOf("--disallowed-tools") > args.indexOf("--model")) process.exit(4);
-' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot passes tool lists before --model with a following flag and prompt last'; else fail "claude-code walk one-shot tool-list argv order wrong (rc=$rc argv=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null))"; fi
+' "$HOME_FIX/.pi-seats-$ns/verifier/argv.json"; then pass 'claude-code walk one-shot passes tool lists before --model with a following flag and prompt on stdin'; else fail "claude-code walk one-shot tool-list argv order wrong (rc=$rc argv=$(cat "$HOME_FIX/.pi-seats-$ns/verifier/argv.json" 2>/dev/null))"; fi
 bun -e "import fs from 'node:fs'; const p='$proj/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.verifier.harness='codex'; j.seats.verifier.provider='openai-codex'; j.seats.verifier.model='gpt-5.5'; delete j.seats.verifier.allowedTools; delete j.seats.verifier.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 printf '{"stub":true}\n' > "$HOME_FIX/.pi-seats-$ns/verifier/auth.json"
 rm -f "$HOME_FIX/.pi-seats-$ns/verifier/env.json"

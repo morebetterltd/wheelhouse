@@ -109,9 +109,9 @@ export function queuedTestLock(lock: string, verifierPid: number): string | unde
 /** Same named wall-clock policy, armed only after the verifier is spawned.
  * Observe its real queued descendants BEFORE signalling this owned child group;
  * join the original child/streams and preserve native exit/signal/spawn error. */
-export async function spawnWorkWalker(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, budget: number, lock: string) {
+export async function spawnWorkWalker(bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, budget: number, lock: string, stdin: string) {
   if (!Number.isFinite(budget) || budget < 0) throw new RangeError("invalid work-walk timeout");
-  const child = spawn(bin, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(bin, args, { cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   const out: Buffer[] = [], err: Buffer[] = [];
   child.stdout?.on("data", b => out.push(b)); child.stderr?.on("data", b => err.push(b));
   let timer: ReturnType<typeof setTimeout> | undefined, error: Error | undefined, queued: string | undefined;
@@ -138,7 +138,11 @@ export async function spawnWorkWalker(bin: string, args: string[], cwd: string, 
     const handler = () => interrupt(signal); handlers.set(signal, handler); process.on(signal, handler);
   }
   try {
-    const native = await new Promise<{ status: number | null; signal: NodeJS.Signals | null }>(resolve => child.once("close", (status, signal) => resolve({ status, signal })));
+    const native = await new Promise<{ status: number | null; signal: NodeJS.Signals | null }>(resolve => {
+      child.once("close", (status, signal) => resolve({ status, signal }));
+      child.stdin?.on("error", e => { error ??= e; });
+      child.stdin?.end(stdin);
+    });
     return { ...native, pid: child.pid, error, queued, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8") };
   } finally {
     clearTimeout(timer);

@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { spawnSync } from "./fixture-command.cjs";
 import { recordCleanupScratch } from "../cleanup-identity";
-const [base, source, prune, clock, mode = "fixed"] = process.argv.slice(2);
+import { assertGraph } from "./prune-graph.ts";
+const [base, source, prune, clock, mode = "fixed", graph] = process.argv.slice(2);
 assert(["fixed", "removed"].includes(mode), "unknown prune wait fixture mode");
 assert(fs.statSync(path.join(path.dirname(base), ".wheelhouse-selftest-fixture")).isFile());
 fs.mkdirSync(base);
@@ -26,14 +27,27 @@ function command(bin: string, args: string[]) {
 }
 command("git", ["init", "-q", "-b", "main"]);
 command("git", ["-c", "user.name=selftest", "-c", "user.email=selftest@example.invalid", "commit", "-q", "--allow-empty", "-m", "base"]);
-command("bd", ["init", "--non-interactive", "--skip-agents", "-p", "waitcase"]);
+assert(graph, "shell must supply the helper-built waiter graph");
+fs.symlinkSync(path.join(graph, ".beads"), path.join(root, ".beads"), "dir");
+function verifyGraph(tasks: [string, string][], announce = false) {
+  try {
+    const binding = assertGraph(root, graph, tasks, env);
+    if (announce) {
+      console.log("MEASUREMENT prune graph waitcase " + JSON.stringify(binding));
+      console.log("  ok    waitcase tasks were written to the selftest scratch graph only");
+    }
+  } catch (error) { console.log("  FAIL  waitcase tasks were written to the selftest scratch graph only: " + error); throw error; }
+}
+verifyGraph([]);
 for (const id of ["waitcase-a", "waitcase-b"]) {
-  command("bd", ["create", "--id", id, "--title", "Owned cleanup waiter fixture"]);
+  // The sanctioned builder uses scratch-, while these lock fixtures have fixed IDs.
+  command("bd", ["create", "--force", "--id", id, "--title", "Owned cleanup waiter fixture"]);
   command("bd", ["close", id]);
   const target = path.join(root, ".wheelhouse-runs", id + "-run");
   fs.mkdirSync(target, { recursive: true }); fs.writeFileSync(path.join(target, "KEEP"), id + "\n");
   recordCleanupScratch(root, target, id);
 }
+verifyGraph([["waitcase-a", "closed"], ["waitcase-b", "closed"]], true);
 const realLsof = command("which", ["lsof"]), held = path.join(base, "held"), release = path.join(base, "release"), polled = path.join(base, "polled");
 assert(path.isAbsolute(realLsof) && fs.existsSync(realLsof));
 const lsof = path.join(base, "lsof");

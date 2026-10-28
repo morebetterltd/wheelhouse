@@ -1,0 +1,13 @@
+{
+  "source": "First complete process record from native lsof -nP -F0pcftn +D <probe-root> and ps -ww -p <writer-pid> -o pid=,ppid=,pgid=,command=; root, PIDs and script path normalized. lsof returned native1 with matches and empty stderr; do not discard that channel.",
+  "lsof": {
+    "code": 1,
+    "stderr": "",
+    "stdout": "p1234\u0000cbun\u0000\nfcwd\u0000tDIR\u0000n/fixture/work\u0000\nf5\u0000tREG\u0000n/fixture/work/held-file\u0000\n"
+  },
+  "ps": {
+    "code": 0,
+    "stderr": "",
+    "stdout": " 1234 2222  1234 bun fixture-writer.ts writer\n"
+  }
+}

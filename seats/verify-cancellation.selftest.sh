@@ -26,4 +26,8 @@ bun "$HERE/fixtures/verify-cancellation.ts" "$FIX" || normal=$?
 [[ -f "$FIX/completed.json" ]] || { echo 'STOP: cancellation fixture did not complete' >&2; exit 2; }
 retention=0
 bun "$HERE/fixtures/verify-cancellation-retention.ts" "$FIX/retention-canary" "$HERE/fixtures/verify-cancellation.ts" "$FIX/runtime/seats" || retention=$?
-[ "$normal" = 0 ] && [ "$retention" = 0 ]
+residual=0
+bun "$HERE/fixtures/verify-cancellation-residual-test.ts" "$FIX/retention-residual" "$HERE/fixtures/verify-cancellation-retention.ts" "$HERE/fixtures/verify-cancellation.ts" "$FIX/runtime/seats" || residual=$?
+output=0
+bun "$HERE/fixtures/verify-cancellation-residual-output-test.ts" "$FIX/retention-output" "$HERE/fixtures/verify-cancellation-residual-test.ts" "$HERE/fixtures/verify-cancellation-retention.ts" "$HERE/fixtures/verify-cancellation.ts" "$FIX/runtime/seats" || output=$?
+[ "$normal" = 0 ] && [ "$retention" = 0 ] && [ "$residual" = 0 ] && [ "$output" = 0 ]

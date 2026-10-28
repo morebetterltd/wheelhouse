@@ -195,11 +195,11 @@ Everything in this list is copied whole and unedited. The interview-derived cont
   test -f .claude/skills/intent/SKILL.md && test -f .claude/skills/outcomes/SKILL.md
   ```
 
-- The seats machinery writes per-machine runtime state beside itself — `seats/run/` (FIFOs), `seats/logs/` (event streams), `seats/state.json` (pid/session records), `seats/staffing.json` (dynamic staffing's live seats), `seats/verdicts/` (the commander's working copies of reviewer verdict output) — none of which is product, so keep it out of git now, before anything creates it. The guard first line is the same trailing-newline repair the worktree entry in step 5's commit section explains; it is not decoration.
+- The seats machinery writes per-machine runtime state beside itself — `seats/run/` (FIFOs), `seats/logs/` (event streams), `seats/state.json` (pid/session records), `seats/staffing.json` (dynamic staffing's live seats), `seats/verdicts/` (the commander's working copies of reviewer verdict output) — none of which is product, so keep it out of git now, before anything creates it. Root `evidence/` holds uncommitted captures, including step 6's retained install proof; ignore it here too. The guard first line is the same trailing-newline repair the worktree entry in step 5's commit section explains; it is not decoration.
 
   ```bash
   if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
-  for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/staffing.json' 'seats/verdicts/'; do
+  for e in 'seats/run/' 'seats/logs/' 'seats/state.json' 'seats/staffing.json' 'seats/verdicts/' '/evidence/'; do
     grep -qxF "$e" .gitignore 2>/dev/null || printf '%s\n' "$e" >> .gitignore
   done
   ```
@@ -1026,7 +1026,7 @@ Follow the manual itself, in its five-section order, pasting commands, exit stat
 1. **Launch:** use isolated scratch state and a non-production port/socket, never an installed service. Set a finite run bound and teardown for every helper and any app you start before launching; retain PID/identity ownership so cleanup stops only your instance. Observe and paste the manual's ready condition; a live process alone is not ready.
 2. **Doctor:** run its checks against that test instance and paste their output. Require the manual's passing result before driving.
 3. **Drive:** follow the selected feature's `How to get to it` and `How to drive it`. Paste the actions and what you actually observed; require the exact end state in `What proves it works`. One mapped feature per repo is sufficient; the other features are not claimed driven.
-4. **Evidence:** follow the manual's capture recipe, directing retained proof to the absolute install-root path `evidence/install/verify-<project>/<feature>/` (the manual's evidence base is `evidence/install/verify-<project>`). Keep this outside disposable run state, even for an umbrella product repo. Retain the response/screenshot or equivalent end-state proof, commands/statuses and launch/doctor output, not just a ready line. Do not put secrets in captures. This is retained, git-excluded install evidence, not product source: transcribe the scrubbed decisive output onto the graph before citing it, per `wheelhouse/GRAPH.md`.
+4. **Evidence:** follow the manual's capture recipe, directing retained proof to the absolute install-root path `evidence/install/verify-<project>/<feature>/` (the manual's evidence base is `evidence/install/verify-<project>`). Keep this outside disposable run state, even for an umbrella product repo. Retain the response/screenshot or equivalent end-state proof, commands/statuses and launch/doctor output, not just a ready line. Do not put secrets in captures. Step 2's `/evidence/` rule git-ignores this directory at the install root. Keep the retained proof on disk, never stage or commit `evidence/`, and transcribe its scrubbed decisive output onto the bead before citing it, per `wheelhouse/GRAPH.md`.
 5. **Cleanup:** always run the manual's teardown, **including after a failed Launch, Doctor, Drive or Evidence step**. Do not delete the retained proof. Confirm no owned app/helper remains running; on a partial launch, join the failed child and retain both output streams/status even if later-step files were never created. Never signal a replacement or unrelated process.
 
 After Cleanup, return to the **install root**, set `repo` to this product repo's path, `project` to its basename and `feature` to the selected slug, and run:

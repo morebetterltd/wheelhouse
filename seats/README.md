@@ -733,8 +733,41 @@ overrides the destination, otherwise the explicit evidence root or
 `seats/verdicts/verify-cancellation-failures` beside the test is used. Keep that
 root outside temporary trees; storage refusal is reported, never called saved.
 A planted native37 leg deletes its scratch and verifies both streams/exit status
-and the printed FAIL path survive. This preserves the next diagnosis; it does
-not claim a cause or cure for historical early exits whose streams were lost.
+and the printed FAIL path survive. Its canary record is
+`seats/verdicts/verify-cancellation-failures/retention-proof-*/result.json`
+(or beneath the explicit failure root). If its immediate, once-only
+`scratchGone` check is false, a failure-only `residual` section records the
+before/after device and inode (`sameInode` compares both; null means unavailable),
+every leftover path's type, size and mtime (without following symlinks), and
+native `lsof`/`ps` captures.
+The census correlates lsof open-file/cwd holders with ps PID, PPID, PGID and
+command; it is a snapshot, not proof of who caused the recreation. Both streams,
+exit/signal/spawn errors and each command's five-second timeout are retained;
+`censusComplete: false` or enumeration errors mean incomplete evidence, not no
+writers. Native lsof can return nonzero with useful matches, which are retained.
+Every failing `scratchGone: false` canary also emits its whole record as one
+`RETENTION_RESIDUAL {json}` line in suite output. For a review sweep, read that
+line in `seats/verdicts/sweeps/*.selftest-sweep.log`: the review copy and its
+local verdicts directory are removed, so the file path alone is not durable.
+Parse the JSON after the prefix rather than searching a terminal rendering.
+The residual driver's ordinary case forwards the canary's native failure and
+record once, without turning it into a second assertion, and still fails the
+suite. Planted proof legs emit records too; use the unexpected canary's command
+path to identify the real failure, not a planted proof, when posting a finding.
+Passing canaries have no residual section and launch no census. A test-only
+preload delegates real deletion then lets a fixture-owned writer recreate and
+hold the path before returning; it proves this capture, not the historical cause.
+If a real run fails with `scratchGone: false`, keep the record and post its
+scrubbed contents as an intake finding with `bun seats/intake.ts post --kind
+finding --source verify-cancellation --title 'Retention scratch remained'
+--ref path/to/result.json --from-stdin` (pipe it through
+`seats/evidence-scrub.sh` first). When the review copy is gone, use the retained
+sweep log as `--ref` instead of the deleted result path. Intake text has a 64 KiB limit: for a larger
+record, post a summary with its reference and carry the complete scrubbed record
+into the produced task's comments. Do not retry away the failure or guess a cure;
+the captured finding becomes separate causal investigation work. This preserves
+the next diagnosis; it does not claim a cause or cure for historical early exits
+whose streams were lost.
 The runtime-source copy regression is test-only, not an install-path timeout.
 It preserves full inventory/byte/sentinel assertions and accepts native completion
 through regular stdout/stderr descriptors. A delayed FIFO input crosses the
@@ -987,6 +1020,8 @@ The batch task gets its usual record at the batch tip; each candidate gets the s
 Manual scope is computed separately at each candidate's immutable merged tip, using that candidate's validated contract and available integration comparison base. Its prompt block and verdict header carry its own changed manual files, matching outcome ids/surfaces and `manual-diff-base`, not the batch's union. The batch task keeps its own scope at the batch tip. These lists remain context, not authorization to change a manual.
 
 Order: batch review → `walk.ts --work` for each candidate with person-on-surface/person-reading outcomes at its recorded merged tip (pass that tip to `--branch` if its fleet branch moved) → `merge-gate.ts` per candidate at that tip → fast-forward and push. Machine-only candidates pass the gate on APPROVE alone; bounced or unwalked work still refuses. The next subsection is the alternative shape: separate candidate reviews sharing only one sweep.
+
+When the dispatcher's sweep stops at a preflight audit in a `--candidates` review, it automatically runs each failed audit once at main and once at each candidate's own pinned tip, in separate scratch copies, before starting the reviewer. The `preflight attribution:` lines are in both the original sweep log (before its `rc=` footer) and the reviewer's prompt. `main <sha12>=FAIL` means the audit already fails on main; `<bead> <sha12>=ERROR(reason)` means that run could not complete, not that the audit passed. The reviewer must say on each CANDIDATE line whether that candidate's own tip fails the audit. Attribution is diagnostic: it never changes the original sweep rc or makes a failed sweep approvable. Passing sweeps, failures without a preflight stop, and reviews without candidates do not run attribution.
 
 ### Reuse one passing sweep for a review batch
 
@@ -1652,6 +1687,8 @@ WHEELHOUSE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 The command wrapper and source prologue preserve cwd/arguments and supervise release outside the payload's traps. `verify.ts` admits the **whole review** before main, scratch setup, dispatcher sweep or model watchdogs, including reviews using `--batch-sweep`; this deliberately serializes model-only review time as well, so arbitrary/legacy benches cannot escape admission. An ancestry/FIFO/token check, not an environment bypass, lets nested benches, suites and sweep runners reuse admission without deadlocking. The forwarding review entry preserves TERM/INT/HUP cancellation; explicit cancellation is distinct from a pressure brake. Queue wait has no deadline and is never charged to the model's watchdogs. Existing suite execution deadlines remain in force after admission.
 
 `WHEELHOUSE_HEAVY_TEST_PAUSE` names an admission-only brake marker, defaulting to the helper's install `seats/run/host-guard-pause`. While it exists, new runs retain their FIFO tickets and report `paused_by=...`, even when the lock becomes free; removing it resumes admission. An admitted owner and its nested work continue to completion. For a host-wide pressure brake across installs, configure their guards to publish the **same marker path** and export that path to every contender; a local marker gates only that install. The template does not ship or change a host guard or its load/memory/swap thresholds, and does not schedule an overnight pause. An install's guard must never TERM/KILL an admitted review, sweep, bench, or its worker process tree on a pressure brake: let it finish (or suspend/resume it) and gate new work with the marker. An explicit operator cancellation still stops a run and prints its signal.
+
+The regular `bun seats/alerts.ts check` pass raises **`test-lane-held`** once per holder when a live holder has kept the default `/tmp/wheelhouse-selftest-sweep.lock` longer than **60 minutes** and at least one other live process is waiting in its FIFO. Set `alert-test-lane-held-minutes=<minutes>` in `wheelhouse/.template-source` to change the threshold; missing/blank/invalid/negative values use `60`, and `0` alerts immediately once time has elapsed and someone waits. The snapshot's `alerts["test-lane-held"]` and herald inbox detail name `pid=`, the command line, `admitted=` time, elapsed `heldMs=`, `waiting=` count (excluding the holder), and `seat=` (verified process ancestry or worktree cwd; otherwise `unknown`). Repeated polls do not enqueue another row for that holder. It clears on release, when no live waiter remains, or when below threshold; unavailable ownership/process observations preserve the prior condition rather than claiming a clear. The alert is read-only: it **never signals, stops, releases or renews the holder**, changes the queue, or imposes a run deadline. Inspect first and make any intervention deliberately. Legacy locks without token/admission-time proof cannot be measured. Generic selftests disable this host observation; the dedicated fixture explicitly supplies a private endpoint inside its alerts root.
 
 All installs must adopt the updated helper, runner, entry and bench prologue; copying `seats/` cannot retroactively lock an old raw bench. Keep the default host lock identical across installs (and independent of TMPDIR); overrides are for isolated fixtures or a coordinated host-wide migration, never a per-install domain. `heavy-test.selftest.sh` copies two scratch installs with different cwd/TMPDIRs, relocates only the common default endpoint under its fixture, and exercises sweep/bench/review contention plus a brake fired mid-run, actual completion, blocked successors and FIFO release. It uses idle payloads, not synthetic CPU pressure.
 

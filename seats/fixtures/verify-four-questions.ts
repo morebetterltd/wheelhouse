@@ -39,7 +39,8 @@ const seed = trace.findLast(e => e.type === "message_end" && e.message?.role ===
 fs.writeFileSync(path.join(root, "seed.json"), JSON.stringify(seed));
 fs.writeFileSync(path.join(bin, "pi"), `#!/usr/bin/env bun
 const fs=require('fs'),root=${JSON.stringify(root)};const event=JSON.parse(fs.readFileSync(root+'/seed.json','utf8'));
-fs.writeFileSync(root+'/prompt.txt',process.argv.at(-1));event.message.content=[{type:'text',text:fs.readFileSync(root+'/reply.txt','utf8')}];
+const prompt=fs.readFileSync(0,'utf8');if(!prompt||process.argv.includes(prompt))throw Error('expected stdin prompt');
+fs.writeFileSync(root+'/prompt.txt',prompt);event.message.content=[{type:'text',text:fs.readFileSync(root+'/reply.txt','utf8')}];
 console.log(JSON.stringify(event));console.log(JSON.stringify({type:'agent_end',messages:[event.message]}));
 `, { mode: 0o755 });
 fs.writeFileSync(path.join(bin, "bd"), '#!/usr/bin/env bash\ncase "$1" in init) mkdir -p .beads;; where) printf \'{"path":"%s/.beads"}\\n\' "$PWD";; *) exit 0;; esac\n', { mode: 0o755 });

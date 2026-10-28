@@ -105,6 +105,10 @@ else
 fi
 
 phase 'reviewed-row deletion safety (fresh allocations only)'
+prune_graph_guard tmp-alias "$HERE/prune-safety.selftest.sh"
+ALIAS_GRAPH="$FIX/tmp-alias-graph"
+ALIAS_GRAPH_ENV="$(selftest_scratch_graph "$ALIAS_GRAPH")" || exit 2
+prune_graph_run "$ALIAS_GRAPH_ENV" bun -e 'import fs from "node:fs"; const {HOME,XDG_CONFIG_HOME,WHEELHOUSE_SELFTEST_BD_ROOT,PATH}=process.env; fs.writeFileSync(process.argv[1],JSON.stringify({HOME,XDG_CONFIG_HOME,WHEELHOUSE_SELFTEST_BD_ROOT,PATH}));' "$FIX/tmp-alias-env.json" || exit 2
 REVIEWED="$FIX/reviewed"
 mkdir -p "$REVIEWED"
 selftest_copy_seat_runtime "$REVIEWED" "$(dirname "$PRUNE")"
@@ -114,6 +118,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from "node:child_process";const { spawnSync } = await import(process.env.WHEELHOUSE_FIXTURE_COMMAND_MODULE);
 const base = process.argv[2];
+const aliasGraphEnv = JSON.parse(fs.readFileSync(process.argv[3], 'utf8')), aliasGraph = process.argv[5];
+const { assertGraph } = await import(process.argv[4]);
 if (!fs.existsSync(path.join(path.dirname(base), '.wheelhouse-selftest-fixture'))) throw new Error('missing fresh fixture marker');
 let failures = 0;
 function check(ok: boolean, name: string, detail = '') { console.log(`${ok ? '  ok  ' : '  FAIL'} ${name}${detail ? ': ' + detail : ''}`); if (!ok) failures++; }
@@ -265,14 +271,20 @@ for (const format of ['jsonl','tsv']) {
   fs.mkdirSync(physical); fs.symlinkSync(physical,alias);
   // Real bd output, not a hand-modeled scan row: producer and consumer must
   // agree when TMPDIR has a symlink ancestor (macOS /var -> /private/var).
-  const init = command('bd',['init','--non-interactive','--skip-agents','-p','aliascase'],f.root,f.env);
-  if (init.rc !== 0) throw new Error('alias fixture bd init failed: '+init.err);
-  const made = command('bd',['create','--title','Owned tmp alias fixture','--json'],f.root,f.env);
+  const graphEnv = { ...f.env, ...aliasGraphEnv, PATH: path.join(f.dir,'bin') + path.delimiter + aliasGraphEnv.PATH };
+  fs.symlinkSync(path.join(aliasGraph,'.beads'),path.join(f.root,'.beads'),'dir');
+  assertGraph(f.root,aliasGraph,[],graphEnv);
+  const made = command('bd',['create','--title','Owned tmp alias fixture','--json'],f.root,graphEnv);
   if (made.rc !== 0) throw new Error('alias bead create failed: '+made.err);
   const id = JSON.parse(made.out).id;
-  if (!id || command('bd',['close',id],f.root,f.env).rc !== 0) throw new Error('alias closed bead absent');
+  if (!id || command('bd',['close',id],f.root,graphEnv).rc !== 0) throw new Error('alias closed bead absent');
+  try {
+    const binding = assertGraph(f.root,aliasGraph,[[id,'closed']],graphEnv);
+    console.log('MEASUREMENT prune graph tmp-alias '+JSON.stringify(binding));
+    check(true,'tmp-alias tasks were written to the selftest scratch graph only');
+  } catch (error) { check(false,'tmp-alias tasks were written to the selftest scratch graph only',String(error)); process.exit(1); }
   const target = path.join(physical,id+'-scratch'); keep(target);
-  const aliasEnv = { ...f.env, TMPDIR: alias };
+  const aliasEnv = { ...graphEnv, TMPDIR: alias };
   const produced = command('bun',['seats/prune.ts','scan','--format','json'],f.root,aliasEnv);
   const rows = JSON.parse(produced.out), recorded = rows.find((r:any) => r.category === 'bead-tmp' && path.basename(r.path) === id+'-scratch');
   const file = path.join(f.dir,'tmp-alias-scan.json'); fs.writeFileSync(file,produced.out);
@@ -298,7 +310,7 @@ for (const layout of ['single-repo','plain-umbrella']) for (const format of ['js
 }
 process.exit(failures ? 1 : 0);
 TS
-if bun "$FIX/reviewed-rows.ts" "$REVIEWED"; then pass 'reviewed-row safety regressions'; else fail 'reviewed-row safety regressions'; fi
+if bun "$FIX/reviewed-rows.ts" "$REVIEWED" "$FIX/tmp-alias-env.json" "$HERE/fixtures/prune-graph.ts" "$ALIAS_GRAPH"; then pass 'reviewed-row safety regressions'; else fail 'reviewed-row safety regressions'; fi
 if [ "${WHEELHOUSE_PRUNE_REVIEWED_ONLY:-0}" = 1 ]; then
   [ "$FAILED" -eq 0 ] && { echo 'prune.reviewed.selftest: PASS'; exit 0; }
   echo 'prune.reviewed.selftest: FAIL' >&2; exit 1
@@ -341,31 +353,31 @@ printf 'locked\n' > "$MANUAL_RO/readonly-subdir/file.txt"
 chmod 555 "$MANUAL_RO/readonly-subdir"
 { reviewed_tsv_header "$ROOT"; printf 'run-scratch\t1\t%s\t%s\t\t1\t1.0B\trm\tread-only fixture\n' "$ROOT" "$MANUAL_RO"; } > "$FIX/manual-readonly-scan.tsv"
 set +e
-MANUAL_RO_RC=0; MANUAL_RO_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/manual-readonly-scan.tsv" --yes --categories run-scratch 2>&1) || MANUAL_RO_RC=$?
+MANUAL_RO_RC=0; MANUAL_RO_OUT=$(cd "$ROOT" && prune_graph_run "$REVIEWED_GRAPH_ENV" bun seats/prune.ts prune --from-file "$FIX/manual-readonly-scan.tsv" --yes --categories run-scratch 2>&1) || MANUAL_RO_RC=$?
 set -e
 if [ $MANUAL_RO_RC -eq 0 ] && [ ! -e "$MANUAL_RO" ] && printf '%s\n' "$MANUAL_RO_OUT" | grep >/dev/null "PRUNED rm run-scratch $MANUAL_RO"; then pass 'prune --yes removes an rm row containing a mode-555 subdirectory'; else chmod -R u+w "$MANUAL_RO" 2>/dev/null || true; fail "manual read-only rm row was not removed (exit $MANUAL_RO_RC): $MANUAL_RO_OUT"; fi
 
 phase 'prune --yes rechecks live seat anchors from reviewed scan files'
 { reviewed_tsv_header "$ROOT"; printf 'orphaned-worktree\t1\t%s\t%s\t\t1\t1.0B\trm\tstale reviewed scan fixture\n' "$ROOT" "$WTS/$LIVE_ID"; } > "$FIX/stale-live-scan.tsv"
 set +e
-STALE_RC=0; STALE_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/stale-live-scan.tsv" --yes --categories orphaned-worktree 2>&1) || STALE_RC=$?
+STALE_RC=0; STALE_OUT=$(cd "$ROOT" && prune_graph_run "$REVIEWED_GRAPH_ENV" bun seats/prune.ts prune --from-file "$FIX/stale-live-scan.tsv" --yes --categories orphaned-worktree 2>&1) || STALE_RC=$?
 set +e
 if [ $STALE_RC -eq 0 ] && printf '%s\n' "$STALE_OUT" | grep >/dev/null 'SKIPPED orphaned-worktree' && printf '%s\n' "$STALE_OUT" | grep >/dev/null 'worker-live' && printf '%s\n' "$STALE_OUT" | grep >/dev/null 'refusing to prune'; then pass 'prune --yes skips a stale safe row that is now a live seat cwd'; else fail "stale live-cwd row was not skipped (exit $STALE_RC): $STALE_OUT"; fi
 [ -d "$WTS/$LIVE_ID" ] && pass 'stale-scan live seat cwd remains after refused prune --yes' || fail 'stale-scan live seat cwd was removed'
 { reviewed_tsv_header "$ROOT"; printf 'merged-worktree\t1\t%s\t%s\tfleet/%s\t1\t1.0B\tworktree\tstale reviewed scan fixture\n' "$PROD" "$WTS/$HIST_ID" "$HIST_ID"; } > "$FIX/stale-session-scan.tsv"
 set +e
-SESSION_STALE_RC=0; SESSION_STALE_OUT=$(cd "$ROOT" && bun seats/prune.ts prune --from-file "$FIX/stale-session-scan.tsv" --yes --categories merged-worktree 2>&1) || SESSION_STALE_RC=$?
+SESSION_STALE_RC=0; SESSION_STALE_OUT=$(cd "$ROOT" && prune_graph_run "$REVIEWED_GRAPH_ENV" bun seats/prune.ts prune --from-file "$FIX/stale-session-scan.tsv" --yes --categories merged-worktree 2>&1) || SESSION_STALE_RC=$?
 set -e
 if [ $SESSION_STALE_RC -eq 0 ] && printf '%s\n' "$SESSION_STALE_OUT" | grep >/dev/null "PRUNED worktree merged-worktree $WTS/$HIST_ID" && ! printf '%s\n' "$SESSION_STALE_OUT" | grep >/dev/null 'session history cwd'; then pass 'prune --yes removes a reviewed safe row that appears only in stored session history'; else fail "stale session-history row was not removed cleanly (exit $SESSION_STALE_RC): $SESSION_STALE_OUT"; fi
 [ ! -d "$WTS/$HIST_ID" ] && pass 'stale-scan session-history worktree is removed by prune --yes' || fail 'stale-scan session-history worktree remains'
 
 phase 'prune acts only on safe selected rows'
-( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --yes --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune.out" )
+( cd "$ROOT" && prune_graph_run "$REVIEWED_GRAPH_ENV" bun seats/prune.ts prune --from-file "$SCAN" --yes --categories merged-worktree,orphaned-worktree,build-cache,bench-junk,bead-runs,bead-tmp,bead-simulator,xctest-devices > "$FIX/prune.out" )
 if [ ! -e "$WTS/$CLOSED_ID" ] && ! git -C "$PROD" worktree list --porcelain | grep -F >/dev/null "$WTS/$CLOSED_ID"; then pass 'safe merged worktree removed by git worktree remove'; else fail 'safe merged worktree still exists or is registered'; fi
 if git -C "$PROD" branch --list "fleet/$CLOSED_ID" | grep >/dev/null . && git -C "$PROD" log -1 --format=%s "fleet/$CLOSED_ID" >/dev/null && selftest_capture_lacks "$FIX/prune.out" -q -- 'PRUNED branch'; then pass 'safe merged worktree prune keeps its merged branch ref'; else fail "merged worktree branch was deleted or PRUNED branch was logged: branch=$(git -C "$PROD" branch --list "fleet/$CLOSED_ID") output=$(cat "$FIX/prune.out")"; fi
 if [ ! -e "$WTS/$GOAL_CHILD_ID" ] && git -C "$PROD" branch --list "fleet/$GOAL_CHILD_ID" | grep >/dev/null . && git -C "$PROD" log -1 --format=%s "fleet/$GOAL_CHILD_ID" >/dev/null && selftest_capture_lacks "$FIX/prune.out" -q -- 'PRUNED branch' && git -C "$PROD" branch --list fleet/goal-x | grep >/dev/null .; then pass 'goal-branch merged worktree prunes worktree while child and listed goal branches survive'; else fail "goal-branch prune outcome wrong: child_dir=$([ -e "$WTS/$GOAL_CHILD_ID" ] && echo present || echo gone) child_branch=$(git -C "$PROD" branch --list "fleet/$GOAL_CHILD_ID") goal_branch=$(git -C "$PROD" branch --list fleet/goal-x) output=$(cat "$FIX/prune.out")"; fi
 if git -C "$PROD" branch --list "fleet/$UNMERGED_ID" | grep >/dev/null .; then pass 'unmerged fleet branch is not deleted by merged-worktree prune path'; else fail 'unmerged fleet branch was deleted'; fi
-( cd "$ROOT" && bun seats/prune.ts prune --from-file "$SCAN" --yes --categories stale-branch > "$FIX/stale-branch-prune.out" )
+( cd "$ROOT" && prune_graph_run "$REVIEWED_GRAPH_ENV" bun seats/prune.ts prune --from-file "$SCAN" --yes --categories stale-branch > "$FIX/stale-branch-prune.out" )
 if ! git -C "$PROD" branch --list "fleet/$STALE_ID" | grep >/dev/null . \
   && grep -q "TAGGED archive/$STALE_ID ${STALE_SHA:0:12} before deleting fleet/$STALE_ID" "$FIX/stale-branch-prune.out" \
   && [ "$(git -C "$PROD" rev-parse "archive/$STALE_ID^{commit}" 2>/dev/null)" = "$STALE_SHA" ]; then
@@ -381,7 +393,7 @@ fi
 [ ! -e "$ROOT/.wheelhouse-runs/$CLOSED_ID-build" ] && pass 'safe closed bead runs scratch removed' || fail 'closed bead runs scratch still exists'
 [ ! -e "$CLOSED_TMP" ] && pass 'safe closed bead tmp scratch removed' || fail 'closed bead tmp scratch still exists'
 grep -q 'delete 11111111-1111-1111-1111-111111111111' "$FIX/xcrun.log" && pass 'safe closed bead simulator deleted by simctl' || fail "closed bead simulator delete missing: $(cat "$FIX/xcrun.log" 2>/dev/null)"
-grep -q "set-delete $HOME/Library/Developer/XCTestDevices all" "$FIX/xcrun.log" && [ ! -e "$HOME/Library/Developer/XCTestDevices" ] && pass 'idle XCTestDevices set deleted with simctl --set' || fail "XCTestDevices set delete missing: $(cat "$FIX/xcrun.log" 2>/dev/null)"
+grep -q "set-delete $REVIEWED_HOME/Library/Developer/XCTestDevices all" "$FIX/xcrun.log" && [ ! -e "$REVIEWED_HOME/Library/Developer/XCTestDevices" ] && pass 'idle XCTestDevices set deleted with simctl --set' || fail "XCTestDevices set delete missing: $(cat "$FIX/xcrun.log" 2>/dev/null)"
 [ -d "$PROD/node_modules/pkg/dist" ] && pass 'node_modules package dist remains after prune --yes' || fail 'node_modules package dist was removed'
 [ -d "$PROD/node_modules/.bin" ] && pass 'node_modules .bin remains after prune --yes' || fail 'node_modules .bin was removed'
 [ -d "$WTS/$OPEN_ID" ] && pass 'recorded-cwd seat-anchor worktree remains' || fail 'recorded-cwd seat-anchor worktree was removed'
@@ -400,6 +412,7 @@ prune_fixture_ext
 phase 'ISC-59/60 seat anchors and ISA-named worktrees are never removed'
 SEAT_ID=$(ext_bead 'seat anchored merged worktree'); ext_wt "$SEAT_ID"; ext_merge "$SEAT_ID"
 ISA_ID=$(ext_bead 'ISA named merged worktree'); ext_wt "$ISA_ID"; ext_merge "$ISA_ID"
+prune_graph_assert 'extended fixture' "$EXT_GRAPH_ENV" "$EXT" "$EXT_GRAPH" "$SEAT_ID:closed" "$ISA_ID:closed" || exit 1
 printf '{"seats":{"worker-1":{"pid":999999,"cwd":"%s"}}}\n' "$EWTS/$SEAT_ID" > "$EXT/seats/state.json"
 mkdir -p "$EXT/wheelhouse"; printf '# ISA\n\nIntegration worktree: `.wheelhouse-worktrees/%s` holds the goal branch.\n' "$ISA_ID" > "$EXT/wheelhouse/ISA.md"
 ext_scan

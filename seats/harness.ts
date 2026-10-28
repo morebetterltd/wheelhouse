@@ -36,13 +36,14 @@ export function oneShotEnvForHarness(harness: HarnessName, accountDir: string, b
   return env;
 }
 
-export function oneShotCommandForHarness(harness: HarnessName, brief: string, provider: string | undefined, model: string | undefined, prompt: string, allowedTools?: string, disallowedTools?: string): { bin: string; args: string[]; display: string } {
+/** Keep the growing user prompt out of argv. Every caller must forward stdin
+ * and close it at EOF; bounded brief/model/tool flags remain in args. */
+export function oneShotCommandForHarness(harness: HarnessName, brief: string, provider: string | undefined, model: string | undefined, prompt: string, allowedTools?: string, disallowedTools?: string): { bin: string; args: string[]; stdin: string; display: string } {
   if (harness === "pi") {
     const args = ["-p", "--mode", "json", "--no-session", "--append-system-prompt", brief];
     if (provider) args.push("--provider", provider);
     if (model) args.push("--model", model);
-    args.push(prompt);
-    return { bin: "pi", args, display: `pi ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}` };
+    return { bin: "pi", args, stdin: prompt, display: `pi ${args.join(" ")} < <prompt>` };
   }
   if (harness === "claude-code") {
     const briefText = fs.existsSync(brief) ? fs.readFileSync(brief, "utf8") : brief;
@@ -52,12 +53,10 @@ export function oneShotCommandForHarness(harness: HarnessName, brief: string, pr
     if (disallowedTools) args.push("--disallowed-tools", disallowedTools);
     if (allowedTools || disallowedTools) args.push("--permission-prompts", "none");
     if (model) args.push("--model", model);
-    args.push(prompt);
-    return { bin: "claude", args, display: `claude ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}` };
+    return { bin: "claude", args, stdin: prompt, display: `claude ${args.join(" ")} < <prompt>` };
   }
   const briefText = fs.existsSync(brief) ? fs.readFileSync(brief, "utf8") : brief;
   const args = ["exec", "--json", "--skip-git-repo-check", "-s", "read-only", "-c", "approval_policy=never", "-c", `developer_instructions=${JSON.stringify(briefText)}`];
   if (model) args.push("--model", model);
-  args.push(prompt);
-  return { bin: "codex", args, display: `codex ${args.map((a) => (a === prompt ? "<prompt>" : a)).join(" ")}` };
+  return { bin: "codex", args, stdin: prompt, display: `codex ${args.join(" ")} < <prompt>` };
 }

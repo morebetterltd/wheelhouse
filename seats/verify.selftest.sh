@@ -123,6 +123,9 @@ const agentDir = process.env.PI_CODING_AGENT_DIR;
 if (!agentDir) { process.stderr.write("stub pi: no PI_CODING_AGENT_DIR\n"); process.exit(1); }
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
+const prompt = fs.readFileSync(0, "utf8");
+if (!prompt || process.argv.includes(prompt)) throw Error("reviewer prompt must arrive on stdin, not argv");
+fs.writeFileSync(path.join(agentDir, "prompt.txt"), prompt);
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "pi-pid.txt"), String(process.pid));
 if (process.env.WHEELHOUSE_TEST_CHILD_LEDGER) require(process.env.WHEELHOUSE_TEST_CHILD_IDENTITY).recordChild({event:"model"});
@@ -183,7 +186,6 @@ if (process.env.STUB_RUN_BENCH === "1") {
   process.exit(0);
 }
 if (process.env.STUB_SOURCE_CHECK === "1") {
-  const prompt = process.argv[process.argv.length - 1] || "";
   const match = prompt.match(/mounted read-only at (\S+)/);
   const mounted = match?.[1] || "";
   let readable = false, writeFailed = false, undeclaredAbsent = false, detail = "";
@@ -217,7 +219,6 @@ if (process.env.STUB_RUNTIME_GREP_CHECK === "1") {
   const started = Date.now();
   const grep = cp.spawnSync("grep", ["-R", "--", "wheelhouse-selftest-never-match", "seats"], { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const elapsedMs = Date.now() - started;
-  const prompt = process.argv[process.argv.length - 1] || "";
   fs.writeFileSync(path.join(agentDir, "runtime-grep-check.txt"), JSON.stringify({
     cwd: process.cwd(),
     elapsedMs,
@@ -244,7 +245,6 @@ if (process.env.STUB_BD_READONLY_CHECK === "1") {
   fs.writeFileSync(path.join(agentDir, "bd-readonly-check.json"), JSON.stringify(cases, null, 2));
 }
 if (process.env.STUB_SWEEP_PROMPT_CHECK === "1") {
-  const prompt = process.argv[process.argv.length - 1] || "";
   const rc = (prompt.match(/^- rc: (\d+)/m) || [])[1] || "";
   const log = (prompt.match(/^- log: (.+)$/m) || [])[1] || "";
   let logText = "", ok = false;
@@ -403,6 +403,9 @@ const agentDir = process.env.CLAUDE_CONFIG_DIR;
 if (!agentDir) { process.stderr.write("stub claude: no CLAUDE_CONFIG_DIR\n"); process.exit(1); }
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
+const prompt = fs.readFileSync(0, "utf8");
+if (!prompt || process.argv.includes(prompt)) throw Error("reviewer prompt must arrive on stdin, not argv");
+fs.writeFileSync(path.join(agentDir, "prompt.txt"), prompt);
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
@@ -432,6 +435,9 @@ const agentDir = process.env.CODEX_HOME;
 if (!agentDir) { process.stderr.write("stub codex: no CODEX_HOME\n"); process.exit(1); }
 fs.mkdirSync(agentDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "argv.json"), JSON.stringify(process.argv.slice(2)));
+const prompt = fs.readFileSync(0, "utf8");
+if (!prompt || process.argv.includes(prompt)) throw Error("reviewer prompt must arrive on stdin, not argv");
+fs.writeFileSync(path.join(agentDir, "prompt.txt"), prompt);
 fs.writeFileSync(path.join(agentDir, "invoked"), "");
 fs.writeFileSync(path.join(agentDir, "env.json"), JSON.stringify({ BEADS_ACTOR: process.env.BEADS_ACTOR ?? null, PATH: process.env.PATH ?? null, WHEELHOUSE_ROOT: process.env.WHEELHOUSE_ROOT ?? null, CODEX_HOME: process.env.CODEX_HOME ?? null, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR ?? null }));
 fs.writeFileSync(path.join(agentDir, "cwd.txt"), process.cwd());
@@ -1043,9 +1049,9 @@ RECEIPT_CONTROL="$FIX/receipt-control.ts"
 bun - "$VERIFY" "$RECEIPT_CONTROL" <<'JS' || exit 2
 import fs from 'node:fs';import assert from 'node:assert/strict';
 let s=fs.readFileSync(process.argv[2],'utf8');
-const call='await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);';
+const call='await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier, { preflightCandidates: batchCandidates });';
 assert.equal(s.split(call).length,2);
-s=s.replace(call,'(claimRequiresSweepCitation(claim) ? await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier) : {required:false,rc:null,logPath:null,elapsedMs:0,tip});');
+s=s.replace(call,'(claimRequiresSweepCitation(claim) ? await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier, { preflightCandidates: batchCandidates }) : {required:false,rc:null,logPath:null,elapsedMs:0,tip});');
 const start=s.indexOf('      // Setup/spawn/pinning failures are not completed BOUNCE/DISCOVER');
 const end=s.indexOf('      if (sweep.logPath && requireSweepCitation)',start);
 assert(start>0 && end>start);s=s.slice(0,start)+s.slice(end);
@@ -1077,7 +1083,7 @@ else fail "receipt regression negative control was insensitive (exit $CONTROL_RC
 # budget 150ms, slowed suite 2s. The runner's TERM trap cleans its suite group.
 # Disable only the dispatcher sweep in a fixture copy to exercise old behavior.
 cp -f "$SWEEP_PROJ/seats/verify.ts" "$FIX/verify-with-sweep.ts"
-bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier);";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
+bun -e 'import fs from "node:fs";const p=process.argv[1],s=fs.readFileSync(p,"utf8"),a="const sweep = batchSweepArg ? readBatchSweep(repoRoot, tip, batchSweepArg, selectedTier) : await runDispatcherFullSweep(repoRoot, tip, realBd, basePath, selectedTier, { preflightCandidates: batchCandidates });";if(s.split(a).length!==2)throw new Error("sweep fixture anchor changed");fs.writeFileSync(p,s.replace(a,"const sweep = {required:false,rc:null,logPath:null,elapsedMs:0,tip};"));' "$SWEEP_PROJ/seats/verify.ts"
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$FIX/review-sweep-old.lock" run_sweep_prompt_check "$SWEEP_BD_SHOW" bead-sweep-old fleet/bead-1 worker-1
 if [ $RC -eq 2 ] && grep -q 'full sweep unproven: reviewer command limit' "$SWEEP_PROJ/seats/verdicts/bead-sweep-old.md"; then pass "reproduction: slowed sweep exceeds reviewer command limit without dispatcher evidence"; else fail "old sweep was not unproven rc=$RC out=$OUT"; fi
 WHEELHOUSE_SELFTEST_SWEEP_LOCK="$SWEEP_LOCK" STUB_SWEEP_FORCE_APPROVE=1 run_sweep_prompt_check "$SWEEP_GENERIC_CLAIM" bead-sweep-bypassed fleet/bead-1 worker-1
@@ -1159,8 +1165,8 @@ if [ -n "${BATCH_SEED_LOG:-}" ] && [ -s "$BATCH_SEED_LOG" ]; then
     pass "batch CLI reuses one real passing descendant sweep and records batch/reviewed tip and log"
   else fail "batch CLI acceptance/record failed rc=$RC out=$OUT"; fi
   if bun - "$BATCH_SEED_LOG" "$SWEEP_PROJ/seats/verdicts/bead-batch-accept.md" "$VARGV" <<'JS'
-import fs from 'node:fs';import assert from 'node:assert/strict';
-const [log,record,argv]=process.argv.slice(2),text=fs.readFileSync(log,'utf8'),receipt=fs.readFileSync(record,'utf8'),prompt=JSON.stringify(JSON.parse(fs.readFileSync(argv,'utf8')));
+import fs from 'node:fs';import assert from 'node:assert/strict';import path from 'node:path';
+const [log,record,argv]=process.argv.slice(2),text=fs.readFileSync(log,'utf8'),receipt=fs.readFileSync(record,'utf8'),prompt=fs.readFileSync(path.join(path.dirname(argv),'prompt.txt'),'utf8');
 const seconds=/selftest-sweep: PASS .*\/slowed.selftest.sh elapsed=([0-9]+)s/.exec(text);assert(seconds);
 const footer=/^selftest-sweep: PASS \(1 suite\(s\), [0-9]+s\)$/m.exec(text);assert(footer);
 for(const output of [receipt,prompt])for(const expected of ['selftest-sweep: tier=full suites=1',footer[0],`slowed.selftest.sh: ${seconds[1]}s`])assert(output.includes(expected),expected);
@@ -1430,13 +1436,14 @@ else fail "reviewer brief not passed"; fi
 if grep -q '"--provider","openai","--model","stub-model-v"' "$VARGV" 2>/dev/null; then
   pass "the REVIEWER seat's provider and model pin the launch (not the author's)"
 else fail "reviewer provider/model from seats.json did not reach pi's argv"; fi
-if grep -q "bead-1" "$VARGV" && grep -q "$TIP" "$VARGV" && grep -q "bd show bead-1" "$VARGV"; then
+if grep -q "bead-1" "${VARGV%argv.json}prompt.txt" && grep -q "$TIP" "${VARGV%argv.json}prompt.txt" && grep -q "bd show bead-1" "${VARGV%argv.json}prompt.txt"; then
   pass "prompt carries the bead id, the tip SHA, and the bead-claim reference"
 else fail "prompt is missing bead id, tip SHA, or bead claim"; fi
 if node - "$VARGV" <<'NODE'
 const fs = require('fs');
 const argv = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-const prompt = argv[argv.length - 1] || '';
+const prompt = fs.readFileSync(require('path').join(require('path').dirname(process.argv[2]), 'prompt.txt'), 'utf8');
+if (argv.includes(prompt)) process.exit(1);
 if (!prompt.includes('exactly one plain-text line for each question, then exactly one VERDICT and one PUSH line')) process.exit(1);
 for (const tag of ['SCOPE', 'INTEGRITY', 'SAFETY', 'HEALTH']) if (!prompt.includes(tag + ': OK —')) process.exit(1);
 if (!prompt.includes('never inside a Markdown code fence')) process.exit(1);
@@ -1448,7 +1455,8 @@ then pass "prompt closes with unfenced plain-text VERDICT/PUSH instructions"; el
 if node - "$VARGV" <<'NODE'
 const fs = require('fs');
 const argv = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-const prompt = argv[argv.length - 1] || '';
+const prompt = fs.readFileSync(require('path').join(require('path').dirname(process.argv[2]), 'prompt.txt'), 'utf8');
+if (argv.includes(prompt)) process.exit(1);
 if (!prompt.includes('Install push authority for this reviewer run')) process.exit(1);
 if (!prompt.includes('### Push authority and its scope')) process.exit(1);
 if (!prompt.includes('Fixture standing authority: reviewers may approve pushing origin')) process.exit(1);
@@ -1459,7 +1467,8 @@ then pass "prompt carries install push authority and reserved-list excerpts"; el
 if node - "$VARGV" <<'NODE'
 const fs = require('fs');
 const argv = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-const prompt = argv[argv.length - 1] || '';
+const prompt = fs.readFileSync(require('path').join(require('path').dirname(process.argv[2]), 'prompt.txt'), 'utf8');
+if (argv.includes(prompt)) process.exit(1);
 if (!prompt.includes('Interview-mode bench is unavailable inside this reviewer sandbox')) process.exit(1);
 if (!prompt.includes('do not run bench.sh --mode interview')) process.exit(1);
 if (!prompt.includes('route those claims to named non-author seat reviewer')) process.exit(1);
@@ -1638,7 +1647,8 @@ NODE
 STUB_BD_JSON_SHOW_FILE="$CONTEXT_JSON" run_with_bd_show "$CONTEXT_SHOW" bead-review-context fleet/bead-1 worker-1
 if [ "$RC" -eq 0 ] && node - "$VARGV" "$CONTEXT_SHOW" <<'NODE'
 const fs=require('fs'),assert=require('assert');
-const argv=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),prompt=argv.at(-1);
+const argv=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),prompt=fs.readFileSync(require('path').join(require('path').dirname(process.argv[2]),'prompt.txt'),'utf8');
+assert(!argv.includes(prompt));
 assert(prompt.includes('FIXTURE_TASK_COMMENT_MUST_REACH_REVIEWER'),'fixture task comment missing from assembled review prompt');
 for(const marker of ['fixture-review-label','fixture-parent-contract','fixture-dependent-contract']) assert(prompt.includes(marker));
 assert(prompt.includes(fs.readFileSync(process.argv[3],'utf8').trim()));
@@ -1770,15 +1780,16 @@ bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=
 rm -f "$HOME_FIX/.pi-seats-mixedv/reviewer/invoked" "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json"
 run bead-1 fleet/bead-1 worker-1
 if [ $RC -eq 0 ] && bun -e '
-  import fs from "node:fs";
+  import fs from "node:fs"; import path from "node:path";
   const args = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   const flagAfter = (flag) => { const i = args.indexOf(flag); return i >= 0 && /^--/.test(args[i+2] ?? ""); };
-  if (args.at(-1).startsWith("--")) process.exit(1);
+  const prompt = fs.readFileSync(path.join(path.dirname(process.argv[1]), "prompt.txt"), "utf8");
+  if (!prompt || args.includes(prompt)) process.exit(1);
   if (!args.includes("--permission-mode") || args[args.indexOf("--permission-mode")+1] !== "acceptEdits") process.exit(2);
   if (!flagAfter("--allowed-tools") || !flagAfter("--disallowed-tools")) process.exit(3);
   if (args.indexOf("--allowed-tools") > args.indexOf("--model") || args.indexOf("--disallowed-tools") > args.indexOf("--model")) process.exit(4);
 ' "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json"; then
-  pass "claude-code reviewer one-shot passes tool lists before --model with a following flag and prompt last"
+  pass "claude-code reviewer one-shot passes tool lists before --model with a following flag and prompt on stdin"
 else fail "claude-code reviewer one-shot tool-list argv order wrong (rc=$RC argv=$(cat "$HOME_FIX/.pi-seats-mixedv/reviewer/argv.json" 2>/dev/null))"; fi
 bun -e "import fs from 'node:fs'; const p='$MIX_PROJ/seats/seats.json'; const j=JSON.parse(fs.readFileSync(p,'utf8')); j.seats.reviewer.harness='codex'; j.seats.reviewer.provider='openai-codex'; j.seats.reviewer.model='gpt-5.5'; delete j.seats.reviewer.allowedTools; delete j.seats.reviewer.disallowedTools; fs.writeFileSync(p, JSON.stringify(j,null,2));"
 rm -f "$HOME_FIX/.pi-seats-mixedv/reviewer/invoked" "$HOME_FIX/.pi-seats-mixedv/reviewer/env.json"
@@ -2166,9 +2177,9 @@ if grep -q "## Evidence checks" "$VDIR/bead-8a.md" 2>/dev/null \
    && grep -q "evidence/screen.png — exists, .* bytes, PNG 1x1 — OK" "$VDIR/bead-8a.md" 2>/dev/null; then
   pass "verdict file records per-artifact checks: exists, bytes, type probe"
 else fail "evidence checks missing from the verdict record"; fi
-if grep -q "evidence/screen.png" "$VARGV" 2>/dev/null && grep -q "floor" "$VARGV" 2>/dev/null; then
+if grep -q "evidence/screen.png" "${VARGV%argv.json}prompt.txt" 2>/dev/null && grep -q "floor" "${VARGV%argv.json}prompt.txt" 2>/dev/null; then
   pass "the floor-check results reach the reviewer's prompt"
-else fail "evidence floor results not in the prompt argv"; fi
+else fail "evidence floor results not in the stdin prompt"; fi
 
 printf 'wheelhouse/evidence/\n' >> "$PROJ/.git/info/exclude"
 mkdir -p "$PROJ/wheelhouse/evidence/disk-ok" "$PROJ/wheelhouse/evidence/disk-bare"

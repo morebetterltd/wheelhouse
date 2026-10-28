@@ -499,6 +499,48 @@ export function legacyHostnameMatches(hostname: string): boolean {
   }
 }
 
+/** Read-only alert observation. No admission, renewal, reaping or signalling.
+ * A nonblocking shared parent flock avoids waiting behind a wedged transition.
+ * Unknown/incomplete/foreign records are not evidence that a lane is free. */
+export function observeTestLane(input = "/tmp/wheelhouse-selftest-sweep.lock"):
+  { status: "held"; pid: number; started: string; token: string; waiting: number } |
+  { status: "free" } | { status: "unavailable"; reason: string } {
+  let parent = -1, queue = -1;
+  try {
+    const identity = stableHostIdentity(); // bounded native lookup, before flock
+    primitives();
+    const lock = canonicalLock(input), name = path.basename(lock);
+    parent = parentFd(lock);
+    if (native.symbols.flock(parent, 1 | 4)) throw new Refused("test lane observation busy");
+    // Authenticate old network names without hostCache(), which renews/writes.
+    hostNames = new Set([HOST]);
+    if (identity.source !== "hostname") {
+      let cache = -1;
+      try {
+        cache = openAt(parent, `${name}.host`, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+        for (const hostname of cachedHostNames(cache, identity.hostId)) hostNames.add(hostname);
+      } catch (e: any) { if (cache >= 0 || e.errno !== 2) throw e; }
+      finally { if (cache >= 0) fs.closeSync(cache); }
+    }
+    let leaf: number;
+    try { leaf = openAt(parent, name); }
+    catch (e: any) { if (e.errno === 2) return { status: "free" }; throw e; }
+    fs.closeSync(leaf);
+    const holder = inspect(parent, name), marker = holder.marker;
+    if (!alive(marker.pid)) return { status: "free" };
+    if (!marker.started || !marker.token) throw new Refused("test lane has no token-owned admission time");
+    const opened = queueFd(parent, `${name}.queue`, false);
+    if (opened === null) throw new Refused("test lane FIFO unavailable");
+    queue = opened;
+    const current = tickets(queue);
+    if (current[0]?.pid !== marker.pid || current[0]?.token !== marker.token) throw new Refused("test lane holder is not FIFO head");
+    const waiting = current.filter(t => !(t.pid === marker.pid && t.token === marker.token) && alive(t.pid)).length;
+    if (JSON.stringify(inspect(parent, name)) !== JSON.stringify(holder)) throw new Refused("test lane changed during observation");
+    return { status: "held", pid: marker.pid, started: marker.started, token: marker.token, waiting };
+  } catch (e: any) { return { status: "unavailable", reason: e.message }; }
+  finally { if (queue >= 0) fs.closeSync(queue); if (parent >= 0) fs.closeSync(parent); }
+}
+
 type Ticket = { name: string; identity: string; raw: string; pid: number; token: string; sequence: bigint };
 function queueFd(parent: number, name: string, create: boolean): number | null {
   let fd: number;
