@@ -194,7 +194,7 @@ import fs from 'node:fs';import assert from 'node:assert/strict';
 let source=fs.readFileSync(process.argv[2],'utf8');
 for(const [old,next] of [
  ["const INITIAL_CONTAINMENT_MS = 30_000;","const INITIAL_CONTAINMENT_MS = 900;"],
- [" const payload = ['node', peer, '--holder', dir];"," const payload = ['bash', '-c', 'exec sleep 4'];"],
+ [` const payload = ['bash', '-c', 'exec node "$@"', 'holder-payload', peer, '--holder', dir];`," const payload = ['bash', '-c', 'exec sleep 4'];"],
 ]){assert.equal(source.split(old).length,2,'specific old-clock removal anchor');source=source.replace(old,next);}
 fs.writeFileSync(process.argv[3],source);
 TS

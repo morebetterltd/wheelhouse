@@ -37,7 +37,8 @@ function report(row:any,error:any) {
 }
 async function holder(lock:string,dir:string,owned:ReturnType<typeof start>[]) {
  const env={...process.env,WHEELHOUSE_HEAVY_TEST_PAUSE:path.join(fleet,'no-fixture-pause')};
- const payload = ['node', peer, '--holder', dir];
+ // supervise's admission gate requires a shell-first command argv.
+ const payload = ['bash', '-c', 'exec node "$@"', 'holder-payload', peer, '--holder', dir];
  const h=start('bun',[fleet+'/seats/selftest-sweep-lock.ts','supervise',lock,...payload],env);owned.push(h);
  await until(()=>fs.existsSync(lock+'/wheelhouse-selftest-sweep'),[h],'real holder publication');
  const marker=JSON.parse(fs.readFileSync(lock+'/wheelhouse-selftest-sweep','utf8'));return {h,marker};
