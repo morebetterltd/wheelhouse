@@ -773,9 +773,13 @@ every leftover path's type, size and mtime (without following symlinks), and
 native `lsof`/`ps` captures.
 The census correlates lsof open-file/cwd holders with ps PID, PPID, PGID and
 command; it is a snapshot, not proof of who caused the recreation. Both streams,
-exit/signal/spawn errors and each command's five-second timeout are retained;
-`censusComplete: false` or enumeration errors mean incomplete evidence, not no
-writers. Native lsof can return nonzero with useful matches, which are retained.
+exit/signal/spawn errors and each command's 30-second containment bound
+(`RESIDUAL_CAPTURE_CONTAINMENT_MS`) are retained. This is containment for a
+stalled observer on a loaded host, not a startup SLA. A capture recorded as
+`timedOut: true` means the host could not run lsof or ps to completion inside
+that bound, not that nothing held the scratch. `censusComplete: false` or
+enumeration errors mean incomplete evidence, not no writers. Native lsof can
+return nonzero with useful matches, which are retained.
 Every failing `scratchGone: false` canary also emits its whole record as one
 `RETENTION_RESIDUAL {json}` line in suite output. For a review sweep, read that
 line in `seats/verdicts/sweeps/*.selftest-sweep.log`: the review copy and its
