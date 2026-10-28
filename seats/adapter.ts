@@ -1114,6 +1114,23 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   child.unref();
   const pid = child.pid!;
   const birth = spawnedBirth(child);
+  const requestedCwd = path.resolve(cwd);
+  // One launch record serves both budget refusal and successful readiness.
+  const record: SeatRecord = {
+    pid,
+    ...birth,
+    accountDir,
+    ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
+    role: entry.role,
+    roleBrief: brief,
+    roleBriefHash,
+    cwd: requestedCwd,
+    fifo,
+    log,
+    sessionId: existing?.sessionId ?? null,
+    sessionFile,
+    model: entry.model,
+  };
 
   // Ask the seat who it is. This doubles as the readiness gate: pi answers
   // get_state only once its session exists, and the answer carries the
@@ -1123,7 +1140,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   try {
     st = await rpc(probe, { type: "get_state" });
   } catch (e: any) {
-    await preserveRpcBudgetSeat(e, name, { pid, ...birth, accountDir, role: entry.role, roleBrief: brief, roleBriefHash, cwd: path.resolve(cwd), fifo, log, sessionId: existing?.sessionId ?? null, sessionFile, model: entry.model });
+    await preserveRpcBudgetSeat(e, name, record);
     const cleanup = await terminateSpawnedOnly(pid);
     await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
     die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
@@ -1134,7 +1151,6 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
   }
 
-  const requestedCwd = path.resolve(cwd);
   const liveCwd = processCwd(pid);
   if (liveCwd && !samePath(liveCwd, requestedCwd)) {
     const cleanup = await terminateSpawnedOnly(pid);
@@ -1149,21 +1165,8 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     die(`spawned pid ${pid} for seat "${name}"${labelSuffix} has live cwd ${liveCwd}, not requested cwd ${requestedCwd}. launch-only cleanup: ${cleanup}`);
   }
 
-  const record: SeatRecord = {
-    pid,
-    ...birth,
-    accountDir,
-    ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
-    role: entry.role,
-    roleBrief: brief,
-    roleBriefHash,
-    cwd: requestedCwd,
-    fifo,
-    log,
-    sessionId: st.data?.sessionId ?? null,
-    sessionFile: st.data?.sessionFile ?? null,
-    model: entry.model,
-  };
+  record.sessionId = st.data?.sessionId ?? null;
+  record.sessionFile = st.data?.sessionFile ?? null;
   await recordLaunchedSeat(name, record); // spawn-record
   console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`);
   console.log(`  events -> ${log}`);
@@ -1272,25 +1275,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
   child.unref();
   const pid = child.pid!;
   const birth = spawnedBirth(child);
-
-  const probe = { fifo, log, pid };
-  let st: any;
-  try {
-    st = await rpc(probe, { type: "get_state" });
-  } catch (e: any) {
-    await preserveRpcBudgetSeat(e, name, { pid, ...birth, accountDir, role: entry.role, roleBrief: brief, roleBriefHash, cwd: path.resolve(cwd), fifo, log, sessionId: existing?.sessionId ?? null, sessionFile, model: entry.model });
-    const cleanup = await terminateSpawnedOnly(pid);
-    await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
-    die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
-  }
-  if (!st.success) {
-    const cleanup = await terminateSpawnedOnly(pid);
-    await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`);
-    die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
-  }
-
   const requestedCwd = path.resolve(cwd);
-  const liveCwd = processCwd(pid);
   const record: SeatRecord = {
     pid,
     ...birth,
@@ -1302,10 +1287,31 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
     cwd: requestedCwd,
     fifo,
     log,
-    sessionId: st.data?.sessionId ?? null,
-    sessionFile: st.data?.sessionFile ?? null,
-    model: st.data?.model ?? entry.model,
+    sessionId: existing?.sessionId ?? null,
+    sessionFile,
+    model: entry.model,
   };
+
+  const probe = { fifo, log, pid };
+  let st: any;
+  try {
+    st = await rpc(probe, { type: "get_state" });
+  } catch (e: any) {
+    await preserveRpcBudgetSeat(e, name, record);
+    const cleanup = await terminateSpawnedOnly(pid);
+    await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
+    die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
+  }
+  if (!st.success) {
+    const cleanup = await terminateSpawnedOnly(pid);
+    await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`);
+    die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
+  }
+
+  const liveCwd = processCwd(pid);
+  record.sessionId = st.data?.sessionId ?? null;
+  record.sessionFile = st.data?.sessionFile ?? null;
+  record.model = st.data?.model ?? entry.model;
   await recordLaunchedSeat(name, record);
   console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`);
   console.log(`  events -> ${log}`);
@@ -1368,11 +1374,15 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
   const shellCmd = `exec ${q(process.execPath)} ${args.map(q).join(" ")} 0<> ${q(fifo)} 2>> ${q(errLog)}`;
   const child = spawn("bash", ["-c", shellCmd], { cwd, env: codexChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" }); child.unref();
-  const pid = child.pid!, birth = spawnedBirth(child), probe = { fifo, log, pid }; let st: any;
-  try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { await preserveRpcBudgetSeat(e, name, { pid, ...birth, accountDir, role: entry.role, roleBrief: brief, roleBriefHash, cwd: path.resolve(cwd), fifo, log, sessionId: existing?.sessionId ?? null, sessionFile, model: entry.model }); const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
+  const pid = child.pid!, birth = spawnedBirth(child), requestedCwd = path.resolve(cwd);
+  const record: SeatRecord = { pid, ...birth, accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: existing?.sessionId ?? null, sessionFile, model: entry.model };
+  const probe = { fifo, log, pid }; let st: any;
+  try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { await preserveRpcBudgetSeat(e, name, record); const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   if (!st.success) { const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`); die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
-  const requestedCwd = path.resolve(cwd), liveCwd = processCwd(pid);
-  const record: SeatRecord = { pid, ...birth, accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model };
+  const liveCwd = processCwd(pid);
+  record.sessionId = st.data?.sessionId ?? null;
+  record.sessionFile = st.data?.sessionFile ?? null;
+  record.model = st.data?.model ?? entry.model;
   await recordLaunchedSeat(name, record); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`); console.log(`  events -> ${log}`);
 }
 function codexProbe(name: string, entry: SeatEntry): void {
