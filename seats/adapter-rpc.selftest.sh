@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RPC outcomes follow replies/process/pipe signals, never elapsed budgets.
+# Default RPC waits follow native signals; opt-in refusal budgets preserve seats.
 set -uo pipefail
 S="$(cd "$(dirname "$0")" && pwd)"
 . "$S/selftest-lib.sh"

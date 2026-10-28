@@ -13,8 +13,8 @@
  *   seats/logs/<seat>.jsonl every event pi emits, appended raw
  *
  * The process outlives the adapter because its stdin is the FIFO, opened
- * read-write (`0<>` in bash) so it never sees EOF, and its stdout is the log
- * file, appended by redirection with no pipe to hold open. A later `dispatch`
+ * read-write (`0<>` in bash) so it never sees EOF. Its stdout pipe is drained
+ * by seat-event-log into the appended event log. A later `dispatch`
  * opens the FIFO for writing, drops one line, and tails the log for the
  * response.
  *
@@ -79,6 +79,7 @@ import { acquirePidLock, releasePidLock } from "./lock";
 import { waitForStateLock, StateLockCancelled } from "./state-lock";
 import { prepareTaskScratch } from "./cleanup-identity";
 import { readStreamObservations, seatStreamHealth } from "./seat-stream-health";
+import { byteSize, cpuTimeMs, fifoUnreadBytes, rpcDescriptors } from './rpc-observation';
 
 interface SeatDriver {
   readonly name: string;
@@ -97,7 +98,7 @@ const RUN_DIR = path.join(SEATS_DIR, "run");
 const LOG_DIR = path.join(SEATS_DIR, "logs");
 const ROSTER_FILE = path.join(SEATS_DIR, "seats.json");
 
-// Legacy stop/SIGKILL confirmation only; RPC never fails on elapsed time.
+// Legacy stop/SIGKILL confirmation only; RPC has no default elapsed budget.
 const TIMEOUT_MS = Number(process.env.WHEELHOUSE_RPC_TIMEOUT_MS || 20000);
 const SPAWN_TERM_GRACE_MS = Number(process.env.WHEELHOUSE_SPAWN_TERM_GRACE_MS || 2000);
 const LOG_TAIL_BYTES = Number(process.env.WHEELHOUSE_LOG_TAIL_BYTES || 1024 * 1024);
@@ -547,6 +548,70 @@ function rpcProgress(rec: RpcSeat, phase: () => string): () => void {
   };
 }
 
+class RpcGiveUp extends Error { readonly exitCode = 3; }
+
+async function preserveRpcBudgetSeat(error: unknown, name: string, record: SeatRecord): Promise<void> {
+  if (!(error instanceof RpcGiveUp)) return;
+  // A readiness budget is an operator refusal, not launch failure or death.
+  // Retain the new pid and known session so stop/resume remains possible.
+  await recordLaunchedSeat(name, record);
+  throw error;
+}
+
+function rpcReplyProgress(rec: RpcSeat, command: Record<string, unknown>, id: string) {
+  const rawBudget = process.env.WHEELHOUSE_RPC_GIVE_UP_AFTER_MS;
+  const budget = rawBudget ? Number(rawBudget) : null;
+  if (budget !== null && (!Number.isSafeInteger(budget) || budget <= 0)) throw new Error('WHEELHOUSE_RPC_GIVE_UP_AFTER_MS must be a positive integer (unset means no deadline)');
+  const start = performance.now();
+  const sample = () => ({ cpu: cpuTimeMs(rec.pid), log: byteSize(rec.log), stderr: byteSize(rec.log.replace(/\.jsonl$/, '.stderr.log')) });
+  const initialSample = sample();
+  let previous = initialSample, anchor = previous, last = start, reports = 0, quietReports = 0, noted = false;
+  const name = path.basename(rec.fifo, '.stdin');
+  const recovery = `Recovery: bun seats/adapter.ts stop ${name} (session kept), then bun seats/adapter.ts dispatch ${name} <bead-id> <text> or bun seats/adapter.ts resume ${name}`;
+  const diagnose = async (current: ReturnType<typeof sample>, givingUp = false) => {
+    const fifoBytes = await fifoUnreadBytes(rec.fifo), descriptors = rpcDescriptors(rec.pid, rec.fifo);
+    const facts = { command: command.type, id, reports, noProgressReports: quietReports,
+      cpuDeltaMs: current.cpu === null || (givingUp ? initialSample : anchor).cpu === null ? null : current.cpu - (givingUp ? initialSample : anchor).cpu!,
+      logBytes: current.log, stderrBytes: current.stderr, fifoUnreadBytes: fifoBytes, ...descriptors };
+    const detail = `${rpcSeat(rec)} has not answered ${command.type} across ${quietReports >= 6 ? quietReports : reports} reports; ` +
+      `${fifoBytes === 0 ? 'command taken from FIFO (unread bytes 0, non-consuming descriptor)' : fifoBytes === null ? 'FIFO unread bytes unknown' : `FIFO unread bytes ${fifoBytes} (command consumption not established)`}; ` +
+      `CPU time delta ${facts.cpuDeltaMs === null ? 'unknown' : facts.cpuDeltaMs + ' ms'}; seat log byte size ${facts.logBytes ?? 'unknown'}${quietReports ? current.log === anchor.log ? ' unchanged' : ' no growth (size changed)' : ''}; stderr log byte size ${facts.stderrBytes ?? 'unknown'}; ` +
+      `fd 0: ${facts.fd0}; fd 1: ${facts.fd1}; ${recovery}`;
+    if (!noted) {
+      appendSeatLog(rec.log, { type: 'wheelhouse_note', at: new Date().toISOString(), message: 'rpc unanswered: ' + detail, rpc: facts });
+      noted = true;
+    }
+    // Our own diagnostic append is not seat progress on the next report.
+    previous = { ...current, log: byteSize(rec.log) };
+    return detail;
+  };
+  return {
+    async poll() {
+      const now = performance.now(), reporting = now - last >= 5000;
+      const givingUp = budget !== null && now - start >= budget;
+      if (!reporting && !givingUp) return;
+      const current = sample();
+      // Only increases are progress; log truncation/rotation is not seat work.
+      const quiet = current.cpu !== null && previous.cpu !== null && current.cpu <= previous.cpu &&
+        current.log !== null && previous.log !== null && current.log <= previous.log &&
+        current.stderr !== null && previous.stderr !== null && current.stderr <= previous.stderr;
+      if (reporting) {
+        reports++;
+        if (quiet) quietReports++; else { quietReports = 0; anchor = current; }
+        previous = current; last = now;
+      } else if (!quiet) quietReports = 0;
+      if (givingUp) throw new RpcGiveUp(await diagnose(current, true));
+      if (quietReports >= 6) process.stderr.write(`WAIT: ${await diagnose(current)}; process alive; waiting for a signal, not a timeout\n`);
+      else process.stderr.write(`WAIT: ${rpcSeat(rec)} while waiting for ${command.type} response; pipe open; process alive; waiting for a signal, not a timeout\n`);
+    },
+    answered() {
+      if (noted) appendSeatLog(rec.log, { type: 'wheelhouse_note', at: new Date().toISOString(),
+        message: `rpc answered late: ${command.type} id=${id} reports=${reports}`,
+        rpc: { command: command.type, id, reports, noProgressReports: quietReports } });
+    },
+  };
+}
+
 /** Serialize the WHOLE JSONL command, not individual writeSync chunks: a
  * second writer's LF must never land inside a command larger than PIPE_BUF.
  * Release before waiting for the RPC reply. Non-blocking writes/lock admission
@@ -690,7 +755,7 @@ async function rpc(rec: RpcSeat, command: Record<string, unknown>): Promise<any>
   }
   await fifoWrite(rec, { ...command, id });
   const phase = `while waiting for ${command.type} response`;
-  const progress = rpcProgress(rec, () => `${phase}; pipe open`);
+  const progress = rpcReplyProgress(rec, command, id);
   for (;;) {
     const fd = openResponseSource();
     let r: ReturnType<typeof logLinesFromDescriptor>;
@@ -710,10 +775,10 @@ async function rpc(rec: RpcSeat, command: Record<string, unknown>): Promise<any>
         const name = path.basename(rec.fifo, ".stdin");
         throw new Error(`PI_PARSE_ERROR: ${rpcSeat(rec)} rejected ${command.type}: ${String(obj.error ?? "unknown pi parse error")}. Recovery: adapter.ts stop ${name} && adapter.ts resume ${name}`);
       }
-      if (obj.type === "response" && obj.id === id) return obj;
+      if (obj.type === "response" && obj.id === id) { progress.answered(); return obj; }
     }
     assertRpcReader(rec, phase);
-    progress();
+    await progress.poll();
     await sleep(100);
   }
 }
@@ -1036,8 +1101,8 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   }
 
   // bash's `0<>` opens the FIFO read-write, so pi's stdin never sees EOF when
-  // a writer closes; stdout appends to the log by redirection, so no pipe
-  // ties pi's lifetime to ours. `exec` makes the child's pid pi's pid.
+  // a writer closes; the independent event-log filter drains stdout's pipe
+  // and appends the log. `exec` makes the child's pid pi's pid.
   const shellCmd =
     `exec pi ${args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ")} ` +
     `0<> '${fifo}' > >(${logFilterShell()} >> '${log}') 2>> '${errLog}'`;
@@ -1050,6 +1115,23 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   child.unref();
   const pid = child.pid!;
   const birth = spawnedBirth(child);
+  const requestedCwd = path.resolve(cwd);
+  // One launch record serves both budget refusal and successful readiness.
+  const record: SeatRecord = {
+    pid,
+    ...birth,
+    accountDir,
+    ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
+    role: entry.role,
+    roleBrief: brief,
+    roleBriefHash,
+    cwd: requestedCwd,
+    fifo,
+    log,
+    sessionId: existing?.sessionId ?? null,
+    sessionFile,
+    model: entry.model,
+  };
 
   // Ask the seat who it is. This doubles as the readiness gate: pi answers
   // get_state only once its session exists, and the answer carries the
@@ -1059,6 +1141,7 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
   try {
     st = await rpc(probe, { type: "get_state" });
   } catch (e: any) {
+    await preserveRpcBudgetSeat(e, name, record);
     const cleanup = await terminateSpawnedOnly(pid);
     await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
     die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
@@ -1069,7 +1152,6 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
   }
 
-  const requestedCwd = path.resolve(cwd);
   const liveCwd = processCwd(pid);
   if (liveCwd && !samePath(liveCwd, requestedCwd)) {
     const cleanup = await terminateSpawnedOnly(pid);
@@ -1084,21 +1166,8 @@ async function piLaunch(name: string, entry: SeatEntry, sessionFile: string | nu
     die(`spawned pid ${pid} for seat "${name}"${labelSuffix} has live cwd ${liveCwd}, not requested cwd ${requestedCwd}. launch-only cleanup: ${cleanup}`);
   }
 
-  const record: SeatRecord = {
-    pid,
-    ...birth,
-    accountDir,
-    ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}),
-    role: entry.role,
-    roleBrief: brief,
-    roleBriefHash,
-    cwd: requestedCwd,
-    fifo,
-    log,
-    sessionId: st.data?.sessionId ?? null,
-    sessionFile: st.data?.sessionFile ?? null,
-    model: entry.model,
-  };
+  record.sessionId = st.data?.sessionId ?? null;
+  record.sessionFile = st.data?.sessionFile ?? null;
   await recordLaunchedSeat(name, record); // spawn-record
   console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`);
   console.log(`  events -> ${log}`);
@@ -1207,24 +1276,7 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
   child.unref();
   const pid = child.pid!;
   const birth = spawnedBirth(child);
-
-  const probe = { fifo, log, pid };
-  let st: any;
-  try {
-    st = await rpc(probe, { type: "get_state" });
-  } catch (e: any) {
-    const cleanup = await terminateSpawnedOnly(pid);
-    await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
-    die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
-  }
-  if (!st.success) {
-    const cleanup = await terminateSpawnedOnly(pid);
-    await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`);
-    die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
-  }
-
   const requestedCwd = path.resolve(cwd);
-  const liveCwd = processCwd(pid);
   const record: SeatRecord = {
     pid,
     ...birth,
@@ -1236,10 +1288,31 @@ async function claudeLaunch(name: string, entry: SeatEntry, sessionFile: string 
     cwd: requestedCwd,
     fifo,
     log,
-    sessionId: st.data?.sessionId ?? null,
-    sessionFile: st.data?.sessionFile ?? null,
-    model: st.data?.model ?? entry.model,
+    sessionId: existing?.sessionId ?? null,
+    sessionFile,
+    model: entry.model,
   };
+
+  const probe = { fifo, log, pid };
+  let st: any;
+  try {
+    st = await rpc(probe, { type: "get_state" });
+  } catch (e: any) {
+    await preserveRpcBudgetSeat(e, name, record);
+    const cleanup = await terminateSpawnedOnly(pid);
+    await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`);
+    die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
+  }
+  if (!st.success) {
+    const cleanup = await terminateSpawnedOnly(pid);
+    await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`);
+    die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`);
+  }
+
+  const liveCwd = processCwd(pid);
+  record.sessionId = st.data?.sessionId ?? null;
+  record.sessionFile = st.data?.sessionFile ?? null;
+  record.model = st.data?.model ?? entry.model;
   await recordLaunchedSeat(name, record);
   console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`);
   console.log(`  events -> ${log}`);
@@ -1302,11 +1375,15 @@ async function codexLaunch(name: string, entry: SeatEntry, sessionFile: string |
   const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
   const shellCmd = `exec ${q(process.execPath)} ${args.map(q).join(" ")} 0<> ${q(fifo)} 2>> ${q(errLog)}`;
   const child = spawn("bash", ["-c", shellCmd], { cwd, env: codexChildEnv(entry, accountDir, name), detached: true, stdio: "ignore" }); child.unref();
-  const pid = child.pid!, birth = spawnedBirth(child), probe = { fifo, log, pid }; let st: any;
-  try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
+  const pid = child.pid!, birth = spawnedBirth(child), requestedCwd = path.resolve(cwd);
+  const record: SeatRecord = { pid, ...birth, accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: existing?.sessionId ?? null, sessionFile, model: entry.model };
+  const probe = { fifo, log, pid }; let st: any;
+  try { st = await rpc(probe, { type: "get_state" }); } catch (e: any) { await preserveRpcBudgetSeat(e, name, record); const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `${e.message}; launch-only cleanup: ${cleanup}`); die(`spawned pid ${pid} for seat "${name}"${labelSuffix} but ${e.message}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
   if (!st.success) { const cleanup = await terminateSpawnedOnly(pid); await recordLaunchFailure(name, existing, `get_state failed on fresh seat: ${st.error}; launch-only cleanup: ${cleanup}`); die(`get_state failed on fresh seat "${name}"${labelSuffix}: ${st.error}. launch-only cleanup: ${cleanup}. stderr tail:\n${stderrTail(probe)}`); }
-  const requestedCwd = path.resolve(cwd), liveCwd = processCwd(pid);
-  const record: SeatRecord = { pid, ...birth, accountDir, ...(accountLabel(entry) ? { accountLabel: accountLabel(entry) } : {}), role: entry.role, roleBrief: brief, roleBriefHash, cwd: requestedCwd, fifo, log, sessionId: st.data?.sessionId ?? null, sessionFile: st.data?.sessionFile ?? null, model: st.data?.model ?? entry.model };
+  const liveCwd = processCwd(pid);
+  record.sessionId = st.data?.sessionId ?? null;
+  record.sessionFile = st.data?.sessionFile ?? null;
+  record.model = st.data?.model ?? entry.model;
   await recordLaunchedSeat(name, record); console.log(`seat ${name}${labelSuffix}: pid ${pid}, session ${record.sessionId}`); console.log(`  events -> ${log}`);
 }
 function codexProbe(name: string, entry: SeatEntry): void {
@@ -1553,6 +1630,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
     try {
       st = await sameCwdDriver.getState(rec);
     } catch (e: any) {
+      if (e instanceof RpcGiveUp) throw e;
       die(`get_state failed while checking seat "${name}" before ${crossBead ? "cross-bead " : ""}dispatch: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
     }
     if (!st.success) die(`get_state failed while checking seat "${name}" before ${crossBead ? "cross-bead " : ""}dispatch: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
@@ -1660,6 +1738,7 @@ async function cmdDispatch(name: string, beadId: string, text: string, base: str
   try {
     resp = await sameCwdDriver.prompt(rec, promptText, "followUp");
   } catch (e: any) {
+    if (e instanceof RpcGiveUp) throw e;
     die(`dispatch prompt failed for seat "${name}"${accountLabelSuffix(undefined, rec)}: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
   }
   if (!resp.success) {
@@ -1703,6 +1782,7 @@ async function cmdSteer(name: string, text: string): Promise<void> {
   try {
     st = await driver.getState(rec);
   } catch (e: any) {
+    if (e instanceof RpcGiveUp) throw e;
     die(`steer preflight get_state failed: ${e.message}. stderr tail:\n${stderrTail(rec)}`);
   }
   if (!st.success) die(`steer preflight get_state failed: ${st.error}. stderr tail:\n${stderrTail(rec)}`);
@@ -2225,6 +2305,7 @@ async function cmdStopAll(): Promise<void> {
     try {
       st = await driver.getState(rec);
     } catch (e: any) {
+      if (e instanceof RpcGiveUp) throw e;
       console.log(`seat ${name}: REPORT unable to check idle state; left running (pid ${rec.pid}) — ${e.message}`);
       continue;
     }
@@ -2323,7 +2404,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((e) => {
-  if (e instanceof StateLockCancelled) {
+  if (e instanceof StateLockCancelled || e instanceof RpcGiveUp) {
     process.stderr.write(`STOP: ${e.message}\n`);
     process.exit(e.exitCode);
   }

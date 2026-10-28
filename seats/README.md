@@ -655,7 +655,7 @@ current turn if the seat is mid-stream; redirecting the CURRENT turn is what
 records the target bead and prompt in `state.json`, so a slow resumed session
 never leaves `status` naming the previous bead after the prompt has been sent.
 RPC readiness, state replies, FIFO drain and prompt acknowledgements have no
-elapsed-time failure budget: a live seat with an open pipe may answer late.
+elapsed-time failure budget by default: a live seat with an open pipe may answer late.
 The adapter waits for the matching response, or fails with the seat name and
 pid when the process dies or its pipe closes (EOF). An established seat whose
 response-log path disappears or whose file inode changes during an RPC is refused with
@@ -672,6 +672,25 @@ restart the seat. `adapter-framing.selftest.sh` measures real FIFO write bytes
 against an LF-only slow-reader stand-in and covers dispatch and both steer
 paths rejecting a command without ever acknowledging it. Pending RPCs print `WAIT:`
 progress every five seconds; that is reporting cadence, not a deadline.
+After six consecutive reply-wait reports without CPU time advancing (`ps -o time= -p <pid>`) or the seat log / stderr log growing, WAIT names the seat as
+having not answered. It shows CPU time delta, log byte size, FIFO unread bytes
+queried through a non-consuming descriptor (or unknown), and the pid's fd 0
+FIFO / fd 1 output-pipe holder observations (unknown if tools cannot establish
+them). Unknown CPU/log observations never establish six idle reports; a seat
+still making observed progress is not named. One `wheelhouse_note` beginning
+`rpc unanswered:` records command type/id, report count and these facts in
+the seat log; a matching `rpc answered late:` note records a later answer.
+Each RPC has its own pair, not repeated unanswered notes every report.
+Recovery is explicit: `bun seats/adapter.ts stop <seat>` (session kept), then
+`bun seats/adapter.ts dispatch <seat> <bead-id> <text>` or
+`bun seats/adapter.ts resume <seat>`. Diagnosis itself never signals or stops
+the seat. The default remains no deadline. An operator may opt in with
+`WHEELHOUSE_RPC_GIVE_UP_AFTER_MS=40000` (a positive integer, unset by default):
+a reply wait exceeding that budget on the same monotonic clock as WAIT exits
+**3**, printing `STOP:` with the facts and recovery line, without touching the
+seat. The budget starts after the complete command is written; FIFO admission
+and drain still wait for native signals. Even readiness budget refusal keeps
+the spawned pid and known session recorded for explicit stop/resume.
 `status` reports observed process/log facts and never guesses WEDGED from a
 slow `get_state`; dispatch does not stop and relaunch a merely slow seat.
 For live seats, status and the cockpit floor share the display-only
