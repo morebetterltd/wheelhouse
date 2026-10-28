@@ -28,10 +28,12 @@ Copied byte-for-byte into every project. Do not edit this section.
         consumer: person-on-surface | person-reading | machine — <who meets it>
         surface: <where that consumer meets it>
         check: walk | read | run — <how that consumer would check it>
+          - <an indented case that continues this check>
+          <an indented paragraph that continues this check>
 
   `Signal:` names the intake row (sig-<id>), the ISA claim gap (isa-gap: <claim>) or the install procedure the work came from; dispatch refuses a bead without it. The shared gate checks the three Signal forms: a `sig-` row must be disposed `produced`, naming this bead, by a roster seat whose role is `producer`, checked at dispatch and review; a missing, unreadable or malformed ledger refuses rather than skipping provenance. The Skills stamp gate is also active.
 
-  Headers `Intent:` and `Outcomes:` stand alone at line start. Outcome ids are sequential and unique (`O1`, `O2`, …); each outcome's three fields are indented continuation lines. Choose one group and its fixed check kind, not the literal alternatives:
+  Headers `Intent:` and `Outcomes:` stand alone at line start. Outcome ids are sequential and unique (`O1`, `O2`, …); each outcome's three fields are indented. Indented non-field lines beneath an outcome's `consumer:`, `surface:` or `check:` continue that field, in order, with leading indentation removed and newlines retained. These details reach the walker as part of the field, not as free-floating notes. Notes meant for no one field belong at column 0 after the outcomes; the first such line ends the Outcomes section. Choose one group and its fixed check kind, not the literal alternatives:
 
   | consumer group | check kind | consumer's check |
   |---|---|---|

@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { completedCommand } from '../../completed-command';
 import { parseContract, validateContract } from '../../contract';
 import { writeReviewFixture } from '../review-record-template';
+import { withoutContinuation } from '../contract-continuations';
 const [fleet, agent, fixture, reference, snapshotHelper] = process.argv.slice(2);
 const evidence = process.env.WHEELHOUSE_WORK_WALK_EVIDENCE;
 if (evidence) fs.mkdirSync(evidence, { recursive: true });
@@ -33,8 +34,9 @@ assert.deepEqual(walked.map(o => o.id), ['O1', 'O2']); assert.equal(contract.out
 const machineOnly = path.join(path.dirname(fixture), 'merge-gate-machine-only.md');
 const machineContract = parseContract(fs.readFileSync(machineOnly, 'utf8')); assert.deepEqual(validateContract(machineContract, { requireSignal: true }), []); assert(machineContract.outcomes.every(o => o.group === 'machine'));
 const gapped = path.join(fleet, 'gapped-contract.md');
+const indentField = (value: string) => value.replaceAll('\n', '\n    ');
 fs.writeFileSync(gapped, ['Signal: isa-gap: W11', 'Skills: intent@1.0.0 outcomes@1.0.0', '', 'Intent:', contract.intent, '', 'Outcomes:',
-  ...[contract.outcomes[2], ...walked].flatMap((o, i) => [`- O${i+1} ${o.claim}`, `  consumer: ${o.group} — ${o.who}`, `  surface: ${o.surface}`, `  check: ${o.checkKind} — ${o.checkHow}`]), ''].join('\n'));
+  ...[contract.outcomes[2], ...walked].flatMap((o, i) => [`- O${i+1} ${o.claim}`, `  consumer: ${o.group} — ${indentField(o.who)}`, `  surface: ${indentField(o.surface)}`, `  check: ${o.checkKind} — ${indentField(o.checkHow)}`]), ''].join('\n'));
 assert.deepEqual(validateContract(parseContract(fs.readFileSync(gapped, 'utf8')), { requireSignal: true }), []);
 const passRows = ['OUTCOME: O1 PASS — GET /counter read back two', 'OUTCOME: O2 PASS — README names five features'];
 const done = [...passRows, 'VERDICT: WALKED-DONE'].join('\n') + '\n';
@@ -74,6 +76,30 @@ leg('work prompt contains only Intent Outcomes and named surfaces', () => {
   assert(good.prompt.includes(contract.intent)); for (const o of walked) { assert(good.prompt.includes(`- ${o.id} ${o.claim}`)); assert(good.prompt.includes(`  surface: ${o.surface}`)); }
   assert(!/WORKER-REPORT-SENTINEL|^Trace:|^Signal:|^Integration:|^Skills:|bd show|contracts\/REVIEWER|wheelhouse\/ISA|seats\/logs|AUTHOR-SEAT-SENTINEL|BRANCH-NAME-SENTINEL/m.test(good.prompt));
   assert(good.prompt.includes('verify-five-features/SKILL.md')); assert(good.prompt.includes('# Counter')); assert(good.prompt.includes('## How to get to it'));
+});
+leg('work prompt retains check continuation; removed parser loses it', () => {
+  const marker = 'WORK-WALK-CHECK-CONTINUATION';
+  // Derive the expected text from the raw input, never the parsed contract:
+  // comparing a truncated parse with a truncated prompt would pass falsely.
+  const lines = fs.readFileSync(fixture, 'utf8').split('\n');
+  const header = lines.find(line => line.startsWith('  check: walk — '));
+  const detail = lines.find(line => line.includes(marker))?.replace(/^[ \t]+/, '');
+  assert(header && detail, 'SETUP raw fixture contains check and marker');
+  const promptOracle = (row: any) => {
+    assert.equal(row.status, 0, row.stderr); assert.equal(row.invoked, 1);
+    const start = row.prompt.indexOf('- O1 '), end = row.prompt.indexOf('\n- O2 ', start);
+    assert(start >= 0 && end > start, 'SETUP captured O1 and O2 prompt boundaries');
+    assert(row.prompt.slice(start, end).includes(header + '\n' + detail), 'WORK_CHECK_CONTINUATION must follow O1 check text');
+  };
+  promptOracle(good);
+  const parser = path.join(fleet, 'seats/contract.ts'), original = fs.readFileSync(parser, 'utf8');
+  let removed: any;
+  try { fs.writeFileSync(parser, withoutContinuation(original)); removed = run('continuation-removed', done); }
+  finally { fs.writeFileSync(parser, original); }
+  assert.equal(removed.status, 0, removed.stderr); assert.equal(removed.invoked, 1);
+  assert(!removed.prompt.includes(marker), 'removed parser must omit the phrase from the actual recorded prompt');
+  assert.throws(() => promptOracle(removed), /WORK_CHECK_CONTINUATION/);
+  console.log('CONTROL work continuation removed: CLI0, recorded prompt omits marker, WORK_CHECK_CONTINUATION oracle rejects');
 });
 leg('work prompt omits machine outcomes', () => {
   assert(good?.prompt, 'SETUP verifier must have captured a prompt');
