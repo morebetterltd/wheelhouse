@@ -284,7 +284,60 @@ async function supervisedNetwork(dir: string) {
     assert(!fs.existsSync(lock)); assert(!fs.existsSync(lock + ".queue"));
   } finally { if (!closed) child.kill("SIGTERM"); await done; fs.writeFileSync(path.join(dir, "supervisor.out"), out); fs.writeFileSync(path.join(dir, "supervisor.err"), err); }
 }
-async function renewalLifecycle(dir: string, kind: "exit" | "refused" | "killed") {
+async function renewalLifecycle(dir: string, kind: "exit" | "refused" | "killed", early?: "failure" | "control") {
+  // Teardown containment, not a shutdown SLA. Never leave an unreaped owned
+  // supervisor waiting forever for a tick that its own guard cancelled.
+  const RENEWAL_TEARDOWN_CONTAINMENT_MS = 30_000;
+  const plantedMessage = "planted renewal killed early failure before first receipt";
+  const identity = early ? (await import("./verify-child-identity.cjs")).default : undefined;
+  const observe = (pid: number) => { const row = identity!.readProcess(pid); assert.equal(row.kind, "present"); return row.identity; };
+  const gone = async (recorded: any[]) => {
+    const until = performance.now() + RENEWAL_TEARDOWN_CONTAINMENT_MS;
+    let checks: any[];
+    do { checks = recorded.map(row => identity!.inspect(row)); if (checks.every(row => ["gone", "reused"].includes(row.verdict))) return checks; await Bun.sleep(5); } while (performance.now() < until);
+    assert.fail("renewal early failure left recorded process identities: " + JSON.stringify(checks!));
+  };
+  if (early === "control") {
+    const copiedSeats = path.join(dir, "copy", "seats"), copiedFixtures = path.join(copiedSeats, "fixtures"); fs.mkdirSync(copiedFixtures, { recursive: true });
+    for (const name of ["native-command.ts", "completed-command.ts"]) fs.copyFileSync(path.join(path.dirname(helper), name), path.join(copiedSeats, name));
+    for (const name of ["fixture-command.cjs", "verify-child-identity.cjs", "sweep-lock-v1.ts"]) fs.copyFileSync(path.join(import.meta.dir, name), path.join(copiedFixtures, name));
+    const shipped = fs.readFileSync(import.meta.path, "utf8"), copied = path.join(copiedFixtures, "sweep-identity.ts"); fs.writeFileSync(copied, shipped);
+    const cmp = (expected: number) => { const r = spawnSync("cmp", ["-s", import.meta.path, copied], { encoding: "utf8" }); assert.ifError(r.error); assert.equal(r.signal, null); assert.equal(r.status, expected, r.stderr); };
+    cmp(0);
+    const needle = "if (++observedTicks >= 2" + " || renewalStopped) tickFinished();";
+    assert.equal(shipped.split(needle).length, 2, "one killed tick-join removal anchor");
+    fs.writeFileSync(copied, shipped.replace(needle, "if (++observedTicks >= 2) tickFinished();")); cmp(1);
+    const allocation = path.join(dir, "fixture-path"), lib = path.join(path.dirname(helper), "selftest-lib.sh");
+    const script = '. "$1"; F="$(selftest_make_fixture_dir "$2")" || exit 2; selftest_isolate_git "$F" || exit 2; printf "%s\\n" "$F" > "$3"; exec bun "$4" "$F" "$5" "$6"';
+    const began = performance.now(), child = spawn("bash", ["-c", script, "early-control", lib, path.join(dir, "fixture.XXXXXX"), allocation, copied, helper, runner], { detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, WHEELHOUSE_IDENTITY_TEST_CASE: "payload-killed-early-failure", WHEELHOUSE_IDENTITY_EVIDENCE_DIR: "" } });
+    const cliIdentity = observe(child.pid!); let out = "", err = "", closed = false, expired = false;
+    child.stdout!.on("data", b => out += b); child.stderr!.on("data", b => err += b);
+    const done = new Promise<any>((resolve, reject) => { child.once("error", reject); child.once("close", (code, signal) => { closed = true; resolve({code, signal}); }); });
+    const timer = setTimeout(() => { expired = true; if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid!, "SIGKILL"); }, RENEWAL_TEARDOWN_CONTAINMENT_MS + 30_000);
+    let result: any;
+    try { result = await done; } finally { clearTimeout(timer); fs.writeFileSync(path.join(dir, "control.stdout"), out); fs.writeFileSync(path.join(dir, "control.stderr"), err); }
+    assert(!expired, "early-failure removal exceeded teardown containment plus30s"); assert(closed); assert.equal(result.signal, null); assert.equal(result.code, 1, out + err);
+    const line = err.split("\n").find(line => line.startsWith("FAIL payload-killed-early-failure: ")); assert(line?.includes(plantedMessage) && line.includes("renewal lifecycle teardown: supervisor did not exit within"), err);
+    const childRoot = fs.readFileSync(allocation, "utf8").trim(), trace = JSON.parse(fs.readFileSync(path.join(childRoot, "payload-killed-early-failure", "0", "early.json"), "utf8"));
+    assert.equal(trace.planted, plantedMessage); assert.equal(trace.originalErrorPreserved, true); assert.equal(trace.escalated, true);
+    const checks = await gone([cliIdentity, ...trace.identities]);
+    fs.writeFileSync(path.join(dir, "control.json"), JSON.stringify({ ...result, elapsedMs: performance.now()-began, identities: [cliIdentity, ...trace.identities], checks, stdout: out, stderr: err }, null, 2) + "\n");
+    assert(performance.now()-began < RENEWAL_TEARDOWN_CONTAINMENT_MS + 30_000);
+    assert.equal(fs.readFileSync(import.meta.path, "utf8"), shipped, "shipped fixture never mutated");
+    console.log("REMOVAL_REJECTED target=renewal killed early failure native=1 teardown=escalated"); return;
+  }
+  if (early && !provider) {
+    // Selected early cases bypass the existing top-level capture condition.
+    // Capture native bytes here; keep all existing case selection untouched.
+    let bytes: string;
+    if (process.platform === "darwin") {
+      const child = spawn("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { stdio: ["ignore", "pipe", "pipe"] }); let out = "", err = "";
+      child.stdout!.on("data", b => out += b); child.stderr!.on("data", b => err += b);
+      const result = await new Promise<any>((resolve, reject) => { child.once("error", reject); child.once("close", (code, signal) => resolve({code, signal})); });
+      assert.equal(result.code, 0, err); assert.equal(result.signal, null); assert.equal(err, ""); assert(/^\s*"IOPlatformUUID" = "[0-9A-Fa-f-]+"\s*$/m.test(out)); bytes = out;
+    } else { assert.equal(process.platform, "linux"); bytes = fs.readFileSync("/etc/machine-id", "utf8"); assert(/^[0-9a-f]{32}$/i.test(bytes.trim())); }
+    provider = path.join(dir, "native-identity-response"); fs.writeFileSync(provider, bytes, { mode: 0o600 });
+  }
   assert(provider, "capture the real hardware response before lifecycle instrumentation");
   const count = kind === "exit" ? 52 : 1; // 50 exit0, then exit7 at both checkpoints.
   for (let iteration = 0; iteration < count; iteration++) {
@@ -312,8 +365,12 @@ async function renewalLifecycle(dir: string, kind: "exit" | "refused" | "killed"
       // Kill between ticks after one successful native refresh. Keep teardown
       // joined to the next tick so this case actually measures the closed-child
       // guard, rather than merely beating the next timer by luck.
-      code = replace(code, "      renewal = setInterval(() => {", "      let observedTicks = 0, tickFinished = () => {}; const tickDone = new Promise<void>(resolve => { tickFinished = resolve; });\n      renewal = setInterval(async () => { if (observedTicks) { clearInterval(renewal); await done; } try {");
-      code = replace(code, "      }, 60_000);", "      } finally { if (++observedTicks >= 2) tickFinished(); } }, 100);");
+      code = replace(code, "      renewal = setInterval(() => {", `      let observedTicks = 0, renewalStopped = false, tickFinished = () => {}; const tickDone = new Promise<void>(resolve => { tickFinished = resolve; });\n      renewal = setInterval(async () => { ${early ? "clearInterval(renewal); await done;" : ""} if (observedTicks) { clearInterval(renewal); await done; } try {`);
+      // Track every clear-and-return in this callback, including the native
+      // closed-child guard. A cancelled interval cannot supply a second tick.
+      const start = code.indexOf("      renewal = setInterval(async () => {"), end = code.indexOf("      }, 60_000);", start); assert(start >= 0 && end > start);
+      code = code.slice(0, start) + code.slice(start, end).replaceAll("clearInterval(renewal)", "(renewalStopped = true, clearInterval(renewal))") + code.slice(end);
+      code = replace(code, "      }, 60_000);", "      } finally { if (++observedTicks >= 2 || renewalStopped) tickFinished(); } }, 100);");
       code = replace(code, "      const result = await done;", "      const result = await done; await tickDone;");
     } else code = replace(code, "}, 60_000);", "}, 100);");
     code = replace(code, '        const result = transition("refresh");', `${kind === "exit" && !beforeCheck ? endChild : ""}\n        const result = transition("refresh"); fs.appendFileSync(${JSON.stringify(receipt)}, JSON.stringify({status:result.status, signal:result.signal, error:result.error?.message ?? null})+"\\n");`);
@@ -329,11 +386,17 @@ async function renewalLifecycle(dir: string, kind: "exit" | "refused" | "killed"
     const waitFor = async (test: () => boolean) => { while (!test()) { assert(!closed, stdout + stderr); await Bun.sleep(5); } };
     let foreign: Record<string, string> | undefined;
     const lockBytes = () => Object.fromEntries(fs.readdirSync(lock).sort().map(name => [name, fs.readFileSync(path.join(lock, name)).toString("base64")]));
+    let failure: Error | undefined, planted: Error | undefined, identities: any[] = [], teardownResult: any, escalated = false;
     try {
       if (kind !== "exit") {
         await waitFor(() => fs.existsSync(ready));
         const actual = JSON.parse(fs.readFileSync(ready, "utf8")), markerFile = path.join(lock, marker), m = JSON.parse(fs.readFileSync(markerFile, "utf8"));
         assert.equal(actual.pid, m.pid); process.kill(actual.pid, 0);
+        if (early) {
+          identities = [observe(child.pid!), observe(actual.pid)];
+          assert(!fs.existsSync(receipt), "planted failure must precede the first receipt");
+          planted = new Error(plantedMessage); throw planted;
+        }
         if (kind === "refused") {
           rewrite(markerFile, m => { m.token = (m.token[0] === "f" ? "e" : "f") + m.token.slice(1); });
           foreign = lockBytes();
@@ -369,10 +432,36 @@ async function renewalLifecycle(dir: string, kind: "exit" | "refused" | "killed"
           console.log("RENEWAL_KILLED payload=SIGKILL supervisor=137 native-live-tick=0 closed-tick=skipped lock+ticket=gone");
         }
       }
-    } finally {
+    } catch (error) { failure = error as Error; }
+    finally {
       clearTimeout(containment);
-      if (!closed) { child.kill("SIGTERM"); await done; }
+      try { if (!closed) {
+        child.kill("SIGTERM"); let timer: ReturnType<typeof setTimeout> | undefined;
+        const result = await Promise.race([done, new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), RENEWAL_TEARDOWN_CONTAINMENT_MS); })]).finally(() => clearTimeout(timer));
+        if (result) teardownResult = result;
+        else {
+          // Only an unreaped direct child still owns this detached group id.
+          // Never send a group signal after exit/signalCode makes reuse possible.
+          if (child.exitCode === null && child.signalCode === null) { process.kill(-child.pid!, "SIGKILL"); escalated = true; teardownResult = await done; }
+          const diagnostic = `renewal lifecycle teardown: supervisor did not exit within ${RENEWAL_TEARDOWN_CONTAINMENT_MS} ms of SIGTERM; ${escalated ? "SIGKILL sent to group " + child.pid : "supervisor already reaped; group not signalled"}\nstdout:\n${stdout}\nstderr:\n${stderr}`;
+          if (failure) { failure.message += "; " + diagnostic; failure.stack += "\n" + diagnostic; }
+          else failure = new Error(diagnostic);
+        }
+      } } catch (error) {
+        const diagnostic = `renewal lifecycle teardown failed: ${String(error)}\nstdout:\n${stdout}\nstderr:\n${stderr}`;
+        if (failure) { failure.message += "; " + diagnostic; failure.stack += "\n" + diagnostic; }
+        else failure = error as Error;
+      }
     }
+    if (early && planted) {
+      assert.equal(failure, planted, "original planted error object must survive teardown");
+      const checks = await gone(identities);
+      fs.writeFileSync(path.join(run, "early.json"), JSON.stringify({ planted: plantedMessage, originalErrorPreserved: failure === planted, escalated, teardownResult, identities, checks, stdout, stderr }, null, 2) + "\n");
+      if (failure!.message !== plantedMessage) throw failure;
+      assert.equal(failure!.message, plantedMessage); assert.equal(teardownResult?.code, 143, stderr); assert.equal(teardownResult.signal, null);
+      assert(!fs.existsSync(lock) && !fs.existsSync(lock + ".queue"), "early failure must release lock and ticket");
+      console.log(`RENEWAL_KILLED_EARLY planted=${plantedMessage} teardown=joined supervisor=${teardownResult.code} payload=gone lock+ticket=gone`);
+    } else if (failure) throw failure;
   }
 }
 async function lookupFailure(dir: string, foreign: boolean) {
@@ -590,7 +679,7 @@ async function identityAvailability(dir: string, kind: "path" | "missing" | "err
   const calls = fs.readFileSync(path.join(dir, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
   fs.writeFileSync(path.join(dir, "identity-observation.json"), JSON.stringify({ kind, source: d.host.identitySource, failures: d.host.identityFailures, statuses: calls.map(c => c.status), stableCachePreserved: !!cache, freshStatuses }, null, 2) + "\n");
 }
-const cases = [...(["token", "identity", "pid", "missing", "dead", "combined"] as const).map(kind => [`refresh-${kind}`, (d: string) => refreshOwnership(d, kind)] as const), ["payload-exit-at-renewal", (d: string) => renewalLifecycle(d, "exit")], ["renewal-refused-still-releases", (d: string) => renewalLifecycle(d, "refused")], ["payload-killed-releases", (d: string) => renewalLifecycle(d, "killed")], ["lookup-slow-at-admission", (d: string) => admissionLookup(d, "slow")], ["lookup-failed-at-admission-recovers", (d: string) => admissionLookup(d, "recovers")], ["lookup-failed-at-admission-foreign-cache", (d: string) => admissionLookup(d, "foreign-cache")], ["lookup-failure-network-change", (d: string) => lookupFailure(d, false)], ["lookup-failure-foreign-host", (d: string) => lookupFailure(d, true)], ["minimal-path", (d: string) => identityAvailability(d, "path")], ["identity-source-missing", (d: string) => identityAvailability(d, "missing")], ["identity-source-error", (d: string) => identityAvailability(d, "error")], ["identity-source-malformed", (d: string) => identityAvailability(d, "malformed")], ["identity-source-empty", (d: string) => identityAvailability(d, "empty")], ["identity-source-truncated", (d: string) => identityAvailability(d, "truncated")], ["inherited-network-change", inheritedNetwork], ["inherited-extra-entry", (d: string) => inheritedRefusal(d, "extra")], ["inherited-queue-marker", (d: string) => inheritedRefusal(d, "queue")], ["inherited-waiter-marker", (d: string) => inheritedRefusal(d, "waiter")], ["supervise-missing-command", (d: string) => supervisedRefusal(d, "command")], ["supervise-invalid-poll", (d: string) => supervisedRefusal(d, "poll")], ["supervise-admission-refusal", (d: string) => supervisedRefusal(d, "acquire")], ["supervise-release-refusal", (d: string) => supervisedRefusal(d, "release")], ["supervise-network-change", supervisedNetwork], ["hostname-only-mutant", hostnameOnlyMutant], ["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
+const cases = [...(["token", "identity", "pid", "missing", "dead", "combined"] as const).map(kind => [`refresh-${kind}`, (d: string) => refreshOwnership(d, kind)] as const), ["payload-exit-at-renewal", (d: string) => renewalLifecycle(d, "exit")], ["renewal-refused-still-releases", (d: string) => renewalLifecycle(d, "refused")], ["payload-killed-releases", (d: string) => renewalLifecycle(d, "killed")], ["payload-killed-early-failure", (d: string) => renewalLifecycle(d, "killed", "failure")], ["payload-killed-early-failure-control", (d: string) => renewalLifecycle(d, "killed", "control")], ["lookup-slow-at-admission", (d: string) => admissionLookup(d, "slow")], ["lookup-failed-at-admission-recovers", (d: string) => admissionLookup(d, "recovers")], ["lookup-failed-at-admission-foreign-cache", (d: string) => admissionLookup(d, "foreign-cache")], ["lookup-failure-network-change", (d: string) => lookupFailure(d, false)], ["lookup-failure-foreign-host", (d: string) => lookupFailure(d, true)], ["minimal-path", (d: string) => identityAvailability(d, "path")], ["identity-source-missing", (d: string) => identityAvailability(d, "missing")], ["identity-source-error", (d: string) => identityAvailability(d, "error")], ["identity-source-malformed", (d: string) => identityAvailability(d, "malformed")], ["identity-source-empty", (d: string) => identityAvailability(d, "empty")], ["identity-source-truncated", (d: string) => identityAvailability(d, "truncated")], ["inherited-network-change", inheritedNetwork], ["inherited-extra-entry", (d: string) => inheritedRefusal(d, "extra")], ["inherited-queue-marker", (d: string) => inheritedRefusal(d, "queue")], ["inherited-waiter-marker", (d: string) => inheritedRefusal(d, "waiter")], ["supervise-missing-command", (d: string) => supervisedRefusal(d, "command")], ["supervise-invalid-poll", (d: string) => supervisedRefusal(d, "poll")], ["supervise-admission-refusal", (d: string) => supervisedRefusal(d, "acquire")], ["supervise-release-refusal", (d: string) => supervisedRefusal(d, "release")], ["supervise-network-change", supervisedNetwork], ["hostname-only-mutant", hostnameOnlyMutant], ["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
 assert(!selected || cases.some(([name]) => name === selected), "known selected identity leg");
 for (const [name, run] of cases) {
   if (selected && selected !== name) continue;
