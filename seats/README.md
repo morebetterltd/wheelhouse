@@ -744,10 +744,22 @@ absence of extra processes nor changes seat identity/state. Adapter regression
 cases replay actual captured process records beyond the old pipe ceiling and
 exercise native23, empty, malformed and stderr-bearing results.
 An early `verify-cancellation` child exit before idle readiness is not diagnosed
-from its case/signal name. The FAIL line names retained `stdout`, `stderr` and
-`exit.json` outside both cancellation scratch and the per-suite TMPDIR. Files
-are private (0600 in a fresh0700 directory); an initial snapshot is completed
-after owned cleanup and stream EOF. `WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT`
+from its case/signal name. After owned cleanup and both stream EOFs, one
+`CANCELLATION_EARLY_EXIT {json}` line in the suite's stdout names the case,
+child exit code/signal, stdoutEOF/stderrEOF, retained-diagnostics path and the
+last 4096 source bytes of each stream, decoded as UTF-8 with replacement if the
+byte boundary splits a character. Byte counts describe the source windows,
+not the re-encoded display strings. In a review sweep,
+the retained directory inside the review copy is removed with that copy;
+the line in `seats/verdicts/sweeps/*.selftest-sweep.log` survives and is the
+record to scrub and post as a finding. Parse its JSON from the log rather than
+the terminal rendering; do not rely on a deleted path. A native3 control deletes
+its simulated review copy and checks the record, both EOFs and exact byte tails;
+removing only the emission fails that same oracle. The existing FAIL text is
+unchanged and still names retained `stdout`, `stderr` and `exit.json` outside
+both cancellation scratch and the per-suite TMPDIR. Files are private (0600 in
+a fresh0700 directory); an initial snapshot is completed after cleanup and EOF.
+`WHEELHOUSE_VERIFY_CANCEL_FAILURE_ROOT`
 overrides the destination, otherwise the explicit evidence root or
 `seats/verdicts/verify-cancellation-failures` beside the test is used. Keep that
 root outside temporary trees; storage refusal is reported, never called saved.

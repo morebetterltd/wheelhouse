@@ -30,4 +30,6 @@ residual=0
 bun "$HERE/fixtures/verify-cancellation-residual-test.ts" "$FIX/retention-residual" "$HERE/fixtures/verify-cancellation-retention.ts" "$HERE/fixtures/verify-cancellation.ts" "$FIX/runtime/seats" || residual=$?
 output=0
 bun "$HERE/fixtures/verify-cancellation-residual-output-test.ts" "$FIX/retention-output" "$HERE/fixtures/verify-cancellation-residual-test.ts" "$HERE/fixtures/verify-cancellation-retention.ts" "$HERE/fixtures/verify-cancellation.ts" "$FIX/runtime/seats" || output=$?
-[ "$normal" = 0 ] && [ "$retention" = 0 ] && [ "$residual" = 0 ] && [ "$output" = 0 ]
+early=0
+bun "$HERE/fixtures/verify-cancellation-early-exit-output.ts" "$FIX/early-exit-output" "$HERE/fixtures/verify-cancellation.ts" "$FIX/runtime/seats" || early=$?
+[ "$normal" = 0 ] && [ "$retention" = 0 ] && [ "$residual" = 0 ] && [ "$output" = 0 ] && [ "$early" = 0 ]
