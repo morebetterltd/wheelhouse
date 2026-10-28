@@ -11,6 +11,7 @@ Outcomes:
   consumer: person-on-surface — a consumer using the fresh counter
   surface: manual:counter
   check: walk — launch and doctor from the manual, drive the counter from its entry and retain the read-back of two after cleanup
+    - WORK-WALK-CHECK-CONTINUATION: retain the counter read-back as part of this check.
 - O2 The README names the five baseline features.
   consumer: person-reading — a reader learning how to launch the application
   surface: README.md

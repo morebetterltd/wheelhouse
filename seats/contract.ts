@@ -34,6 +34,7 @@ export function parseContract(text: string): Contract {
   let section = "", fenced = false;
   let sawIntent = false, sawOutcomes = false;
   let outcome: Outcome | undefined;
+  let continuation: "who" | "surface" | "checkHow" | undefined;
   let fields = new Set<string>();
   let sawSignal = false, sawSkills = false;
   const pair = (value: string): [string, string] => {
@@ -78,7 +79,7 @@ export function parseContract(text: string): Contract {
     const start = line.match(/^- (O\S+)(?:[ \t]+(.*))?$/);
     if (start) {
       outcome = { id: start[1], claim: (start[2] ?? "").trim(), group: "", who: "", surface: "", checkKind: "", checkHow: "" };
-      parsed.outcomes.push(outcome); fields = new Set(); continue;
+      parsed.outcomes.push(outcome); fields = new Set(); continuation = undefined; continue;
     }
     const field = line.match(/^[ \t]+(consumer|surface|check):[ \t]*(.*)$/);
     if (field) {
@@ -89,11 +90,21 @@ export function parseContract(text: string): Contract {
       if (name === "surface") outcome.surface = value.trim();
       else if (name === "consumer") [outcome.group, outcome.who] = pair(value);
       else [outcome.checkKind, outcome.checkHow] = pair(value);
+      continuation = name === "consumer" ? "who" : name === "surface" ? "surface" : "checkHow";
       continue;
     }
+    // outcome-field-continuation:start
+    if (outcome && continuation && /^[ \t]+/.test(line)) {
+      const detail = line.replace(/^[ \t]+/, ""), previous = outcome[continuation];
+      // Preserve paragraph separators after text, but never let whitespace
+      // alone supply an otherwise missing required field.
+      if (previous || detail.trim()) outcome[continuation] = previous ? `${previous}\n${detail}` : detail;
+      continue;
+    }
+    // outcome-field-continuation:end
     // Other bead material (notes, source paths, evidence, etc.) can follow the
     // contract. It must not supply missing continuation fields to an outcome.
-    if (/^\S/.test(line)) section = "other";
+    if (/^\S/.test(line)) { section = "other"; continuation = undefined; }
   }
   parsed.intent = intent.join("\n").trim();
   if (!sawIntent) parsed.errors.push("contract: Intent: missing");

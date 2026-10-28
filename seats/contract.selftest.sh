@@ -73,6 +73,10 @@ if [ "${WHEELHOUSE_INTENT_LINT_ONLY:-0}" = 1 ]; then
 fi
 
 leg valid 0 ''
+leg multiline-fields 0 ''
+if bun "$HERE/fixtures/contract-continuations.ts" "$CONTRACT" "$HERE/fixtures/contracts/multiline-fields.md" "$FIX/continuations"; then
+  pass 'multiline outcome fields and native continuation-branch removals'
+else fail 'multiline outcome fields or removal controls'; fi
 leg no-intent 2 'contract: Intent: missing'
 leg empty-intent 2 'contract: Intent: must contain'
 leg no-outcomes 2 'contract: Outcomes: missing'
