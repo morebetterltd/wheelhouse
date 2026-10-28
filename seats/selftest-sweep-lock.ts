@@ -17,6 +17,8 @@ const HOST = os.hostname(); // Diagnostic/legacy name only; networks may change 
 let hostId: string | null = null;
 type IdentitySource = "darwin-ioplatformuuid" | "linux-machine-id" | "hostname";
 let identitySource: IdentitySource = "hostname";
+// Resource containment on a busy host, not a hardware lookup SLA.
+const HARDWARE_IDENTITY_CONTAINMENT_MS = 30_000;
 const identityFailures: { source: IdentitySource; reason: string }[] = [];
 const descriptorPaths = new Map<number, string>();
 const observed: object[] = [];
@@ -67,7 +69,7 @@ function stableHostId(): string {
   if (darwin) {
     try {
       // System location, independent of a suite's deliberately minimal PATH.
-      const raw = readIdentityProvider("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 });
+      const raw = readIdentityProvider("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: HARDWARE_IDENTITY_CONTAINMENT_MS, maxBuffer: 1024 * 1024 });
       const match = /^\s*"IOPlatformUUID" = "([0-9A-Fa-f-]+)"\s*$/m.exec(raw);
       if (match && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(match[1]) && !/^0+$/.test(match[1].replaceAll("-", ""))) {
         identitySource = "darwin-ioplatformuuid";
@@ -388,7 +390,8 @@ function cachedHostNames(fd: number, expectedId: string, members: Record<string,
 // provider failure. This is continuity for one live token, not a host-ID override
 // or permission to acquire another endpoint. Native ancestry is still required.
 const HELD_IDENTITY = "WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY";
-type HeldIdentity = { lock: string; hostId: string; identity: string; pid: number; token: string; hostname: string; parentPid: number };
+type HeldIdentity = { lock: string; hostId: string; identity: string; pid: number; token: string; hostname: string; parentPid: number;
+  identitySource?: IdentitySource; identityFailures?: { source: IdentitySource; reason: string }[] };
 function heldIdentity(parent: number, name: string): HeldIdentity | null {
   const raw = process.env[HELD_IDENTITY];
   if (!raw || raw.length > 4096) return null;
@@ -418,9 +421,10 @@ function heldIdentity(parent: number, name: string): HeldIdentity | null {
 }
 function admissionOutput(parent: number, name: string, snapshot: Snapshot) {
   console.log(snapshot.identity);
-  if (process.env.WHEELHOUSE_SELFTEST_SWEEP_CAPTURE_IDENTITY !== "1" || identitySource === "hostname" || !snapshot.marker.token) return;
+  if (process.env.WHEELHOUSE_SELFTEST_SWEEP_CAPTURE_IDENTITY !== "1" || !snapshot.marker.token) return;
   const pin: HeldIdentity = { lock: path.join(descriptorPaths.get(parent)!, name), hostId: hostId!, identity: snapshot.identity,
-    pid: snapshot.marker.pid, token: snapshot.marker.token, hostname: snapshot.marker.hostname!, parentPid: native.symbols.getppid() as number };
+    pid: snapshot.marker.pid, token: snapshot.marker.token, hostname: snapshot.marker.hostname!, parentPid: native.symbols.getppid() as number,
+    identitySource, identityFailures };
   console.log(JSON.stringify(pin));
 }
 function hostCache(parent: number, lockName: string): Set<string> {
@@ -429,7 +433,7 @@ function hostCache(parent: number, lockName: string): Set<string> {
   // cannot add the newly reported name while the provider is unavailable.
   if (identitySource === "hostname") {
     const pin = heldIdentity(parent, lockName);
-    if (!pin) return new Set([HOST]);
+    if (!pin || pin.identitySource === "hostname") return new Set([HOST]);
     const fd = openAt(parent, `${lockName}.host`, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
     try {
       const members: Record<string, string> = {}, names = cachedHostNames(fd, pin.hostId, members);
@@ -449,14 +453,22 @@ function hostCache(parent: number, lockName: string): Set<string> {
   }
   try {
     const members: Record<string, string> = {}, names = cachedHostNames(fd, hostId!, members);
-    if (!names.has(HOST)) {
+    // Every CLI transition queries hardware afresh. If admission degraded,
+    // the original live owner/token/inode + native ancestry can now bind its
+    // admission name, but only AFTER this hardware ID matched the cache above.
+    // A hostname pin is provenance, never a hardware-ID override.
+    const pin = heldIdentity(parent, lockName);
+    const recoveredName = pin?.identitySource === "hostname" &&
+      pin.hostId === digest(`hostname:${pin.hostname}`) ? pin.hostname : undefined;
+    for (const hostname of new Set([HOST, ...(recoveredName ? [recoveredName] : [])])) {
+      if (names.has(hostname)) continue;
       // Stage an alias outside the visible cache; atomic exclusive publication
       // under the same parent flock. Never overwrite a foreign cache member.
       if (native.symbols.fchdir(parent)) throw new Refused("cannot enter host cache parent");
       const template = z(".sweep-host.XXXXXX"), out = native.symbols.mkstemp(template) as number;
       if (out < 0) throw new Refused("cannot create hostname alias");
       const temporary = template.toString().split("\0")[0], identity = id(out);
-      try { fs.writeFileSync(out, HOST + "\n"); renameExclusive(parent, temporary, digest(HOST), fd); members[digest(HOST)] = identity; }
+      try { fs.writeFileSync(out, hostname + "\n"); renameExclusive(parent, temporary, digest(hostname), fd); members[digest(hostname)] = identity; }
       finally {
         fs.closeSync(out);
         let leftover = -1;
@@ -464,7 +476,7 @@ function hostCache(parent: number, lockName: string): Set<string> {
         catch (e: any) { if (e.errno !== 2) throw e; }
         finally { if (leftover >= 0) fs.closeSync(leftover); }
       }
-      names.add(HOST);
+      names.add(hostname);
     }
     renewFiles(fd, members);
     return names;
@@ -837,6 +849,8 @@ async function superviseSuite(lock: string, command: string[]): Promise<number> 
           console.error("STOP: suite lock renewal failed");
         }
       }, 60_000);
+      const admission = held ? JSON.parse(held) as HeldIdentity : undefined;
+      console.error(`SELFTEST_LOCK_ADMISSION identitySource=${admission?.identitySource ?? identitySource} identityFailures=${JSON.stringify(admission?.identityFailures ?? identityFailures)}`);
       gate.end(`admitted\n${held}\n`);
       const result = await done;
       if (spawnError) throw spawnError;

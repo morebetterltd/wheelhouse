@@ -25,7 +25,11 @@ const tokenA = "a".repeat(32), tokenB = "b".repeat(32), results: object[] = [];
 // private bytes for both names. Missing/error/malformed-provider legs below
 // continue to exercise the untouched production helper and lookup policy.
 const selected = process.env.WHEELHOUSE_IDENTITY_TEST_CASE;
-const nameCases = ["inherited-network-change", "supervise-network-change", "network-change", "hostname-only-mutant", "lookup-failure-network-change", "lookup-failure-foreign-host"];
+const nameCases = ["inherited-network-change", "supervise-network-change", "network-change", "hostname-only-mutant", "lookup-failure-network-change", "lookup-failure-foreign-host", "lookup-slow-at-admission", "lookup-failed-at-admission-recovers", "lookup-failed-at-admission-foreign-cache"];
+const hardwareSource = process.platform === "darwin" ? "darwin-ioplatformuuid" : "linux-machine-id";
+const providerNeedle = process.platform === "darwin"
+  ? 'readIdentityProvider("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: HARDWARE_IDENTITY_CONTAINMENT_MS, maxBuffer: 1024 * 1024 })'
+  : 'fs.readFileSync("/etc/machine-id", "utf8")';
 let provider: string | undefined;
 if (!selected || nameCases.includes(selected)) {
   const began = performance.now();
@@ -58,11 +62,8 @@ for (const hostname of ["network-before", "network-after"]) {
   const file = path.join(root, hostname + ".ts");
   let named = source.replace("const HOST = os.hostname();", `const HOST = ${JSON.stringify(hostname)};`);
   if (provider) {
-    const needle = process.platform === "darwin"
-      ? 'readIdentityProvider("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 })'
-      : 'fs.readFileSync("/etc/machine-id", "utf8")';
-    assert.equal(named.split(needle).length, 2, "one native provider to replay");
-    named = named.replace(needle, `fs.readFileSync(${JSON.stringify(provider)}, "utf8")`);
+    assert.equal(named.split(providerNeedle).length, 2, "one native provider to replay");
+    named = named.replace(providerNeedle, `fs.readFileSync(${JSON.stringify(provider)}, "utf8")`);
   }
   fs.writeFileSync(file, named); helpers.set(hostname, file);
 }
@@ -287,18 +288,19 @@ async function lookupFailure(dir: string, foreign: boolean) {
   const lock = path.join(dir, "host.lock"), file = path.join(dir, "helper.ts"), payload = path.join(dir, "payload.ts");
   const replace = (text: string, needle: string, value: string) => { assert.equal(text.split(needle).length, 2, needle); return text.replace(needle, value); };
   let code = replace(source, "const HOST = os.hostname();", `const HOST = fs.existsSync(${JSON.stringify(flag)}) ? "network-after" : "network-before";`);
-  const needle = process.platform === "darwin"
-    ? 'readIdentityProvider("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"], { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 })'
-    : 'fs.readFileSync("/etc/machine-id", "utf8")';
   // Match the captured production failure code, not malformed hardware bytes.
-  code = replace(code, needle, `(() => { if (fs.existsSync(${JSON.stringify(flag)})) { fs.appendFileSync(${JSON.stringify(failures)}, "ETIMEDOUT\\n"); throw Object.assign(new Error("injected provider timeout"), { code: "ETIMEDOUT" }); } return fs.readFileSync(${JSON.stringify(provider)}, "utf8"); })()`);
+  code = replace(code, providerNeedle, `(() => { if (fs.existsSync(${JSON.stringify(flag)})) { fs.appendFileSync(${JSON.stringify(failures)}, "ETIMEDOUT\\n"); throw Object.assign(new Error("injected provider timeout"), { code: "ETIMEDOUT" }); } return fs.readFileSync(${JSON.stringify(provider)}, "utf8"); })()`);
   code = replace(code, "}, 60_000);", "}, 100);"); // Accelerate only this disposable supervisor's renewal timer.
   code = replace(code, "renewQueue(queue, current); renewLock(parent, name, snapshot);", `renewQueue(queue, current); renewLock(parent, name, snapshot); fs.appendFileSync(${JSON.stringify(refreshed)}, "renewed\\n");`);
   fs.writeFileSync(file, code);
   fs.writeFileSync(payload, `import fs from "node:fs"; import assert from "node:assert/strict"; import {spawn} from "node:child_process";
 const lock=${JSON.stringify(lock)}, marker=${JSON.stringify(marker)}, helper=${JSON.stringify(file)};
 const pin=JSON.parse(process.env.WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY || "null");
-assert(pin && pin.pid===process.pid && pin.hostname==="network-before", "payload received the admitted hardware proof");
+assert(pin && pin.pid===process.pid && pin.hostname==="network-before", "payload received the admitted identity proof");
+if(pin.identitySource!==${JSON.stringify(hardwareSource)}) {
+  const message="SETUP lookup-failure-network-change: real hardware lookup failed at admission: "+JSON.stringify(pin.identityFailures);
+  console.error(message); throw new Error(message);
+}
 const snapshot=()=>Object.fromEntries([lock,lock+".queue",lock+".host"].flatMap(d=>fs.readdirSync(d).map(n=>[d+"/"+n,fs.readFileSync(d+"/"+n).toString("base64")])));
 async function call(op,args=[]) { const c=spawn("bun",[helper,op,lock,...args],{stdio:["ignore","pipe","pipe"]}); let out="",err=""; c.stdout.on("data",b=>out+=b); c.stderr.on("data",b=>err+=b); const rc=await new Promise((resolve,reject)=>{c.once("error",reject);c.once("close",resolve)}); return {rc,out,err}; }
 if (${foreign}) {
@@ -325,7 +327,9 @@ console.log("payload exit=0");
   assert.match(r.stdout, /payload exit=0/);
   assert(fs.readFileSync(failures, "utf8").includes("ETIMEDOUT"), "the hardware provider actually failed");
   if (!foreign) {
-    assert.equal(r.stderr, "", "held-run refresh/inherited/release must emit no refusal or STOP");
+    const admissions = r.stderr.split("\n").filter(line => line.startsWith("SELFTEST_LOCK_ADMISSION "));
+    assert.deepEqual(admissions, [`SELFTEST_LOCK_ADMISSION identitySource=${hardwareSource} identityFailures=[]`]);
+    assert.equal(r.stderr.split("\n").filter(line => !line.startsWith("SELFTEST_LOCK_ADMISSION ")).join("\n").trim(), "", "held-run refresh/inherited/release must emit no refusal or STOP");
     assert(fs.readFileSync(refreshed, "utf8").includes("renewed"));
     assert(!fs.existsSync(lock) && !fs.existsSync(lock + ".queue"), "original owner released after outage");
     const aliases = fs.readdirSync(lock + ".host").filter(n => n !== marker + "-host").map(n => fs.readFileSync(path.join(lock + ".host", n), "utf8"));
@@ -336,6 +340,70 @@ console.log("payload exit=0");
     assert.equal(JSON.parse(fs.readFileSync(path.join(lock, marker), "utf8")).hostname, "unobserved-foreign-host");
     console.log(r.stdout.trim()); console.log("supervisor release foreign marker exit=2; foreign marker retained");
   }
+}
+async function admissionLookup(dir: string, kind: "slow" | "recovers" | "foreign-cache") {
+  assert(provider, "real native bytes captured before instrumenting the provider");
+  copyCaptureDependencies(dir);
+  const flag = path.join(dir, "hardware-ready"), refreshed = path.join(dir, "refreshed"), lock = path.join(dir, "host.lock");
+  const file = path.join(dir, "helper.ts"), payload = path.join(dir, "payload.ts");
+  const replace = (text: string, needle: string, value: string) => { assert.equal(text.split(needle).length, 2, needle); return text.replace(needle, value); };
+  let response = provider;
+  if (kind === "foreign-cache") {
+    // Establish the real hardware cache, then return a deliberately different
+    // valid value only in this disposable provider. Never rewrite the cache.
+    const owned = acquired(dir, helpers.get("network-before")!); release(dir, owned, helpers.get("network-before")!);
+    response = path.join(dir, "foreign-response");
+    const bytes = fs.readFileSync(provider, "utf8");
+    const needle = process.platform === "darwin" ? /("IOPlatformUUID" = ")([0-9a-f])/i : /^([0-9a-f])/i;
+    assert(needle.test(bytes));
+    fs.writeFileSync(response, bytes.replace(needle, (_all, a, b) => process.platform === "darwin" ? a + (b.toLowerCase() === "a" ? "b" : "a") : a.toLowerCase() === "a" ? "b" : "a"), { mode: 0o600 });
+  }
+  let code = replace(source, "const HOST = os.hostname();", `const HOST = fs.existsSync(${JSON.stringify(flag)}) ? "network-after" : "network-before";`);
+  if (kind === "slow") {
+    const executable = path.join(dir, "slow-provider");
+    fs.writeFileSync(executable, '#!/bin/sh\nsleep 6\nexec /bin/cat "$1"\n', { mode: 0o700 });
+    code = replace(code, providerNeedle, `readIdentityProvider(${JSON.stringify(executable)}, [${JSON.stringify(response)}], { encoding: "utf8", timeout: HARDWARE_IDENTITY_CONTAINMENT_MS, maxBuffer: 1024 * 1024 })`);
+  } else {
+    code = replace(code, providerNeedle, `(() => { if (!fs.existsSync(${JSON.stringify(flag)})) throw Object.assign(new Error("injected admission timeout"), { code: "ETIMEDOUT" }); return fs.readFileSync(${JSON.stringify(response)}, "utf8"); })()`);
+    code = replace(code, "}, 60_000);", "}, 100);");
+    code = replace(code, "renewQueue(queue, current); renewLock(parent, name, snapshot);", `renewQueue(queue, current); renewLock(parent, name, snapshot); fs.writeFileSync(${JSON.stringify(refreshed)}, "renewed\\n");`);
+  }
+  fs.writeFileSync(file, code);
+  fs.writeFileSync(payload, `import fs from "node:fs"; import assert from "node:assert/strict"; import {spawn} from "node:child_process";
+const pin=JSON.parse(process.env.WHEELHOUSE_SELFTEST_SWEEP_HELD_IDENTITY||"null"), lock=${JSON.stringify(lock)}, helper=${JSON.stringify(file)};
+assert(pin && pin.pid===process.pid && pin.hostname==="network-before");
+assert.equal(pin.identitySource,${JSON.stringify(kind === "slow" ? hardwareSource : "hostname")});
+assert.deepEqual(pin.identityFailures,${kind === "slow" ? "[]" : JSON.stringify([{source:hardwareSource,reason:"ETIMEDOUT"}])});
+assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(lock+"/${marker}","utf8"))).sort(),["kind","version","pid","hostname","started","token"].sort());
+async function call(op,args=[]) { const c=spawn("bun",[helper,op,lock,...args],{stdio:["ignore","pipe","pipe"]}); let out="",err=""; c.stdout.on("data",b=>out+=b);c.stderr.on("data",b=>err+=b);const rc=await new Promise((resolve,reject)=>{c.once("error",reject);c.once("close",resolve)});return {rc,out,err}; }
+if (${JSON.stringify(kind)}!=="slow") {
+  const cache=lock+".host", before=${kind === "foreign-cache"} ? Object.fromEntries(fs.readdirSync(cache).map(n=>[n,fs.readFileSync(cache+"/"+n,"utf8")])) : null;
+  fs.writeFileSync(${JSON.stringify(flag)},"ready\\n");
+  if (${kind === "foreign-cache"}) {
+    const r=await call("refresh",[String(process.pid),pin.token,pin.identity]);assert.equal(r.rc,2,r.out+r.err);assert(r.err.includes("foreign or invalid stable host cache"),r.err);
+    assert.deepEqual(Object.fromEntries(fs.readdirSync(cache).map(n=>[n,fs.readFileSync(cache+"/"+n,"utf8")])),before,"different hardware ID must not rebind or rewrite a cache");
+    console.log("different hardware identity: refresh2 cache bytes unchanged");
+  } else {
+    const end=Date.now()+15000;while(!fs.existsSync(${JSON.stringify(refreshed)})){assert(Date.now()<end,"hostname admission did not recover at renewal");await Bun.sleep(20);}
+    const anchor=JSON.parse(fs.readFileSync(cache+"/${marker}-host","utf8"));assert.deepEqual(Object.keys(anchor).sort(),["kind","version","hostId"].sort());
+    const names=fs.readdirSync(cache).filter(n=>n!=="${marker}-host").map(n=>fs.readFileSync(cache+"/"+n,"utf8")).sort();assert.deepEqual(names,["network-after\\n","network-before\\n"]);
+    const r=await call("inherited");assert.equal(r.rc,0,r.out+r.err);assert.equal(r.err,"");console.log("renewal recovered hardware; both aliases bound; inherited exit=0");
+  }
+}
+console.log("payload identitySource="+pin.identitySource+"; on-disk shapes unchanged; payload exit=0");
+`);
+  const r = mode(dir, "supervise", ["bash", "-c", 'exec bun "$1"', "fixture", payload], file);
+  assert.equal(r.status, kind === "foreign-cache" ? 2 : 0, r.stdout + r.stderr);
+  assert(r.stdout.includes("payload exit=0"), r.stdout + r.stderr);
+  const admissions = r.stderr.split("\n").filter(line => line.startsWith("SELFTEST_LOCK_ADMISSION "));
+  assert.equal(admissions.length, 1);
+  assert(admissions[0].startsWith(`SELFTEST_LOCK_ADMISSION identitySource=${kind === "slow" ? hardwareSource : "hostname"} identityFailures=`));
+  if (kind === "foreign-cache") assert(r.stderr.includes("foreign or invalid stable host cache"));
+  else {
+    assert(!r.stderr.includes("SELFTEST_LOCK_REFUSAL") && !r.stderr.includes("STOP:"), r.stderr);
+    assert(!fs.existsSync(lock) && !fs.existsSync(lock + ".queue"));
+  }
+  console.log(admissions[0]); console.log(r.stdout.trim());
 }
 async function hostnameOnlyMutant(dir: string) {
   copyCaptureDependencies(dir);
@@ -428,7 +496,7 @@ async function identityAvailability(dir: string, kind: "path" | "missing" | "err
   const calls = fs.readFileSync(path.join(dir, "calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
   fs.writeFileSync(path.join(dir, "identity-observation.json"), JSON.stringify({ kind, source: d.host.identitySource, failures: d.host.identityFailures, statuses: calls.map(c => c.status), stableCachePreserved: !!cache, freshStatuses }, null, 2) + "\n");
 }
-const cases = [...(["token", "identity", "pid", "missing", "dead", "combined"] as const).map(kind => [`refresh-${kind}`, (d: string) => refreshOwnership(d, kind)] as const), ["lookup-failure-network-change", (d: string) => lookupFailure(d, false)], ["lookup-failure-foreign-host", (d: string) => lookupFailure(d, true)], ["minimal-path", (d: string) => identityAvailability(d, "path")], ["identity-source-missing", (d: string) => identityAvailability(d, "missing")], ["identity-source-error", (d: string) => identityAvailability(d, "error")], ["identity-source-malformed", (d: string) => identityAvailability(d, "malformed")], ["identity-source-empty", (d: string) => identityAvailability(d, "empty")], ["identity-source-truncated", (d: string) => identityAvailability(d, "truncated")], ["inherited-network-change", inheritedNetwork], ["inherited-extra-entry", (d: string) => inheritedRefusal(d, "extra")], ["inherited-queue-marker", (d: string) => inheritedRefusal(d, "queue")], ["inherited-waiter-marker", (d: string) => inheritedRefusal(d, "waiter")], ["supervise-missing-command", (d: string) => supervisedRefusal(d, "command")], ["supervise-invalid-poll", (d: string) => supervisedRefusal(d, "poll")], ["supervise-admission-refusal", (d: string) => supervisedRefusal(d, "acquire")], ["supervise-release-refusal", (d: string) => supervisedRefusal(d, "release")], ["supervise-network-change", supervisedNetwork], ["hostname-only-mutant", hostnameOnlyMutant], ["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
+const cases = [...(["token", "identity", "pid", "missing", "dead", "combined"] as const).map(kind => [`refresh-${kind}`, (d: string) => refreshOwnership(d, kind)] as const), ["lookup-slow-at-admission", (d: string) => admissionLookup(d, "slow")], ["lookup-failed-at-admission-recovers", (d: string) => admissionLookup(d, "recovers")], ["lookup-failed-at-admission-foreign-cache", (d: string) => admissionLookup(d, "foreign-cache")], ["lookup-failure-network-change", (d: string) => lookupFailure(d, false)], ["lookup-failure-foreign-host", (d: string) => lookupFailure(d, true)], ["minimal-path", (d: string) => identityAvailability(d, "path")], ["identity-source-missing", (d: string) => identityAvailability(d, "missing")], ["identity-source-error", (d: string) => identityAvailability(d, "error")], ["identity-source-malformed", (d: string) => identityAvailability(d, "malformed")], ["identity-source-empty", (d: string) => identityAvailability(d, "empty")], ["identity-source-truncated", (d: string) => identityAvailability(d, "truncated")], ["inherited-network-change", inheritedNetwork], ["inherited-extra-entry", (d: string) => inheritedRefusal(d, "extra")], ["inherited-queue-marker", (d: string) => inheritedRefusal(d, "queue")], ["inherited-waiter-marker", (d: string) => inheritedRefusal(d, "waiter")], ["supervise-missing-command", (d: string) => supervisedRefusal(d, "command")], ["supervise-invalid-poll", (d: string) => supervisedRefusal(d, "poll")], ["supervise-admission-refusal", (d: string) => supervisedRefusal(d, "acquire")], ["supervise-release-refusal", (d: string) => supervisedRefusal(d, "release")], ["supervise-network-change", supervisedNetwork], ["hostname-only-mutant", hostnameOnlyMutant], ["network-change", network], ["current-helper-compatibility", compatibility], ["rewritten-lock", (d: string) => rewritten(d, "lock")], ["rewritten-queue", (d: string) => rewritten(d, "queue")], ["rewritten-waiter", (d: string) => rewritten(d, "waiter")], ["legacy-mv-writer", writer]] as const;
 assert(!selected || cases.some(([name]) => name === selected), "known selected identity leg");
 for (const [name, run] of cases) {
   if (selected && selected !== name) continue;
