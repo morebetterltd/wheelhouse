@@ -307,6 +307,13 @@ async function renewalLifecycle(dir: string, kind: "exit" | "refused" | "killed"
       code = replace(code, "      renewal = setInterval(() => {", `      let tickFinished = () => {}; const tickDone = new Promise<void>(resolve => { tickFinished = resolve; });\n      renewal = setInterval(async () => { clearInterval(renewal); try { ${beforeCheck ? endChild : ""}`);
       code = replace(code, "      }, 60_000);", "      } finally { tickFinished(); } }, 100);");
       code = replace(code, "      const result = await done;", "      const result = await done; await tickDone;");
+    } else if (kind === "killed") {
+      // Kill between ticks after one successful native refresh. Keep teardown
+      // joined to the next tick so this case actually measures the closed-child
+      // guard, rather than merely beating the next timer by luck.
+      code = replace(code, "      renewal = setInterval(() => {", "      let observedTicks = 0, tickFinished = () => {}; const tickDone = new Promise<void>(resolve => { tickFinished = resolve; });\n      renewal = setInterval(async () => { if (observedTicks) { clearInterval(renewal); await done; } try {");
+      code = replace(code, "      }, 60_000);", "      } finally { if (++observedTicks >= 2) tickFinished(); } }, 100);");
+      code = replace(code, "      const result = await done;", "      const result = await done; await tickDone;");
     } else code = replace(code, "}, 60_000);", "}, 100);");
     code = replace(code, '        const result = transition("refresh");', `${kind === "exit" && !beforeCheck ? endChild : ""}\n        const result = transition("refresh"); fs.appendFileSync(${JSON.stringify(receipt)}, JSON.stringify({status:result.status, signal:result.signal, error:result.error?.message ?? null})+"\\n");`);
     fs.writeFileSync(file, code);
@@ -356,7 +363,10 @@ async function renewalLifecycle(dir: string, kind: "exit" | "refused" | "killed"
           if (beforeCheck) assert.equal(ticks.length, 0, "closed payload must not spawn refresh");
           else { assert.equal(ticks.length, 1); assert.deepEqual(ticks[0], {status:76,signal:null,error:null}); }
           console.log(`RENEWAL_EXIT iteration=${iteration} checkpoint=${beforeCheck ? "after-close" : "after-guard"} payload=${expected} supervisor=${result.code} refresh=${ticks.length ? ticks[0].status : "skipped"} lock+ticket=gone`);
-        } else console.log("RENEWAL_KILLED payload=SIGKILL supervisor=137 native-live-tick=0 lock+ticket=gone");
+        } else {
+          assert.equal(ticks.length, 1, "killed payload must not spawn another refresh");
+          console.log("RENEWAL_KILLED payload=SIGKILL supervisor=137 native-live-tick=0 closed-tick=skipped lock+ticket=gone");
+        }
       }
     } finally {
       clearTimeout(containment);
