@@ -6,6 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { spawnSync } from "./fixture-command.cjs";
 const root = path.resolve(process.argv[2]), runtime = path.join(root, "runtime/seats");
 function retainChildDiagnostics(saved: string | undefined, name: string, stdout: string, stderr: string, child: any): string | undefined {
@@ -23,6 +24,17 @@ function retainChildDiagnostics(saved: string | undefined, name: string, stdout:
   put("stdout", stdout); put("stderr", stderr);
   put("exit.json", JSON.stringify({ name, pid: child.pid, code: child.exitCode, signal: child.signalCode, stdoutEOF: child.stdout.readableEnded, stderrEOF: child.stderr.readableEnded, stdoutBytes: Buffer.byteLength(stdout), stderrBytes: Buffer.byteLength(stderr) }, null, 2) + "\n");
   return saved;
+}
+function reportEarlyExit(name: string, child: any, retainedDiagnostics: string | undefined, retentionError: string | undefined, stdout: Buffer, stderr: Buffer) {
+  const record = {
+    name, code: child.exitCode, signal: child.signalCode,
+    stdoutEOF: child.stdout.readableEnded, stderrEOF: child.stderr.readableEnded,
+    retainedDiagnostics: retainedDiagnostics ?? null, retentionError: retentionError ?? null,
+    tailLimitBytes: 4096, stdoutTailBytes: stdout.length, stderrTailBytes: stderr.length,
+    // Decode the byte window for attribution; a split UTF-8 character is replaced.
+    stdoutTail: stdout.toString("utf8"), stderrTail: stderr.toString("utf8"),
+  };
+  console.log("CANCELLATION_EARLY_EXIT " + JSON.stringify(record));
 }
 const groupAlive = (pgid: number) => { assert(Number.isInteger(pgid) && pgid > 1); try { process.kill(-pgid, 0); return true; } catch (e: any) { if (e.code === "ESRCH") return false; if (e.code === "EPERM") return true; throw e; } };
 const pidAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (e: any) { if (e.code === "ESRCH") return false; throw e; } };
@@ -149,7 +161,12 @@ esac
   if (phase === "sweep-stubborn-long-grace") env.WHEELHOUSE_SELFTEST_SUITE_TERM_GRACE_S = "120";
   command("git", ["init", "-q", "-b", "main"], project, env); command("git", ["add", "seats", "contracts"], project, env); command("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], project, env);
   const child = spawn("bun", [verify, "cancel-fixture", "main", "author", "reviewer"], { cwd: project, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
-  let ended = false, out = "", err = ""; child.stdout!.on("data", b => out += b); child.stderr!.on("data", b => err += b); child.once("exit", () => ended = true);
+  let ended = false, out = "", err = "", outTail = Buffer.alloc(0), errTail = Buffer.alloc(0);
+  const outDecoder = new StringDecoder("utf8"), errDecoder = new StringDecoder("utf8");
+  child.stdout!.on("data", b => { out += outDecoder.write(b); outTail = Buffer.concat([outTail, b]).subarray(-4096); });
+  child.stderr!.on("data", b => { err += errDecoder.write(b); errTail = Buffer.concat([errTail, b]).subarray(-4096); });
+  child.stdout!.on("end", () => out += outDecoder.end()); child.stderr!.on("end", () => err += errDecoder.end());
+  child.once("exit", () => ended = true);
   const closed = new Promise<any>((resolve, reject) => { child.once("error", reject); child.once("close", (code, sig) => resolve({ code, signal: sig })); });
   const groups = new Set<number>([child.pid!]); // this controller started that new group
   fs.appendFileSync(ledger, String(child.pid!) + "\n");
@@ -228,6 +245,7 @@ esac
       try { retainedDiagnostics = retainChildDiagnostics(retainedDiagnostics, name, out, err, child); }
       catch (error) { retentionError = String(error); console.error(`FAIL ${name}: retained child diagnostics update failed: ${retentionError}`); }
     }
+    if (failureMessage === "child exited before idle target") reportEarlyExit(name, child, retainedDiagnostics, retentionError, outTail, errTail);
     fs.writeFileSync(path.join(dir, "out"), out); fs.writeFileSync(path.join(dir, "err"), err); const record = { name, failure: failure ?? null, measurement, retainedDiagnostics, retentionError, dispatcher: { code: child.exitCode, signal: child.signalCode, stdoutEOF: child.stdout!.readableEnded, stderrEOF: child.stderr!.readableEnded } }; fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(record, null, 2) + "\n"); results.push(record);
   }
 }
